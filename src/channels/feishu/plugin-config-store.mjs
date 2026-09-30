@@ -40,6 +40,7 @@ function normalizeBot(value, { legacy = false } = {}) {
   const domain = value.domain === 'lark' ? 'lark' : 'feishu';
   return Object.freeze({
     id,
+    consumerMode: value.consumerMode === 'external-consumer' ? 'external-consumer' : 'standalone',
     appId,
     secretRef,
     ownerOpenIds: Object.freeze(ownerOpenIds),

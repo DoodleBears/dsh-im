@@ -95,7 +95,7 @@ function fixture({
       },
     },
     configStore,
-    createRuntime: async ({ botId, config, appSecret, repair }) => {
+    createRuntime: async ({ botId, config, appSecret, repair, acceptExternal }) => {
       const status = {
         ready: false,
         feishuLongConnectionState: 'idle',
@@ -113,6 +113,7 @@ function fixture({
         responseModes: [],
         voiceCalls: [],
         repair,
+        acceptExternal,
         get status() { return structuredClone(status); },
         async start() {
           runtime.starts += 1;
@@ -1343,4 +1344,42 @@ test('delivery account fingerprint is authenticated and checked inside the sendi
   fx.values.delete(existing.secretRef);
   await assert.rejects(fx.controller.describeDeliveryAccount(existing.id), {code: 'account-unverified'});
   await fx.controller.close();
+});
+
+
+test('external account consumption persists exclusive mode and never restores standalone after consumer loss or restart', async () => {
+  const existing = bot('bot_external', 'external');
+  const options = { bots: [existing], secrets: { [existing.secretRef]: 'local-secret' },
+    verifyApp: async () => ({ openId: existing.botOpenId, name: 'Verified' }) };
+  const fx = fixture(options);
+  await fx.controller.initialize();
+  const info = await fx.controller.describeDeliveryAccount(existing.id);
+  let calls = 0;
+  const dispose = await fx.controller.consumeInbound(existing.id, {
+    expectedFingerprint: info.account.fingerprint,
+    onEvent: async evidence => { calls++; assert.equal(evidence.fingerprint, info.account.fingerprint); assert.equal(evidence.conversation.kind, 'group'); assert.equal(evidence.mentionedAccount, true); return { accepted: true }; },
+  });
+  const runtime = fx.runtimes.get(existing.id).at(-1);
+  assert.equal(runtime.config.consumerMode, 'external-consumer');
+  const input = { event_id: 'event', app_id: existing.appId,
+    sender: { sender_type: 'user', sender_id: { open_id: 'human' } },
+    message: { message_id: 'message', chat_id: 'chat', chat_type: 'group', message_type: 'text',
+      mentions: [{ id: { open_id: existing.botOpenId }, key: '@_user_1' }],
+      thread_id: 'work-topic', root_id: 'root', parent_id: 'parent',
+      create_time: '1790787600000', content: JSON.stringify({ text: 'hello' }) } };
+  await runtime.acceptExternal(input);
+  assert.equal(calls, 1);
+  await assert.rejects(fx.controller.consumeInbound(existing.id, {
+    expectedFingerprint: info.account.fingerprint, onEvent: async () => ({ accepted: true }),
+  }), { code: 'consumer-conflict' });
+  dispose();
+  await assert.rejects(runtime.acceptExternal(input), { code: 'consumer-unavailable' });
+  assert.equal(fx.configStore.getBot(existing.id).consumerMode, 'external-consumer');
+  await fx.controller.close();
+  const restarted = fixture({ ...options, bots: fx.configStore.list() });
+  await restarted.controller.initialize();
+  const restoredRuntime = restarted.runtimes.get(existing.id).at(-1);
+  assert.equal(restoredRuntime.config.consumerMode, 'external-consumer');
+  await assert.rejects(restoredRuntime.acceptExternal(input), { code: 'consumer-unavailable' });
+  await restarted.controller.close();
 });

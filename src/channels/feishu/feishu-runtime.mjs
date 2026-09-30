@@ -134,6 +134,8 @@ export class FeishuRuntime {
   #repair;
   #client = null;
   #bridge = null;
+  #consumerMode;
+  #acceptExternal;
   #wsClient = null;
   #starting = null;
   #stopping = null;
@@ -157,6 +159,8 @@ export class FeishuRuntime {
 
   constructor({
     lark,
+    consumerMode = 'standalone',
+    acceptExternal,
     botId,
     appId,
     appSecret,
@@ -197,6 +201,8 @@ export class FeishuRuntime {
       throw new TypeError('FeishuRuntime requestTimeoutMs must be a positive number');
     }
 
+    this.#consumerMode = consumerMode;
+    this.#acceptExternal = acceptExternal;
     this.#lark = lark;
     this.#botId = nonEmptyString(botId);
     this.#appId = appId;
@@ -224,7 +230,7 @@ export class FeishuRuntime {
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#connectTimeoutMs = connectTimeoutMs;
     this.#requestTimeoutMs = requestTimeoutMs;
-    this.#slashCommands = Boolean(slashCommands);
+    this.#slashCommands = consumerMode !== 'external-consumer' && Boolean(slashCommands);
     this.#slashPanel = normalizeSlashPanelConfig(slashPanel);
     this.#wsAgent = wsAgent;
     this.#logger = logger; this.#diagnostics = createConnectionDiagnostics({ channel: 'feishu', logger });
@@ -348,7 +354,7 @@ export class FeishuRuntime {
         client,
         initialText: t('已连接 DeepSeek Harness，正在思考…'),
       });
-      const bridge = new FeishuHarnessBridge({
+      const bridge = this.#consumerMode === 'external-consumer' ? null : new FeishuHarnessBridge({
         client,
         channel,
         harness: this.#harness,
@@ -380,6 +386,12 @@ export class FeishuRuntime {
 
       const dispatcher = new this.#lark.EventDispatcher({}).register({
         'im.message.receive_v1': (event) => {
+          if (this.#consumerMode === 'external-consumer') {
+            assertCurrentStart();
+            if (typeof this.#acceptExternal !== 'function')
+              throw Object.assign(new Error('consumer-unavailable'), { code: 'consumer-unavailable' });
+            return this.#acceptExternal(event, { signal });
+          }
           if (isCurrentStart()) void bridge.accept(event);
         },
         'im.message.reaction.created_v1': () => undefined,
@@ -388,7 +400,7 @@ export class FeishuRuntime {
         // subscribes card.action.trigger; the number-reply fallback covers
         // apps that do not).
         'card.action.trigger': (event) => {
-          if (!isCurrentStart()) return;
+          if (!isCurrentStart() || this.#consumerMode === 'external-consumer') return;
           this.#status.cardActionsReceived += 1;
           this.#status.lastCardActionAt = new Date().toISOString();
           if (!this.#consumeCardActionProbe(event)) void bridge.onCardAction(event);
@@ -717,6 +729,33 @@ export class FeishuRuntime {
       throw error;
     }
     return { sent: true };
+  }
+
+  async replyChecked(route, text, { signal } = {}) {
+    if (!route || typeof route.messageId !== 'string' || typeof route.conversationId !== 'string'
+      || typeof route.actorId !== 'string' || typeof text !== 'string' || !text.trim() || text.length > 4000)
+      throw Object.assign(new Error('bad-request'), { code: 'bad-request' });
+    const client = this.#client;
+    if (!client || this.#consumerMode !== 'external-consumer')
+      throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    signal?.throwIfAborted();
+    const current = await client.im.v1.message.get({ path: { message_id: route.messageId } });
+    const source = current?.data?.items?.find(item => item.message_id === route.messageId);
+    if (current?.code || !source || source.deleted === true || source.chat_id !== route.conversationId
+      || source.sender?.sender_type !== 'user' || source.sender?.id_type !== 'open_id'
+      || source.sender?.id !== route.actorId || (source.thread_id || undefined) !== route.threadId
+      || (source.root_id || undefined) !== route.rootId || (source.parent_id || undefined) !== route.parentId)
+      throw Object.assign(new Error('stale-route'), { code: 'stale-route' });
+    signal?.throwIfAborted();
+    if (this.#client !== client) throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    const response = await client.im.v1.message.reply({
+      path: { message_id: route.messageId },
+      data: { msg_type: 'text', content: JSON.stringify({ text }), reply_in_thread: Boolean(route.threadId) },
+    });
+    const messageId = response?.data?.message_id;
+    if (response?.code || typeof messageId !== 'string' || !messageId)
+      throw Object.assign(new Error('reply-result-unknown'), { code: 'reply-result-unknown' });
+    return { sent: true, messageId };
   }
 
   /**

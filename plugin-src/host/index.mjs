@@ -92,6 +92,9 @@ export function createImHostPlugin(internals = {}) {
       if (typeof ctx?.provide === 'function') {
         ctx.provide('dshIm', Object.freeze({
           contractVersion: 1,
+          inboundVersion: 1,
+          consumeInbound: (botId, options) => deliveryService.consumeInbound(botId, options),
+          replyChecked: (botId, route, text, options) => deliveryService.replyChecked(botId, route, text, options),
           describeBot: (botId) => deliveryService.describeBot(botId),
           sendChecked: (botId, targetId, text, options) => deliveryService.sendChecked(botId, targetId, text, options),
           send: (botId, targetId, text, options) => (
