@@ -15,7 +15,7 @@ export async function readExternalHistory(client, identity, route, query, signal
     || (query.cursor !== undefined && (typeof query.cursor !== 'string' || query.cursor.length > 4096)))
     refuse('bad-request');
   signal?.throwIfAborted();
-  const reference = await client.im.v1.message.get({ path: { message_id: route.messageId } }, { signal });
+  const reference = await client.im.v1.message.get({ path: { message_id: route.messageId }, params: { with_sender_name: true } }, { signal });
   check(reference);
   const source = reference?.data?.items?.find(item => item.message_id === route.messageId);
   if (!source || source.deleted || source.chat_id !== route.conversationId
@@ -31,7 +31,7 @@ export async function readExternalHistory(client, identity, route, query, signal
   const response = await client.im.v1.message.list({ params: {
     container_id_type: query.scope === 'thread' ? 'thread' : 'chat',
     container_id: query.scope === 'thread' ? route.threadId : route.conversationId,
-    sort_type: 'ByCreateTimeDesc', page_size: query.limit,
+    sort_type: 'ByCreateTimeDesc', page_size: query.limit, with_sender_name: true,
     ...(query.cursor === undefined ? {} : { page_token: query.cursor }),
     ...(window ? { start_time: String(window.start), end_time: String(window.end) } : {}),
   } }, { signal });
@@ -48,7 +48,7 @@ export async function readExternalHistory(client, identity, route, query, signal
     if (item.deleted || item.msg_type !== 'text' || item.sender?.sender_type !== 'user'
       || item.sender?.id_type !== 'open_id') { ++omitted; continue; }
     const event = normalizeExternalText({ event_id: `history:${item.message_id}`,
-      sender: { sender_type: 'user', sender_id: { open_id: item.sender.id } },
+      sender: { sender_type: 'user', sender_id: { open_id: item.sender.id }, sender_name: item.sender.sender_name },
       message: { ...item, chat_type: 'group', message_type: item.msg_type, content: item.body?.content,
         mentions: (item.mentions ?? []).map(mention => ({ ...mention, id: { open_id: mention.id } })) },
     }, identity);

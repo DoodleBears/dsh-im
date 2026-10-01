@@ -9,7 +9,7 @@ function event() {
     sender: { sender_type: 'user', sender_id: { open_id: 'actor' } },
     message: { message_id: 'message', chat_id: 'conversation', chat_type: 'group',
       message_type: 'text', content: JSON.stringify({ text: '@_user_1 hello' }),
-      mentions: [{ id: { open_id: 'bot-open-id' }, key: '@_user_1', name: 'not retained' }],
+      mentions: [{ id: { open_id: 'bot-open-id' }, key: '@_user_1', name: 'QA Bot' }],
       create_time: '1790787600000', thread_id: 'thread', root_id: 'root', parent_id: 'parent' },
   };
 }
@@ -32,7 +32,7 @@ test('normalized authenticated text retains causal identities without raw payloa
   assert.equal(normalized({ ...input, sender: { sender_type: 'bot' } }), null);
   assert.equal(evidence.conversation.kind, 'group');
   assert.equal(evidence.mentionedAccount, true);
-  assert.deepEqual(evidence.mentions, [{ id: 'bot-open-id', key: '@_user_1' }]);
+  assert.deepEqual(evidence.mentions, [{ id: 'bot-open-id', key: '@_user_1', name: 'QA Bot' }]);
   assert.equal(Object.isFrozen(evidence.mentions[0]), true);
   assert.equal(normalized({ ...input, message: { ...input.message, chat_type: 'unknown' } }), null);
 });

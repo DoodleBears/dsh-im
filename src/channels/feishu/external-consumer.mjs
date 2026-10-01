@@ -26,7 +26,8 @@ export function normalizeExternalText(event, { botId, appId, botOpenId, fingerpr
     const id = identifier(mention?.id?.open_id ?? mention?.open_id);
     const key = identifier(mention?.key);
     if (!id || !key) throw refusal('invalid-inbound');
-    return Object.freeze({ id, key });
+    const name = identifier(mention?.name);
+    return Object.freeze({ id, key, ...(name ? { name } : {}) });
   }));
   if (!actorId || !messageId || !conversationId || !eventId
     || !/^[a-f0-9]{64}$/.test(fingerprint ?? '')) throw refusal('invalid-inbound');
@@ -45,7 +46,8 @@ export function normalizeExternalText(event, { botId, appId, botOpenId, fingerpr
   });
   return Object.freeze({
     version: 1, channel: 'feishu', botId, fingerprint, eventId, messageId,
-    actor: Object.freeze({ kind: 'user', id: actorId }),
+    actor: Object.freeze({ kind: 'user', id: actorId,
+      ...(identifier(event.sender.sender_name) ? { name: event.sender.sender_name } : {}) }),
     conversation: Object.freeze({ kind: message.chat_type === 'group' ? 'group' : 'dm', id: conversationId }),
     mentions, mentionedAccount: mentions.some(mention => mention.id === botOpenId),
     at: timestamp.toISOString(), text, reply: route,

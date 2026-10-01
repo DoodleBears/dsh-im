@@ -38,3 +38,14 @@ test('fails closed on stale reference, permission denial, nonexistent Thread and
  const controller=new AbortController();controller.abort();
  await assert.rejects(readExternalHistory(client(),identity,route,{scope:'group',limit:20},controller.signal),{name:'AbortError'});
 });
+
+test('requests server names and preserves sender / mention IDs without guessing missing names', async () => {
+ const named = {...item('om-named'), sender:{sender_type:'user',id_type:'open_id',id:'ou-human',sender_name:'Alex'},
+ mentions:[{key:'@_user_1',id:'ou-bot',name:'QA Bot'}]};
+ const bot=client([named,item('om-unnamed')]);
+ const page=await readExternalHistory(bot,identity,route,{scope:'thread',limit:20});
+ assert.equal(bot.calls[0].params.with_sender_name,true);
+ assert.deepEqual(page.events[0].actor,{kind:'user',id:'ou-human',name:'Alex'});
+ assert.deepEqual(page.events[0].mentions,[{id:'ou-bot',key:'@_user_1',name:'QA Bot'}]);
+ assert.deepEqual(page.events[1].actor,{kind:'user',id:'ou-human'});
+});
