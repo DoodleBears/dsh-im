@@ -94,6 +94,7 @@ export function createImHostPlugin(internals = {}) {
           contractVersion: 1,
           inboundVersion: 1,
           consumeInbound: (botId, options) => deliveryService.consumeInbound(botId, options),
+          historyChecked: (botId, route, query, options) => deliveryService.historyChecked(botId, route, query, options),
           replyChecked: (botId, route, text, options) => deliveryService.replyChecked(botId, route, text, options),
           describeBot: (botId) => deliveryService.describeBot(botId),
           sendChecked: (botId, targetId, text, options) => deliveryService.sendChecked(botId, targetId, text, options),

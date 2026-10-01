@@ -38,6 +38,10 @@ const DELIVERY_ERROR_CODES = new Set([
   'ingress-not-accepted',
   'invalid-inbound',
   'stale-route',
+  'history-permission-denied',
+  'history-unavailable',
+  'thread-unavailable',
+  'untrusted-source',
   'reply-result-unknown',
 ]);
 
@@ -344,6 +348,23 @@ export class DeliveryService {
     });
     try { this.#assertRegistered(registration); } catch (error) { dispose(); throw error; }
     return dispose;
+  }
+
+  async historyChecked(botId, route, query, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')) throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (typeof registration.adapter.historyChecked !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    try {
+      const result = await registration.adapter.historyChecked(id, structuredClone(route), structuredClone(query), {
+        ...options, signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal,
+      });
+      this.#assertRegistered(registration);
+      cancellation(options.signal);
+      return result;
+    } catch (error) { throw publicOperationError(error); }
   }
 
   async replyChecked(botId, route, text, options = {}) {
