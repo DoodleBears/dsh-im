@@ -1,4 +1,5 @@
 import { readExternalHistory } from './history-reader.mjs';
+import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
 import { createConnectionDiagnostics, atConnectionStage } from '../shared/connection-error.mjs';
 import { randomUUID } from 'node:crypto';
 import { FeishuHarnessBridge } from './bridge.mjs';
@@ -740,6 +741,27 @@ export class FeishuRuntime {
     signal?.throwIfAborted();
     if (this.#client !== client) throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
     return result;
+  }
+
+  async enrichExternal(evidence, { signal } = {}) {
+    const client = this.#client;
+    if (!client || this.#consumerMode !== 'external-consumer') throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    const result = await externalAttachments(client, evidence, signal);
+    signal?.throwIfAborted();
+    if (this.#client !== client) throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    return result;
+  }
+
+  async externalFileChecked(route, value, { signal, reply = false } = {}) {
+    const client = this.#client;
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      if (!client || this.#client !== client || this.#consumerMode !== 'external-consumer')
+        throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    };
+    assertCurrent();
+    return reply ? replyExternalFile(client, route, value, { signal, assertCurrent })
+      : readExternalFile(client, route, value, { signal, assertCurrent });
   }
 
   async replyChecked(route, text, { signal } = {}) {

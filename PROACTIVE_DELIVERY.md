@@ -363,3 +363,13 @@ same-Host `dshIm` Service 新增 `contractVersion:1`、`describeBot(botId)` 和 
 options 必须包含 `expectedFingerprint`、`expectedTargetDigest`，可选 `signal`、`format`。目标 digest 为 `JSON.stringify({kind,route})` 的 UTF-8 小写 SHA-256，route keys 按 JavaScript 字符串 code-unit 升序排列；名称和 alias 不参与。发送检查当前 saved target，冻结规范化 route，再在账号 transition 内重新验证认证身份后使用此 route；验证期间编辑 alias 不会改投。lookup 前删除或改址会拒绝；请求已经开始后，修改不能撤销外部效果。
 
 `account-unverified`、`account-changed`、`target-changed`、`capability-unavailable` 是发送前拒绝。`{sent:true}` 仍只代表平台接受，不代表送达/已读。SDK 开始后的取消、超时和含糊失败不能证明没有发送；调用者持有 durable authorization／intent／attempt 与 reconciliation，不得盲重试。Provider Registration 撤销阻止后续 preflight，但不能撤回已开始的 SDK 请求。
+
+## 经校验的外部来源文件（临时验证契约）
+
+增量的 `dshIm.fileVersion: 1` Service 提供 `readSourceFile(botId, route, attachment, options)` 与 `replyFileChecked(botId, route, file, options)`；选项沿用 `expectedFingerprint` 与 `signal`，账号声明 `source-file-checked` 和 `reply-file-checked` 能力。现有文本契约仍为 version 1。
+
+对回复文件消息的真实文本 @，独占 consumer 仅使用该账号 SDK 查询准确父消息，保留 `{id,messageId,resourceKey,name}`。收到消息时不下载正文，不读取任意历史。下载前重新核对原回复路线和父消息资源关联；同一会话／话题、当前账号、取消和 25 MiB 实际字节上限均受校验。能力自身不授予权限，canonical 持久化和即时授权仍由 consumer 负责。
+
+结果使用明确选择的 `{id,name,bytes}`。沿用原生文件上传器，上传后、实际发送前重新核对原来源，只回复准确原话题，不改远端原件、不回退到其他目标、不自动重试不确定结果。上传失败或明确平台拒绝会给出未被接受的结果；中断／不确定发送需核实后再决策。本包仍是临时 Git 验证 artifact，并非上游发布或生产启用。
+
+File metadata is opt-in through `consumeInbound(..., {sourceFiles: true})`; legacy consumers receive their unchanged version 1 text envelope. / 文件元信息通过 `sourceFiles: true` 明确协商，旧 consumer 的文本 envelope 保持原样。

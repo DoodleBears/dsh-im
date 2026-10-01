@@ -43,6 +43,10 @@ const DELIVERY_ERROR_CODES = new Set([
   'thread-unavailable',
   'untrusted-source',
   'reply-result-unknown',
+  'file-upload-failed',
+  'file-provider-rejected',
+  'resource-unavailable',
+  'artifact-too-large',
 ]);
 
 const SESSION_SYNC_METHODS = Object.freeze([
@@ -380,6 +384,20 @@ export class DeliveryService {
       ...options, signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal,
     }); }
     catch (error) { throw publicOperationError(error); }
+  }
+
+  async externalFileChecked(botId, route, value, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')) throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (typeof registration.adapter.externalFileChecked !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    try {
+      return await registration.adapter.externalFileChecked(id, structuredClone(route), structuredClone(value), {
+        ...options, signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal,
+      });
+    } catch (error) { throw publicOperationError(error); }
   }
 
   async sendChecked(botId, targetId, text, { expectedFingerprint, expectedTargetDigest, signal, format = 'plain' } = {}) {

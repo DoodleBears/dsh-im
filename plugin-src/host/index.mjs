@@ -93,6 +93,9 @@ export function createImHostPlugin(internals = {}) {
         ctx.provide('dshIm', Object.freeze({
           contractVersion: 1,
           inboundVersion: 1,
+          fileVersion: 1,
+          readSourceFile: (botId, route, attachment, options) => deliveryService.externalFileChecked(botId, route, attachment, options),
+          replyFileChecked: (botId, route, file, options) => deliveryService.externalFileChecked(botId, route, file, { ...options, reply: true }),
           consumeInbound: (botId, options) => deliveryService.consumeInbound(botId, options),
           historyChecked: (botId, route, query, options) => deliveryService.historyChecked(botId, route, query, options),
           replyChecked: (botId, route, text, options) => deliveryService.replyChecked(botId, route, text, options),
