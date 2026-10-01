@@ -56,13 +56,15 @@ export function normalizeExternalText(event, { botId, appId, botOpenId, fingerpr
 export class ExclusiveInboundConsumers {
   #entries = new Map();
 
-  register(botId, { fingerprint, onEvent, signal }) {
+  acceptsFiles(botId) { return this.#entries.get(botId)?.sourceFiles === true; }
+
+  register(botId, { fingerprint, onEvent, signal, sourceFiles = false }) {
     if (this.#entries.has(botId)) throw refusal('consumer-conflict');
-    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function')
+    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function' || typeof sourceFiles !== 'boolean')
       throw refusal('bad-request');
     signal?.throwIfAborted();
     const controller = new AbortController();
-    const entry = { fingerprint, onEvent, controller, dispose: undefined };
+    const entry = { fingerprint, onEvent, sourceFiles, controller, dispose: undefined };
     const dispose = () => {
       if (this.#entries.get(botId) === entry) this.#entries.delete(botId);
       controller.abort(refusal('consumer-unavailable'));

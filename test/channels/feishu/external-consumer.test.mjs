@@ -109,3 +109,15 @@ test('group evidence requires authenticated account identity and valid mention a
   input.message.create_time = '9e99';
   assert.throws(() => normalized(input), { code: 'invalid-inbound' });
 });
+
+
+test('file metadata is explicitly negotiated while legacy text consumers retain their version 1 envelope', () => {
+  const consumers = new ExclusiveInboundConsumers();
+  const legacy = consumers.register('legacy', { fingerprint, onEvent: async () => ({ accepted: true }) });
+  assert.equal(consumers.acceptsFiles('legacy'), false);
+  consumers.register('files', { fingerprint, sourceFiles: true, onEvent: async () => ({ accepted: true }) });
+  assert.equal(consumers.acceptsFiles('files'), true);
+  legacy();
+  assert.equal(consumers.acceptsFiles('legacy'), false);
+  consumers.close();
+});

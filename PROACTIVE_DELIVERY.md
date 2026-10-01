@@ -371,3 +371,5 @@ options 必须包含 `expectedFingerprint`、`expectedTargetDigest`，可选 `si
 对回复文件消息的真实文本 @，独占 consumer 仅使用该账号 SDK 查询准确父消息，保留 `{id,messageId,resourceKey,name}`。收到消息时不下载正文，不读取任意历史。下载前重新核对原回复路线和父消息资源关联；同一会话／话题、当前账号、取消和 25 MiB 实际字节上限均受校验。能力自身不授予权限，canonical 持久化和即时授权仍由 consumer 负责。
 
 结果使用明确选择的 `{id,name,bytes}`。沿用原生文件上传器，上传后、实际发送前重新核对原来源，只回复准确原话题，不改远端原件、不回退到其他目标、不自动重试不确定结果。上传失败或明确平台拒绝会给出未被接受的结果；中断／不确定发送需核实后再决策。本包仍是临时 Git 验证 artifact，并非上游发布或生产启用。
+
+File metadata is opt-in through `consumeInbound(..., {sourceFiles: true})`; legacy consumers receive their unchanged version 1 text envelope. / 文件元信息通过 `sourceFiles: true` 明确协商，旧 consumer 的文本 envelope 保持原样。
