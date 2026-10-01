@@ -593,7 +593,7 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'feishu', account,
         connected: isConnected(connectionStatus(this.#runtimes.get(botId))),
-        capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'reply-text-checked'] };
+        capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'reply-text-checked', 'source-file-checked', 'reply-file-checked'] };
     });
   }
 
@@ -636,6 +636,22 @@ export class MultiBotDshFeishuController {
         || typeof runtime.replyChecked !== 'function')
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
       return runtime.replyChecked(route, text, { signal });
+    });
+  }
+
+  async externalFileChecked(botId, route, value, { expectedFingerprint, signal, reply = false } = {}) {
+    this.#assertOpen();
+    return this.#withBotTransition(botId, async () => {
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      if (account.fingerprint !== expectedFingerprint)
+        throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      signal?.throwIfAborted();
+      const runtime = this.#runtimes.get(botId);
+      if (config.consumerMode !== 'external-consumer' || !isConnected(connectionStatus(runtime))
+        || typeof runtime.externalFileChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return runtime.externalFileChecked(route, value, { signal, reply });
     });
   }
 
@@ -1406,7 +1422,8 @@ export class MultiBotDshFeishuController {
         signal?.throwIfAborted();
         const evidence = normalizeExternalText(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
         if (evidence === null) return { accepted: true, ignored: true };
-        return this.#inboundConsumers.accept(config.id, evidence, signal);
+        const enriched = typeof runtime.enrichExternal === 'function' ? await runtime.enrichExternal(evidence, { signal }) : evidence;
+        return this.#inboundConsumers.accept(config.id, enriched, signal);
       }),
     }));
     this.#runtimes.set(config.id, runtime);

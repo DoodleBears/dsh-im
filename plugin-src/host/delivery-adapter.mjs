@@ -238,6 +238,11 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
       return coreController.consumeInbound(botId, options);
     },
+    externalFileChecked: (botId, route, value, options) => {
+      if (typeof coreController.externalFileChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.externalFileChecked(botId, route, value, options);
+    },
     replyChecked: (botId, route, text, options) => {
       if (typeof coreController.replyChecked !== 'function')
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
