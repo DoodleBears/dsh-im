@@ -688,7 +688,7 @@ export class FeishuRuntime {
     });
   }
 
-  async sendProactiveText(target, text, { signal, format = 'plain' } = {}) {
+  async sendProactiveText(target, text, { signal, format = 'plain', receipt = false } = {}) {
     if (!this.#status.ready || !this.#client) {
       const error = new Error('飞书机器人尚未连接');
       error.code = 'bot-not-connected';
@@ -711,6 +711,8 @@ export class FeishuRuntime {
       error.code = 'bad-request';
       throw error;
     }
+    if (typeof receipt !== 'boolean' || (receipt && target.kind !== 'group'))
+      throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
     signal?.throwIfAborted();
     // Use the same native Markdown element as chat, without opening a stream
     // or retrying as plain text after a possibly accepted delivery.
@@ -730,7 +732,12 @@ export class FeishuRuntime {
       error.code = 'target-rejected';
       throw error;
     }
-    return { sent: true };
+    if (!receipt) return { sent: true };
+    const messageId = response?.data?.message_id;
+    const conversationId = response?.data?.chat_id;
+    if (typeof messageId !== 'string' || !messageId || messageId.length > 512 || conversationId !== receiveId)
+      throw Object.assign(new Error('send-result-unknown'), { code: 'send-result-unknown' });
+    return { sent: true, receipt: { version: 1, messageId, conversationId } };
   }
 
   async historyChecked(identity, route, query, { signal } = {}) {

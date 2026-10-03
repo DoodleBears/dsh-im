@@ -43,6 +43,7 @@ const DELIVERY_ERROR_CODES = new Set([
   'thread-unavailable',
   'untrusted-source',
   'reply-result-unknown',
+  'send-result-unknown',
   'file-upload-failed',
   'file-provider-rejected',
   'resource-unavailable',
@@ -343,6 +344,12 @@ export class DeliveryService {
     const dispose = await registration.adapter.consumeInbound(id, {
       ...options,
       signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal,
+      ...(options.onEcho === undefined ? {} : { onEcho: async (evidence, context) => {
+        this.#assertRegistered(registration);
+        const result = await options.onEcho(evidence, context);
+        this.#assertRegistered(registration);
+        return result;
+      } }),
       onEvent: async (evidence, context) => {
         this.#assertRegistered(registration);
         const result = await options.onEvent(evidence, context);
@@ -400,10 +407,10 @@ export class DeliveryService {
     } catch (error) { throw publicOperationError(error); }
   }
 
-  async sendChecked(botId, targetId, text, { expectedFingerprint, expectedTargetDigest, signal, format = 'plain' } = {}) {
+  async sendChecked(botId, targetId, text, { expectedFingerprint, expectedTargetDigest, signal, format = 'plain', receipt = false } = {}) {
     const id = botIdOf(botId);
     const key = targetIdOf(targetId);
-    if (typeof text !== 'string' || !text.trim() || !['plain', 'markdown'].includes(format)
+    if (typeof text !== 'string' || !text.trim() || !['plain', 'markdown'].includes(format) || typeof receipt !== 'boolean'
       || !/^[a-f0-9]{64}$/.test(expectedFingerprint ?? '') || !/^[a-f0-9]{64}$/.test(expectedTargetDigest ?? '')) {
       throw deliveryError('bad-request');
     }
@@ -427,11 +434,19 @@ export class DeliveryService {
         throw deliveryError('capability-unavailable');
       }
       if (account.account?.fingerprint !== expectedFingerprint) throw deliveryError('account-changed');
+      if (receipt && (!account.capabilities?.includes('proactive-receipt-checked') || target.kind !== 'group'))
+        throw deliveryError('capability-unavailable');
       cancellation(signal);
       this.#assertRegistered(registration);
-      await adapter.sendText(id, target, text, { signal, expectedFingerprint,
+      const result = await adapter.sendText(id, target, text, { signal, expectedFingerprint,
+        ...(receipt ? { receipt: true } : {}),
         ...(format === 'markdown' ? { format } : {}) });
-      return { sent: true };
+      if (!receipt) return { sent: true };
+      if (result?.sent !== true || result.receipt?.version !== 1
+        || typeof result.receipt.messageId !== 'string' || !result.receipt.messageId || result.receipt.messageId.length > 512
+        || result.receipt.conversationId !== target.route.chatId)
+        throw deliveryError('send-result-unknown');
+      return { sent: true, receipt: { version: 1, messageId: result.receipt.messageId, conversationId: result.receipt.conversationId } };
     } catch (error) { throw publicOperationError(error); }
   }
 

@@ -121,3 +121,19 @@ test('file metadata is explicitly negotiated while legacy text consumers retain 
   assert.equal(consumers.acceptsFiles('legacy'), false);
   consumers.close();
 });
+
+test('own app echo is opt-in, authenticated separately, and never admitted as Human text', async () => {
+  const { normalizeOwnTextEcho } = await import('../../../src/channels/feishu/external-consumer.mjs');
+  const identity = { botId: 'own', appId: 'cli_own', botOpenId: 'ou_bot', fingerprint: 'a'.repeat(64) };
+  const raw = { app_id: 'cli_own', event_id: 'event', sender: { sender_type: 'app', sender_id: { app_id: 'cli_own' } }, message: { message_type: 'text', chat_type: 'group', message_id: 'om_own', chat_id: 'oc_group', content: '{"text":"report"}', create_time: '1791012000000' } };
+  const echo = normalizeOwnTextEcho(raw, identity);
+  assert.equal(echo.messageId, 'om_own');
+  assert.equal(normalizeExternalText(raw, identity), null);
+  assert.equal(normalizeOwnTextEcho({ ...raw, sender: { sender_type: 'app', sender_id: { app_id: 'cli_other' } } }, identity), null);
+  const consumers = new ExclusiveInboundConsumers();
+  let events = 0, echoes = 0;
+  const dispose = consumers.register('own', { fingerprint: identity.fingerprint, onEvent: async () => { events++; return { accepted: true }; }, onEcho: async value => { echoes++; assert.equal(value.messageId, 'om_own'); return { accepted: true }; } });
+  await consumers.accept('own', echo, undefined, true);
+  assert.equal(events, 0); assert.equal(echoes, 1); dispose();
+  await assert.rejects(consumers.accept('own', echo, undefined, true), { code: 'consumer-unavailable' });
+});

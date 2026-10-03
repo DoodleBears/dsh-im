@@ -409,3 +409,24 @@ test('a reply waiting for provider preflight cannot send after its Registration 
   await assert.rejects(result, { code: 'provider-unavailable' });
   assert.equal(sends, 0);
 });
+
+test('checked receipt requires capability and exact frozen group correspondence, never resends', async () => {
+  const fx = checkedFixture(); fx.service.registerAdapter(fx.adapter);
+  const target = { targetId: 'group', kind: 'group', route: { chatId: 'oc_group' } };
+  await fx.service.createTarget('bot_one', target);
+  const { createHash } = await import('node:crypto');
+  const expectedTargetDigest = createHash('sha256').update(JSON.stringify({ kind: target.kind, route: target.route })).digest('hex');
+  const options = { expectedFingerprint: fx.fingerprint, expectedTargetDigest, receipt: true };
+  await assert.rejects(fx.service.sendChecked('bot_one', 'group', 'report', options), { code: 'capability-unavailable' });
+  assert.equal(fx.adapter.sends.length, 0);
+  fx.adapter.describeAccount = async () => ({ version: 1, capabilities: ['proactive-text-checked', 'proactive-receipt-checked'], account: { fingerprint: fx.fingerprint } });
+  let calls = 0;
+  fx.adapter.sendText = async (_id, saved, _text, opts) => {
+    calls++; assert.equal(saved.route.chatId, 'oc_group'); assert.equal(opts.receipt, true);
+    return { sent: true, receipt: { version: 1, messageId: 'om_report', conversationId: 'oc_group', secret: 'not exposed' } };
+  };
+  assert.deepEqual(await fx.service.sendChecked('bot_one', 'group', 'report', options), { sent: true, receipt: { version: 1, messageId: 'om_report', conversationId: 'oc_group' } });
+  fx.adapter.sendText = async () => { calls++; return { sent: true, receipt: { version: 1, messageId: 'om_other', conversationId: 'oc_other' } }; };
+  await assert.rejects(fx.service.sendChecked('bot_one', 'group', 'report', options), { code: 'send-result-unknown' });
+  assert.equal(calls, 2);
+});

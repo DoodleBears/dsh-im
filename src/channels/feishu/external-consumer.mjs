@@ -55,18 +55,37 @@ export function normalizeExternalText(event, { botId, appId, botOpenId, fingerpr
   });
 }
 
+export function normalizeOwnTextEcho(event, { botId, appId, botOpenId, fingerprint }) {
+  if (!['app', 'bot'].includes(event?.sender?.sender_type)) return null;
+  if (event?.sender?.sender_id?.open_id !== botOpenId && event?.sender?.sender_id?.app_id !== appId) return null;
+  const message = event?.message;
+  if (message?.chat_type !== 'group' || message?.message_type !== 'text') return null;
+  const eventApp = event?.app_id ?? event?.header?.app_id;
+  if (eventApp !== undefined && eventApp !== appId) throw refusal('account-changed');
+  let text;
+  try { text = JSON.parse(message.content)?.text; } catch { throw refusal('invalid-inbound'); }
+  const eventId = identifier(event?.event_id ?? event?.header?.event_id);
+  const messageId = identifier(message.message_id);
+  const conversationId = identifier(message.chat_id);
+  const at = new Date(Number(message.create_time));
+  if (!eventId || !messageId || !conversationId || typeof text !== 'string' || !text.trim()
+    || text.length > 16000 || !Number.isFinite(at.getTime()) || !/^[a-f0-9]{64}$/.test(fingerprint ?? ''))
+    throw refusal('invalid-inbound');
+  return Object.freeze({ version: 1, botId, fingerprint, eventId, messageId, conversationId, text, at: at.toISOString() });
+}
+
 export class ExclusiveInboundConsumers {
   #entries = new Map();
 
   acceptsFiles(botId) { return this.#entries.get(botId)?.sourceFiles === true; }
 
-  register(botId, { fingerprint, onEvent, signal, sourceFiles = false }) {
+  register(botId, { fingerprint, onEvent, signal, sourceFiles = false, onEcho }) {
     if (this.#entries.has(botId)) throw refusal('consumer-conflict');
-    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function' || typeof sourceFiles !== 'boolean')
+    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function' || typeof sourceFiles !== 'boolean' || (onEcho !== undefined && typeof onEcho !== 'function'))
       throw refusal('bad-request');
     signal?.throwIfAborted();
     const controller = new AbortController();
-    const entry = { fingerprint, onEvent, sourceFiles, controller, dispose: undefined };
+    const entry = { fingerprint, onEvent, onEcho, sourceFiles, controller, dispose: undefined };
     const dispose = () => {
       if (this.#entries.get(botId) === entry) this.#entries.delete(botId);
       controller.abort(refusal('consumer-unavailable'));
@@ -78,13 +97,15 @@ export class ExclusiveInboundConsumers {
     return dispose;
   }
 
-  async accept(botId, evidence, signal) {
+  async accept(botId, evidence, signal, echo = false) {
     const entry = this.#entries.get(botId);
     if (!entry) throw refusal('consumer-unavailable');
     if (entry.fingerprint !== evidence.fingerprint) throw refusal('account-changed');
     const deliverySignal = signal
       ? AbortSignal.any([signal, entry.controller.signal]) : entry.controller.signal;
     deliverySignal.throwIfAborted();
+    const callback = echo ? entry.onEcho : entry.onEvent;
+    if (callback === undefined) return { accepted: true, ignored: true };
     let abort;
     const interrupted = new Promise((_, reject) => {
       abort = () => reject(deliverySignal.reason);
@@ -93,7 +114,7 @@ export class ExclusiveInboundConsumers {
     });
     let result;
     try {
-      result = await Promise.race([entry.onEvent(evidence, { signal: deliverySignal }), interrupted]);
+      result = await Promise.race([callback(evidence, { signal: deliverySignal }), interrupted]);
     } finally {
       deliverySignal.removeEventListener('abort', abort);
     }

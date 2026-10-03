@@ -120,3 +120,21 @@ test('Markdown rejection and uncertain network failure do not retry as plain tex
   assert.equal(sends.length, 2);
   assert.ok(sends.every((payload) => payload.data.msg_type === 'interactive'));
 });
+
+test('opt-in group receipt survives runtime and adapter without changing legacy send', async t => {
+  const fx = await fixture(t, 'lark');
+  fx.respondWith(() => ({ code: 0, data: { message_id: 'om_receipt', chat_id: 'oc_fixture_group' } }));
+  assert.deepEqual(await fx.runtime.sendProactiveText(targets[1], text, { receipt: true }), {
+    sent: true, receipt: { version: 1, messageId: 'om_receipt', conversationId: 'oc_fixture_group' },
+  });
+  assert.deepEqual(await fx.service.send('fixture-bot', 'group', text), { sent: true });
+  for (const response of [{ code: 0 }, { code: 0, data: { message_id: 'om_receipt', chat_id: 'oc_other' } }]) {
+    fx.respondWith(() => response);
+    const before = fx.sends.length;
+    await assert.rejects(fx.runtime.sendProactiveText(targets[1], text, { receipt: true }), { code: 'send-result-unknown' });
+    assert.equal(fx.sends.length, before + 1);
+  }
+  const before = fx.sends.length;
+  await assert.rejects(fx.runtime.sendProactiveText(targets[0], text, { receipt: true }), { code: 'capability-unavailable' });
+  assert.equal(fx.sends.length, before);
+});

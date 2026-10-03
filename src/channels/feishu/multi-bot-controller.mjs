@@ -1,4 +1,4 @@
-import { ExclusiveInboundConsumers, normalizeExternalText } from './external-consumer.mjs';
+import { ExclusiveInboundConsumers, normalizeExternalText, normalizeOwnTextEcho } from './external-consumer.mjs';
 import { atConnectionStage, createConnectionDiagnostics } from '../shared/connection-error.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { connectionTestMessage } from '../shared/connection-test.mjs';
@@ -593,11 +593,11 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'feishu', account,
         connected: isConnected(connectionStatus(this.#runtimes.get(botId))),
-        capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'reply-text-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
     });
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, onEcho } = {}) {
     this.#assertOpen();
     return this.#withBotTransition(botId, async () => {
       this.#assertOpen();
@@ -606,7 +606,7 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       if (account.fingerprint !== expectedFingerprint)
         throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, onEcho });
       try {
         const saved = await this.#configStore.saveBot({ ...config, consumerMode: 'external-consumer' });
         const resolved = await this.#credentials.resolve(saved.secretRef);
@@ -1438,6 +1438,8 @@ export class MultiBotDshFeishuController {
           throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
         const account = await this.#deliveryAccount(current);
         signal?.throwIfAborted();
+        const echo = normalizeOwnTextEcho(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
+        if (echo) return this.#inboundConsumers.accept(config.id, echo, signal, true);
         const evidence = normalizeExternalText(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
         if (evidence === null) return { accepted: true, ignored: true };
         const enriched = this.#inboundConsumers.acceptsFiles(config.id) && typeof runtime.enrichExternal === 'function' ? await runtime.enrichExternal(evidence, { signal }) : evidence;

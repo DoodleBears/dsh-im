@@ -306,8 +306,8 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
       if (typeof coreController.sendProactiveText !== 'function') {
         throw new TypeError('delivery controller cannot send proactive text');
       }
-      await coreController.sendProactiveText(botId, normalized, text, options);
-      return { sent: true };
+      const result = await coreController.sendProactiveText(botId, normalized, text, options);
+      return options.receipt === true ? result : { sent: true };
     },
     async setSessionSync(botId, targetId, enabled) {
       if (typeof workspaces.setDeliveryTargetSessionSync !== 'function') {
