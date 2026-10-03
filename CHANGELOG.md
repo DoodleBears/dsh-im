@@ -6,6 +6,11 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+### Added / 新增
+
+- 飞书/Lark 可由同 Host 应用独占接收文本消息，等待应用确认持久化后返回，并按校验过的原消息/话题回复；外部消费模式在释放或重启后不回退到独立 Session。
+  Same-Host applications can opt into exclusive Feishu/Lark text intake, acknowledge after durable acceptance, and reply through a checked original-message/topic route. Releasing or restarting an external consumer never falls back to a standalone Session.
+
 ## [4.34.2] - 2026-10-03
 
 ### Fixed / 修复

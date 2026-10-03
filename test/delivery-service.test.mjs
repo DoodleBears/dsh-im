@@ -392,3 +392,40 @@ test('checked receipt requires capability and exact frozen group correspondence,
   await assert.rejects(fx.service.sendChecked('bot_one', 'group', 'report', options), { code: 'send-result-unknown' });
   assert.equal(calls, 2);
 });
+
+test('consumer replacement aborts the old account lease and stale dispose cannot remove its successor', async () => {
+  const fx = checkedFixture();
+  let lease;
+  fx.adapter.consumeInbound = async (_id, options) => {
+    lease = options;
+    return () => {};
+  };
+  const oldDispose = fx.service.registerAdapter(fx.adapter);
+  await fx.service.consumeInbound('bot_one', { expectedFingerprint: fx.fingerprint, onEvent: async () => ({ accepted: true }) });
+  fx.service.registerAdapter(fx.adapter);
+  assert.equal(lease.signal.aborted, true);
+  assert.equal(oldDispose(), false);
+  await assert.rejects(lease.onEvent({}, {}), { code: 'capability-unavailable' });
+  assert.equal((await fx.service.describeBot('bot_one')).account.fingerprint, fx.fingerprint);
+});
+
+test('a reply waiting for provider preflight cannot send after its Registration disappears', async () => {
+  const fx = checkedFixture();
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  let resume;
+  const ready = new Promise(resolve => { resume = resolve; });
+  let sends = 0;
+  fx.adapter.replyChecked = async (_id, _route, _text, options) => {
+    entered(); await ready;
+    options.signal.throwIfAborted();
+    sends++;
+    return { sent: true };
+  };
+  const dispose = fx.service.registerAdapter(fx.adapter);
+  const result = fx.service.replyChecked('bot_one', { messageId: 'message' }, 'hello', { expectedFingerprint: fx.fingerprint });
+  await started;
+  dispose(); resume();
+  await assert.rejects(result, { code: 'provider-unavailable' });
+  assert.equal(sends, 0);
+});

@@ -226,7 +226,7 @@ export async function createProductionController(ctx, config = {}, internals = {
     verifyApp,
     credentials: ctx.credentials,
     configStore: observedConfigStore,
-    createRuntime: async ({ botId, config: botConfig, appSecret, repair }) => {
+    createRuntime: async ({ botId, config: botConfig, appSecret, repair, acceptExternal }) => {
       const state = await stateFor(botConfig);
       const id = botId ?? botConfig.id ?? botConfig.appId;
       await workspaces.ensure(id, {
@@ -248,6 +248,8 @@ export async function createProductionController(ctx, config = {}, internals = {
       }
       return new Runtime({
         lark,
+        consumerMode: botConfig.consumerMode,
+        acceptExternal,
         botId: id,
         repair,
         appId: botConfig.appId,
