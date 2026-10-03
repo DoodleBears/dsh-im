@@ -10,7 +10,7 @@ export async function qualifyExternalReply(client, route, signal) {
   const current = await client.im.v1.message.get({ path: { message_id: route.messageId } }, { signal });
   signal?.throwIfAborted();
   if ([230027, 99991672, 99991679].includes(current?.code)) refuse('reply-permission-denied');
-  if (current?.code) refuse('source-unavailable');
+  if (current?.code !== 0 || !Array.isArray(current?.data?.items)) refuse('source-unavailable');
   const source = current?.data?.items?.find(item => item.message_id === route.messageId);
   if (!source || source.deleted) refuse('source-not-found');
   if (source.chat_id !== route.conversationId || source.sender?.sender_type !== 'user'

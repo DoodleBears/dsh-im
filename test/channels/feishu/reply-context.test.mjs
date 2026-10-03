@@ -23,6 +23,10 @@ test('reports confirmed missing/withdrawn source independently of permissions',a
   for(const items of [[],[{...source,deleted:true}]])
     await assert.rejects(qualifyExternalReply(client({code:0,data:{items}}),route),{code:'source-not-found'});
 });
+test('does not treat a malformed provider response as proof that the source disappeared',async () => {
+  for(const response of [undefined, {}, {code:0}, {code:0,data:{}}, {code:0,data:{items:null}}, {data:{items:[]}}])
+    await assert.rejects(qualifyExternalReply(client(response),route),{code:'source-unavailable'});
+});
 test('cancellation fences the qualification result',async () => {
   const controller=new AbortController();
   const response=client({code:0,data:{items:[source]}});
