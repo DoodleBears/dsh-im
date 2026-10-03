@@ -430,3 +430,20 @@ test('checked receipt requires capability and exact frozen group correspondence,
   await assert.rejects(fx.service.sendChecked('bot_one', 'group', 'report', options), { code: 'send-result-unknown' });
   assert.equal(calls, 2);
 });
+
+
+test('reply qualification fences removed registration and preserves safe refusal codes', async () => {
+  const fx = checkedFixture();
+  let unblock;
+  let entered;
+  const started = new Promise(resolve => {entered = resolve;});
+  const pending = new Promise(resolve => {unblock = resolve;});
+  fx.adapter.qualifyReplyChecked = async (_id, route) => {entered(); await pending; return {...route, actorId: 'own-scoped-human'};};
+  const dispose = fx.service.registerAdapter(fx.adapter);
+  const result = fx.service.qualifyReplyChecked('bot_one', {messageId: 'message'}, {expectedFingerprint: fx.fingerprint});
+  await started; dispose(); unblock();
+  await assert.rejects(result, {code: 'capability-unavailable'});
+  fx.adapter.qualifyReplyChecked = async () => {throw Object.assign(new Error('private upstream detail'), {code: 'reply-permission-denied'});};
+  fx.service.registerAdapter(fx.adapter);
+  await assert.rejects(fx.service.qualifyReplyChecked('bot_one', {}, {expectedFingerprint: fx.fingerprint}), {code: 'reply-permission-denied', message: 'reply-permission-denied'});
+});

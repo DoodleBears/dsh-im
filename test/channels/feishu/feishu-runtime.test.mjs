@@ -940,3 +940,32 @@ test('checked replies validate the original source before sending and retain unk
   assert.equal(sends, 2);
   await runtime.stop();
 });
+
+
+test('own-account qualification maps the sender without borrowing an ingress app identity and yields a checked reply receipt', async () => {
+  const runtime = new FeishuRuntime({ lark: fakeLark(), appId: 'responder', appSecret: 'secret', ownerOpenIds: ['*'],
+    consumerMode: 'external-consumer', harness: { async ensureRunning() {} }, state: {} });
+  const starting = runtime.start();
+  await waitFor(() => FakeWSClient.instances.length === 1);
+  FakeWSClient.instances[0].becomeReady(); await starting;
+  const client = FakeClient.instances[0];
+  client.im.v1.message.get = async () => ({code: 0, data: {items: [{message_id: 'message', chat_id: 'chat', thread_id: 'thread', root_id: 'root', parent_id: 'parent',
+    sender: {sender_type: 'user', id_type: 'open_id', id: 'responder-scoped-human'}}]}});
+  let sends = 0;
+  client.im.v1.message.reply = async request => {
+    sends++; assert.equal(request.data.reply_in_thread, true);
+    return {code: 0, data: {message_id: 'reply', chat_id: 'chat'}};
+  };
+  const ingress = {messageId: 'message', conversationId: 'chat', actorId: 'ingress-scoped-human', threadId: 'thread', rootId: 'root', parentId: 'parent'};
+  const route = await runtime.qualifyReplyChecked(ingress);
+  assert.equal(route.actorId, 'responder-scoped-human');
+  assert.equal(sends, 0);
+  await assert.rejects(runtime.replyChecked(route, 'hello', {receipt: true, beforeSend: () => false}), {code: 'stale-route'});
+  assert.equal(sends, 0);
+  await assert.rejects(runtime.replyChecked(ingress, 'hello', {receipt: true}), {code: 'stale-route'});
+  assert.deepEqual(await runtime.replyChecked(route, 'hello', {receipt: true}), {sent: true, receipt: {version: 1, messageId: 'reply', conversationId: 'chat'}});
+  client.im.v1.message.reply = async () => {sends++; return {code: 0, data: {message_id: 'wrong', chat_id: 'other'}};};
+  await assert.rejects(runtime.replyChecked(route, 'hello', {receipt: true}), {code: 'reply-result-unknown'});
+  assert.equal(sends, 2);
+  await runtime.stop();
+});

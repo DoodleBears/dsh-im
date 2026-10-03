@@ -593,7 +593,7 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'feishu', account,
         connected: isConnected(connectionStatus(this.#runtimes.get(botId))),
-        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
     });
   }
 
@@ -640,7 +640,24 @@ export class MultiBotDshFeishuController {
     });
   }
 
-  async replyChecked(botId, route, text, { expectedFingerprint, signal } = {}) {
+  async qualifyReplyChecked(botId, route, { expectedFingerprint, signal } = {}) {
+    this.#assertOpen();
+    return this.#withBotTransition(botId, async () => {
+      this.#assertOpen();
+      signal?.throwIfAborted();
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      if (account.fingerprint !== expectedFingerprint)
+        throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      const runtime = this.#runtimes.get(botId);
+      if (config.consumerMode !== 'external-consumer' || !isConnected(connectionStatus(runtime))
+        || typeof runtime.qualifyReplyChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return runtime.qualifyReplyChecked(route, { signal });
+    });
+  }
+
+  async replyChecked(botId, route, text, { expectedFingerprint, signal, receipt = false, beforeSend } = {}) {
     this.#assertOpen();
     return this.#withBotTransition(botId, async () => {
       this.#assertOpen();
@@ -653,7 +670,7 @@ export class MultiBotDshFeishuController {
       if (config.consumerMode !== 'external-consumer' || !isConnected(connectionStatus(runtime))
         || typeof runtime.replyChecked !== 'function')
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
-      return runtime.replyChecked(route, text, { signal });
+      return runtime.replyChecked(route, text, { signal, receipt, beforeSend });
     });
   }
 

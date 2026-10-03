@@ -38,6 +38,9 @@ const DELIVERY_ERROR_CODES = new Set([
   'ingress-not-accepted',
   'invalid-inbound',
   'stale-route',
+  'source-not-found',
+  'source-unavailable',
+  'reply-permission-denied',
   'history-permission-denied',
   'history-unavailable',
   'thread-unavailable',
@@ -376,6 +379,23 @@ export class DeliveryService {
       cancellation(options.signal);
       return result;
     } catch (error) { throw publicOperationError(error); }
+  }
+
+  async qualifyReplyChecked(botId, route, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')) throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (typeof registration.adapter.qualifyReplyChecked !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    const signal = options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal;
+    try {
+      const result = await registration.adapter.qualifyReplyChecked(id, structuredClone(route), { ...options, signal });
+      this.#assertRegistered(registration);
+      cancellation(signal);
+      return result;
+    }
+    catch (error) { const safe = publicOperationError(error); throw deliveryError(safe.code, safe.code); }
   }
 
   async replyChecked(botId, route, text, options = {}) {

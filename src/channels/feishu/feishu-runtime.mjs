@@ -1,3 +1,4 @@
+import { qualifyExternalReply } from './reply-context.mjs';
 import { readExternalHistory } from './history-reader.mjs';
 import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
 import { createConnectionDiagnostics, atConnectionStage } from '../shared/connection-error.mjs';
@@ -771,7 +772,17 @@ export class FeishuRuntime {
       : readExternalFile(client, route, value, { signal, assertCurrent });
   }
 
-  async replyChecked(route, text, { signal } = {}) {
+  async qualifyReplyChecked(route, { signal } = {}) {
+    const client = this.#client;
+    if (!client || this.#consumerMode !== 'external-consumer')
+      throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    const result = await qualifyExternalReply(client, route, signal);
+    signal?.throwIfAborted();
+    if (this.#client !== client) throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    return result;
+  }
+
+  async replyChecked(route, text, { signal, receipt = false, beforeSend } = {}) {
     if (!route || typeof route.messageId !== 'string' || typeof route.conversationId !== 'string'
       || typeof route.actorId !== 'string' || typeof text !== 'string' || !text.trim() || text.length > 4000)
       throw Object.assign(new Error('bad-request'), { code: 'bad-request' });
@@ -788,6 +799,9 @@ export class FeishuRuntime {
       throw Object.assign(new Error('stale-route'), { code: 'stale-route' });
     signal?.throwIfAborted();
     if (this.#client !== client) throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    if (beforeSend !== undefined && (typeof beforeSend !== 'function' || beforeSend() !== true))
+      throw Object.assign(new Error('stale-route'), { code: 'stale-route' });
+    signal?.throwIfAborted();
     const response = await client.im.v1.message.reply({
       path: { message_id: route.messageId },
       data: { msg_type: 'text', content: JSON.stringify({ text }), reply_in_thread: Boolean(route.threadId) },
@@ -795,6 +809,11 @@ export class FeishuRuntime {
     const messageId = response?.data?.message_id;
     if (response?.code || typeof messageId !== 'string' || !messageId)
       throw Object.assign(new Error('reply-result-unknown'), { code: 'reply-result-unknown' });
+    if (receipt) {
+      if (messageId.length > 512 || response?.data?.chat_id !== route.conversationId)
+        throw Object.assign(new Error('reply-result-unknown'), { code: 'reply-result-unknown' });
+      return { sent: true, receipt: { version: 1, messageId, conversationId: route.conversationId } };
+    }
     return { sent: true, messageId };
   }
 
