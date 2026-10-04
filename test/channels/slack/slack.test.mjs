@@ -169,12 +169,13 @@ test('Slack API reads one exact thread root from the current channel', async () 
   });
   assert.equal(message.text, 'root');
   assert.equal(request.url.pathname.endsWith('/conversations.history'), true);
-  assert.deepEqual(JSON.parse(request.options.body), {
+  assert.match(request.options.headers['content-type'], /^application\/x-www-form-urlencoded/);
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(request.options.body)), {
     channel: 'C12345678',
     oldest: '1700000000.001',
     latest: '1700000000.001',
-    inclusive: true,
-    limit: 1,
+    inclusive: 'true',
+    limit: '1',
   });
 });
 

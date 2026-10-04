@@ -528,7 +528,8 @@ export class SlackApi {
   }) {
     const token = tokenKind === 'app' ? this.#appToken : this.#botToken;
     if (!token) throw new TypeError(`Slack ${tokenKind} token is required for ${method}`);
-    const formEncoded = method === 'files.getUploadURLExternal' || method === 'files.info';
+    const formEncoded = ['files.getUploadURLExternal', 'files.info', 'bots.info', 'users.info',
+      'conversations.info', 'conversations.history', 'conversations.replies'].includes(method);
     let response;
     try {
       response = await this.#fetch(new URL(method, this.#baseUrl), {

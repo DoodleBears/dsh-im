@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SlackRuntime } from '../../../src/channels/slack/slack-runtime.mjs';
+import { SlackApi } from '../../../src/channels/slack/slack-api.mjs';
 import { ExclusiveInboundConsumers } from '../../../src/channels/shared/exclusive-inbound-consumers.mjs';
 import { normalizeSlackExternalText, verifiedSlackAccount } from '../../../src/channels/slack/external-consumer.mjs';
 import { SlackController } from '../../../src/channels/slack/slack-controller.mjs';
@@ -13,6 +14,36 @@ const identity = { team_id: 'T12345678', user_id: 'U12345678', bot_id: 'B1234567
 const bot = { id: identity.bot_id, user_id: identity.user_id, app_id: 'A12345678', name: 'QA Bot' };
 const account = verifiedSlackAccount(identity, bot);
 const botId = 'slack_0123456789abcdef01234567';
+
+test('read API queries reach Slack as form parameters for identity and exact thread source checks', async () => {
+  const childTs = '1791127736.123456';
+  const rootTs = '1791127600.000001';
+  const api = new SlackApi({ botToken: 'xoxb-test-1234567890123456', fetchImpl: async (url, request) => {
+    assert.match(request.headers['content-type'], /^application\/x-www-form-urlencoded/);
+    const form = new URLSearchParams(request.body);
+    const method = new URL(url).pathname.split('/').at(-1);
+    if (method === 'bots.info') {
+      assert.equal(form.get('bot'), bot.id);
+      return Response.json({ ok: true, bot });
+    }
+    if (method === 'users.info') {
+      assert.equal(form.get('user'), identity.user_id);
+      return Response.json({ ok: true, user: { id: identity.user_id } });
+    }
+    assert.equal(form.get('channel'), 'C12345678');
+    if (method === 'conversations.info') return Response.json({ ok: true, channel: { id: 'C12345678', is_member: true } });
+    assert.equal(form.get('oldest'), childTs);
+    assert.equal(form.get('latest'), childTs);
+    assert.equal(form.get('inclusive'), 'true');
+    if (method === 'conversations.replies') assert.equal(form.get('ts'), rootTs);
+    return Response.json({ ok: true, messages: [{ ts: childTs, user: identity.user_id, thread_ts: rootTs }] });
+  } });
+  assert.equal((await api.botInfo({ botId: bot.id })).app_id, bot.app_id);
+  assert.equal((await api.userInfo({ userId: identity.user_id })).id, identity.user_id);
+  assert.equal((await api.conversationInfo({ channelId: 'C12345678' })).is_member, true);
+  assert.equal((await api.getMessage({ channelId: 'C12345678', messageTs: childTs })).ts, childTs);
+  assert.equal((await api.threadMessage({ channelId: 'C12345678', threadTs: rootTs, messageTs: childTs })).ts, childTs);
+});
 function payload(overrides = {}) {
   return { type: 'event_callback', api_app_id: bot.app_id, team_id: identity.team_id,
     event_id: 'Ev12345678', event: { type: 'app_mention', channel: 'C12345678', user: 'U87654321',
