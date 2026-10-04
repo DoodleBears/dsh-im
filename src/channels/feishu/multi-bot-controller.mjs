@@ -115,6 +115,14 @@ function configuredBotFingerprint(config) {
   });
 }
 
+// Account/ownership fences must not include settings that are hot-updated on
+// the same runtime (step push, voice, slash panel or group presentation).
+function externalAccountOwnership(config) {
+  return JSON.stringify({ id: config.id, consumerMode: config.consumerMode ?? 'standalone',
+    appId: config.appId, secretRef: config.secretRef, ownerOpenIds: config.ownerOpenIds,
+    domain: config.domain, botOpenId: config.botOpenId, deletionPending: config.deletionPending === true });
+}
+
 function optionalNonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
@@ -603,7 +611,7 @@ export class MultiBotDshFeishuController {
 
   async consumeInbound(botId, { expectedFingerprint, onEvent, signal } = {}) {
     this.#assertOpen();
-    return this.#withBotTransition(botId, async () => {
+    return this.#serializeConfig(() => this.#withBotTransition(botId, async () => {
       this.#assertOpen();
       signal?.throwIfAborted();
       const config = this.#requireBot(botId);
@@ -629,7 +637,7 @@ export class MultiBotDshFeishuController {
         dispose();
         throw error;
       }
-    });
+    }));
   }
 
   async historyChecked(botId, route, query, { expectedFingerprint, signal } = {}) {
@@ -703,6 +711,18 @@ export class MultiBotDshFeishuController {
         throw error;
       }
       return runtime.sendProactiveText(target, text, options);
+    });
+  }
+
+  async presentSessionSyncApproval(botId, target, interaction, options = {}) {
+    this.#assertOpen();
+    return this.#withBotTransition(botId, async () => {
+      this.#assertOpen();
+      this.#requireBot(botId);
+      const runtime = this.#runtimes.get(botId);
+      if (!isConnected(connectionStatus(runtime))
+        || typeof runtime.presentSessionSyncApproval !== 'function') return false;
+      return runtime.presentSessionSyncApproval(target, interaction, options);
     });
   }
 
@@ -1437,19 +1457,33 @@ export class MultiBotDshFeishuController {
       config,
       appSecret,
       repair: this.#runtimeRepairCapability(config.id),
-      acceptExternal: (event, { signal } = {}) => this.#withBotTransition(config.id, async () => {
-        signal?.throwIfAborted();
-        if (this.#runtimes.get(config.id) !== runtime) throw Object.assign(new Error('consumer-unavailable'), { code: 'consumer-unavailable' });
-        const current = this.#requireBot(config.id);
-        if (current.consumerMode !== 'external-consumer'
-          || configuredBotFingerprint(current) !== configuredBotFingerprint(config))
-          throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
-        const account = await this.#deliveryAccount(current);
-        signal?.throwIfAborted();
-        const evidence = normalizeExternalText(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
+      acceptExternal: async (event, { signal } = {}) => {
+        const assertCurrent = () => {
+          this.#assertOpen('capability-unavailable');
+          signal?.throwIfAborted();
+          if (this.#runtimes.get(config.id) !== runtime)
+            throw Object.assign(new Error('consumer-unavailable'), { code: 'consumer-unavailable' });
+          const current = this.#requireBot(config.id);
+          if (current.consumerMode !== 'external-consumer'
+            || externalAccountOwnership(current) !== externalAccountOwnership(config))
+            throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+          return current;
+        };
+        const evidence = await this.#withBotTransition(config.id, async () => {
+          const current = assertCurrent();
+          const account = await this.#deliveryAccount(current);
+          assertCurrent();
+          return normalizeExternalText(event, { botId: current.id, appId: current.appId,
+            botOpenId: current.botOpenId, fingerprint: account.fingerprint });
+        });
+        // Never hold the account queue across application work: onEvent may
+        // await a checked read/reply, and stop must be able to abort its signal.
+        assertCurrent();
         if (evidence === null) return { accepted: true, ignored: true };
-        return this.#inboundConsumers.accept(config.id, evidence, signal);
-      }),
+        const result = await this.#inboundConsumers.accept(config.id, evidence, signal);
+        assertCurrent();
+        return result;
+      },
     }));
     this.#runtimes.set(config.id, runtime);
     try {

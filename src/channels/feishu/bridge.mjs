@@ -3161,6 +3161,7 @@ export class FeishuHarnessBridge {
       }
       const sentId = nonEmptyString(response?.data?.message_id);
       if (!sentId) throw new Error('Feishu card send returned no message_id');
+      this.#rememberCardRoute(sentId, response?.data?.chat_id ?? chatId, options);
       return sentId;
     }
 
@@ -6043,20 +6044,16 @@ export class FeishuHarnessBridge {
     }
   }
 
-  async #handleInteraction(interaction, {
-    key,
-    actor,
-    chatId,
-    requiresMention,
-    replyToMessageId,
-  }) {
+  #approvalContext({ key, actor, chatId, requiresMention, replyToMessageId, receiveIdType,
+    validate, send = (text) => this.#send(chatId, text, { replyTo: replyToMessageId }) }) {
     let approvalCardMessageId = null;
     let approvalCardData = null;
-    if (await this.#approvals.handleRequested(interaction, {
+    return {
       key,
       actor,
       requiresMention,
-      send: (text) => this.#send(chatId, text, { replyTo: replyToMessageId }),
+      send,
+      validate,
       // Approvals render as interactive cards with approve/reject buttons by
       // default. Set the bridge `interactionCards` option (or
       // DSH_IM_INTERACTION_CARDS=0) to keep the plain-text reply flow.
@@ -6073,27 +6070,47 @@ export class FeishuHarnessBridge {
               approvalCardMessageId = await this.#sendCard(
                 chatId,
                 approvalCard(approvalCardData),
-                { key, replyTo: replyToMessageId },
+                { key, replyTo: replyToMessageId, receiveIdType },
               ).catch(async () => {
                 // Fall back to the plain-text approval if the card cannot be
                 // sent. If the text send also fails, let the error propagate so
                 // the pending approval is not marked as presented and the
                 // existing retry/reconnect logic can run.
-                await this.#send(chatId, pending.text, { replyTo: replyToMessageId });
+                await send(pending.text);
                 return null;
               });
             },
             onResolved: async (resolvedText) => {
               if (!approvalCardMessageId) return;
-              await this.#patchCardMessage(
+              const patched = await this.#patchCardMessage(
                 chatId,
                 approvalCardMessageId,
                 approvalCard({ ...approvalCardData, resolvedText }),
               );
+              if (!patched) throw new Error('Approval card update failed');
             },
           }
         : {}),
-    })) return;
+    };
+
+  }
+
+  async presentSessionSyncApproval(interaction, context, options = {}) {
+    return this.#approvals.handleSessionSyncRequested(interaction, this.#approvalContext(context), {
+      ...options, runtimeSignal: this.#signal, accessPolicy: this.#accessPolicy,
+    });
+  }
+
+  async #handleInteraction(interaction, {
+    key,
+    actor,
+    chatId,
+    requiresMention,
+    replyToMessageId,
+  }) {
+    if (await this.#approvals.handleRequested(interaction, this.#approvalContext({
+      key, actor, chatId, requiresMention, replyToMessageId,
+    }))) return;
 
     // Approval requests return above; the existing question state machine stays unchanged.
     if (interaction?.kind !== 'question') return;

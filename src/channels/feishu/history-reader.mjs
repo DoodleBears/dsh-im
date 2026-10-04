@@ -11,6 +11,23 @@ function check(response) {
   if (response?.code) refuse('history-unavailable');
 }
 
+async function checkedSdkRead(operation, signal) {
+  let response;
+  try { response = await operation(); }
+  catch (error) {
+    signal?.throwIfAborted();
+    if (error?.name === 'AbortError') throw error;
+    if (error?.code === 'ABORT_ERR' || error?.code === 'ERR_CANCELED') refuse('cancelled');
+    // The SDK rejects HTTP 403 before returning the provider's JSON payload.
+    // Never expose its raw Axios error (which can contain credential headers).
+    check(error?.response?.data);
+    refuse('history-unavailable');
+  }
+  signal?.throwIfAborted();
+  check(response);
+  return response;
+}
+
 // Application-defined checked read: destination is derived from an authenticated source.
 // Lark has Chat/time-range listing and Thread listing, not a native around-message API.
 export async function readExternalHistory(client, identity, route, query, signal) {
@@ -22,9 +39,8 @@ export async function readExternalHistory(client, identity, route, query, signal
   if (query.scope === 'nearby' && [query.beforeCount ?? 10, query.afterCount ?? 5]
     .some(value => !Number.isInteger(value) || value < 0 || value > 20)) refuse('bad-request');
   signal?.throwIfAborted();
-  const reference = await client.im.v1.message.get({ path: { message_id: route.messageId }, params: { with_sender_name: true } }, { signal });
+  const reference = await checkedSdkRead(() => client.im.v1.message.get({ path: { message_id: route.messageId }, params: { with_sender_name: true } }, { signal }), signal);
   signal?.throwIfAborted();
-  check(reference);
   const source = (Array.isArray(reference?.data?.items) ? reference.data.items : []).find(item => item?.message_id === route.messageId);
   if (!source || source.deleted || source.chat_id !== route.conversationId
     || source.sender?.sender_type !== 'user' || source.sender?.id_type !== 'open_id'
@@ -36,9 +52,8 @@ export async function readExternalHistory(client, identity, route, query, signal
   const seconds = Math.floor(Number(source.create_time) / 1000);
   if (!Number.isFinite(seconds) || seconds <= 0) refuse('stale-route');
   const readPage = async params => {
-    const response = await client.im.v1.message.list({ params }, { signal });
+    const response = await checkedSdkRead(() => client.im.v1.message.list({ params }, { signal }), signal);
     signal?.throwIfAborted();
-    check(response);
     const items = response?.data?.items;
     if (!Array.isArray(items) || items.length > query.limit || typeof response.data.has_more !== 'boolean')
       refuse('history-unavailable');

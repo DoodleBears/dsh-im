@@ -488,6 +488,7 @@ export class QqHarnessBridge {
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#signal = signal;
     this.#deferred = createDeferredDeliveryCoordinator({ harness, state, signal, logger,
+      finalAnswerOnly: true,
       deliver: (entry, outcome) => this.#deliverDeferredOutcome(entry, outcome),
     });
     this.#fetchImpl = fetchImpl;
@@ -1085,6 +1086,7 @@ export class QqHarnessBridge {
             signal: this.#signal,
             control: { owner: this, key },
             progressMode: 'all',
+            finalAnswerOnly: true,
             onUpdate: (update) => {
               if (update.error) {
                 const name = (nonEmptyString(update.toolName) ?? t('工具'))
@@ -1333,6 +1335,12 @@ export class QqHarnessBridge {
       await this.#bot.sendText(pending.target, t('回答提交失败，请重新发送当前问题的答案。'))
         .catch(() => undefined);
     }
+  }
+
+  async presentSessionSyncApproval(interaction, context, options = {}) {
+    return this.#approvals.handleSessionSyncRequested(interaction, context, {
+      ...options, runtimeSignal: this.#signal, accessPolicy: this.#accessPolicy,
+    });
   }
 
   async #handleInteraction(interaction, {

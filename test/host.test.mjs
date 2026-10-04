@@ -208,9 +208,8 @@ test('#65 activates a real Cordis consumer without crossing the Connection RPC',
   assert.equal(rpcCalls.length, 0);
 });
 
-test('Host waits for apiProxy on legacy Harness and Controllers on modern Harness', async () => {
+test('Host waits for modern Harness Controllers', async () => {
   for (const [modern, expected] of [
-    [false, ['apiProxy']],
     [true, ['sessionController', 'workspaceController']],
   ]) {
     const injections = [];

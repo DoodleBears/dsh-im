@@ -234,6 +234,13 @@ export class SlackApi {
     });
   }
 
+  async conversationInfo({ channelId, signal } = {}) {
+    const value = await this.#request('conversations.info', {
+      tokenKind: 'bot', signal, body: { channel: slackId(channelId, 'channel id') },
+    });
+    return value.channel;
+  }
+
   async fileInfo({ fileId, signal } = {}) {
     const value = await this.#request('files.info', {
       tokenKind: 'bot',

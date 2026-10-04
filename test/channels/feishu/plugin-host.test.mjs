@@ -1320,7 +1320,7 @@ test('DSH credential adapter stores refs off the browser plane and clears them',
   assert.equal(await store.configured(), false);
 });
 
-test('production assembly uses ctx credentials and the active Host apiProxy without a webServer', async () => {
+test('production assembly uses ctx credentials and the modern Host gateway without a webServer', async () => {
   const constructed = {};
   const httpInstance = { request: async () => ({}) };
   const wsAgent = {
@@ -1353,10 +1353,10 @@ test('production assembly uses ctx credentials and the active Host apiProxy with
     async close() { constructed.closed = true; }
   }
   const credentials = {};
-  const apiProxy = {};
+  const typertGateway = { invoke() {}, stream() {} };
   const production = await createProductionController({
     credentials,
-    apiProxy,
+    typertGateway,
     logger: console,
   }, {
     dshHome: '/tmp/dsh-feishu-host-test',
@@ -1390,7 +1390,7 @@ test('production assembly uses ctx credentials and the active Host apiProxy with
   assert.equal(constructed.verifyOptions.httpInstance, httpInstance);
   assert.equal(constructed.wsAgentCreated, 1);
   assert.equal(constructed.wsProxyUrl, 'http://proxy.test:8080');
-  assert.equal(constructed.harness.apiProxy, apiProxy);
+  assert.equal(typeof constructed.harness.apiProxy.sessions.prompt, 'function');
   assert.equal(Object.hasOwn(constructed.harness, 'baseUrl'), false);
   assert.equal(constructed.harness.autostart, false);
   assertPathMatches(constructed.configPath, /integrations\/dsh-feishu\/config\.json$/);
@@ -1491,7 +1491,7 @@ test('a corrupt legacy state file cannot prevent a healthy v2 bot from starting'
       async set(ref, value) { secrets.set(ref, value); },
       async unset(ref) { secrets.delete(ref); },
     },
-    apiProxy: {},
+    typertGateway: { invoke() {}, stream() {} },
     logger: console,
   }, { dataDir, workspace: dataDir }, {
     lark: { registerApp: async () => ({}) },

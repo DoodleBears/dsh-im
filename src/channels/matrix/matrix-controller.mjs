@@ -224,6 +224,15 @@ export class MatrixController {
     return { sent: true };
   }
 
+  async presentSessionSyncApproval(botId, target, interaction, options = {}) {
+    this.#requireId(botId);
+    const runtime = this.#runtimes.get(botId);
+    if (!runtime?.status?.ready || typeof runtime.presentSessionSyncApproval !== 'function') {
+      throw new Error('Matrix bot is not connected for proactive delivery');
+    }
+    return runtime.presentSessionSyncApproval(target, interaction, options);
+  }
+
   async deleteBot(botId) {
     this.#requireId(botId);
     const removed = await this.#withBotTransition(botId, async () => {

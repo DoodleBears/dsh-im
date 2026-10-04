@@ -1668,6 +1668,12 @@ export class WecomHarnessBridge {
     }
   }
 
+  async presentSessionSyncApproval(interaction, context, options = {}) {
+    return this.#approvals.handleSessionSyncRequested(interaction, context, {
+      ...options, runtimeSignal: this.#signal, accessPolicy: this.#accessPolicy,
+    });
+  }
+
   async #handleInteraction(interaction, {
     key,
     actor,

@@ -42,10 +42,10 @@ test('production assembly keeps secrets in credentials and creates per-bot runti
     async close() { seen.supervisorClosed = true; },
   };
   const credentials = {};
-  const apiProxy = {};
+  const typertGateway = { invoke() {}, stream() {} };
   const production = await createProductionController({
     credentials,
-    apiProxy,
+    typertGateway,
     logger: () => console,
   }, { dataDir: directory }, {
     ConfigStore,
@@ -58,7 +58,7 @@ test('production assembly keeps secrets in credentials and creates per-bot runti
   });
 
   assert.equal(seen.controllerOptions.credentials, credentials);
-  assert.equal(seen.harnessOptions.apiProxy, apiProxy);
+  assert.equal(typeof seen.harnessOptions.apiProxy.sessions.prompt, 'function');
   assert.equal(Object.hasOwn(seen.harnessOptions, 'baseUrl'), false);
   assert.equal(seen.harnessOptions.autostart, false);
   assert.equal(Object.hasOwn(seen.harnessOptions, 'agentPreset'), false);
@@ -85,7 +85,7 @@ test('production assembly keeps secrets in credentials and creates per-bot runti
 
   const productionWithPreset = await createProductionController({
     credentials,
-    apiProxy,
+    typertGateway,
     logger: () => console,
   }, { dataDir: directory, agentPreset: 'router-standard' }, {
     ConfigStore,

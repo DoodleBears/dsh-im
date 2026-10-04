@@ -688,6 +688,17 @@ export class FeishuRuntime {
     });
   }
 
+  async presentSessionSyncApproval(target, interaction, options = {}) {
+    if (!this.#status.ready || !this.#bridge) return false;
+    const actor = typeof target?.route?.openId === 'string' ? target.route.openId.trim() : '';
+    if (!actor) return false;
+    return this.#bridge.presentSessionSyncApproval(interaction, {
+      key: options.key, actor, validate: options.validate,
+      chatId: actor, receiveIdType: 'open_id',
+      send: (text) => this.sendProactiveText(target, text),
+    }, options);
+  }
+
   async sendProactiveText(target, text, { signal, format = 'plain', receipt = false } = {}) {
     if (!this.#status.ready || !this.#client) {
       const error = new Error('飞书机器人尚未连接');

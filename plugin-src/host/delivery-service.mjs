@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { normalizeDeliveryTarget } from './delivery-adapter.mjs';
+import { COMPETITIVE_APPROVAL_CHANNELS } from '../../src/channels/shared/harness-approval.mjs';
+import { t } from '../../src/channels/shared/i18n.mjs';
 
 const BOT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const TARGET_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,128}$/;
@@ -284,6 +286,59 @@ export class DeliveryService {
       }
     }
     return targets;
+  }
+
+  /** Offer one existing bound private chat the same approval the Host is awaiting. */
+  async presentSessionSyncApproval(sessionId, interaction, { signal, completion } = {}) {
+    const targets = (await this.listSessionSyncTargets(sessionId))
+      .filter((target) => COMPETITIVE_APPROVAL_CHANNELS.includes(target.channel));
+    if (signal?.aborted || targets.length === 0) return false;
+    let outcome = null;
+    let notified = false;
+    const notify = async (finished = false) => {
+      if (!finished && (signal?.aborted || outcome !== null)) return;
+      const text = finished
+        ? t('未找到可处理端，本次操作未获批准。')
+        : t('有操作在等待审批：{tool}，请到 Web 处理。', { tool: interaction.payload.toolName });
+      const results = await Promise.allSettled(targets.map((target) => this.sendSessionSyncText(
+        target.botId, target.targetId, sessionId, text, finished ? {} : { signal },
+      )));
+      notified ||= results.some((result) => result.status === 'fulfilled');
+    };
+    Promise.resolve(completion).then(async (value) => {
+      outcome = value;
+      if (value === 'unavailable' && notified) await notify(true);
+    }).catch((error) => console.warn('[dsh-im] approval status notification failed:', error?.code ?? error?.name));
+    const candidates = new Map();
+    let unresolvedTarget = false;
+    for (const target of targets) {
+      try {
+        const adapter = await this.#adapterFor(target.botId);
+        if (typeof adapter.describeSessionSyncApprovalTarget !== 'function') {
+          unresolvedTarget = true;
+          continue;
+        }
+        const info = await adapter.describeSessionSyncApprovalTarget(target.botId, target.targetId, sessionId);
+        candidates.set(JSON.stringify([target.channel, target.botId, info.conversationKey]), { adapter, target });
+      } catch (error) {
+        unresolvedTarget = true;
+        console.warn('[dsh-im] approval target unavailable:', error?.code ?? error?.name);
+      }
+    }
+    if (signal?.aborted) return false;
+    if (!unresolvedTarget && candidates.size === 1) {
+      const { adapter, target } = candidates.values().next().value;
+      try {
+        if (await adapter.presentSessionSyncApproval(target.botId, target.targetId, sessionId, interaction, {
+          signal, completion,
+        })) return true;
+      } catch (error) {
+        if (!signal?.aborted) console.warn('[dsh-im] synced approval unavailable:', error?.code ?? error?.name);
+      }
+    }
+    if (outcome === 'unavailable') await notify(true);
+    else await notify();
+    return false;
   }
 
   async sendSessionSyncText(botId, targetId, sessionId, text, { signal } = {}) {

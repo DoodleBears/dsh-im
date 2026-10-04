@@ -637,6 +637,7 @@ test('HarnessClient asks do not control file-return tool availability', async ()
     },
   };
   client.rpc = async (method, _payload, _timeoutMs, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.history' && !prompted) return { events: [] };
     if (method === 'session.prompt') {
       prompted = true;
@@ -699,6 +700,7 @@ test('HarnessClient stages inbound files, appends a neutral manifest, and cleans
   });
   client.ensureRunning = async () => undefined;
   client.rpc = async (method, payload, _timeoutMs, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.history' && !prompted) return { events: [] };
     if (method === 'session.list') {
       return { items: [{ sessionId: 'session-inbound-files', cwd: '/tmp/exact-session-cwd' }] };
@@ -776,6 +778,7 @@ test('HarnessClient cleans staged inbound files when session.prompt rejects them
   });
   client.ensureRunning = async () => undefined;
   client.rpc = async (method) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.history' && !prompted) return { events: [] };
     if (method === 'session.list') {
       return { items: [{ sessionId: 'session-rejected-file', cwd: '/tmp/rejected-cwd' }] };
@@ -808,6 +811,7 @@ test('HarnessClient retains staged files when an accepted turn outcome is unknow
   });
   client.ensureRunning = async () => undefined;
   client.rpc = async (method) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.history' && !prompted) return { events: [] };
     if (method === 'session.list') {
       return { items: [{ sessionId: 'session-uncertain-file', cwd: '/tmp/uncertain-cwd' }] };
@@ -853,6 +857,7 @@ for (const failHandoff of [false, true]) {
       },
     };
     client.rpc = async (method, _payload, _timeoutMs, options) => {
+      if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
       if (method === 'session.history' && !prompted) return { events: [] };
       if (method === 'session.prompt') {
         prompted = true;
@@ -917,6 +922,7 @@ test('HarnessClient completes tool-only turns and retains earlier visible text a
     const client = new HarnessClient({ baseUrl: 'http://127.0.0.1:3080', workspace: '/tmp/workspace' });
     client.ensureRunning = async () => undefined;
     client.rpc = async (method, _payload, _timeoutMs, options) => {
+      if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
       if (method === 'session.prompt') {
         promptRpcId = options.rpcId;
         return {};
@@ -1234,6 +1240,7 @@ test('new turn events renew the stall window beyond the original fixed deadline'
   let sessionListPolls = 0;
   const events = [];
   client.rpc = async (method, _payload, _timeoutMs, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.history') {
       if (!prompted) return { events: [] };
       historyPolls += 1;
@@ -1291,6 +1298,7 @@ test('latest-mode ask() filters assistant-message updates out of delivered progr
   let sessionListPolls = 0;
   const events = [];
   client.rpc = async (method, _payload, _timeoutMs, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.history') {
       if (!prompted) return { events: [] };
       historyPolls += 1;
@@ -1354,6 +1362,7 @@ test('default ask() consumers never receive reasoning updates from canonical mes
   let sessionListPolls = 0;
   const events = [];
   client.rpc = async (method, _payload, _timeoutMs, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.history') {
       if (!prompted) return { events: [] };
       historyPolls += 1;
@@ -1423,6 +1432,7 @@ test('reasoning-subscribed all-mode ask() receives reasoning updates', async () 
   let sessionListPolls = 0;
   const events = [];
   client.rpc = async (method, _payload, _timeoutMs, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.history') {
       if (!prompted) return { events: [] };
       historyPolls += 1;
@@ -1493,6 +1503,7 @@ test('a production-owned turn that starts and then stalls still times out', asyn
   let sessionListPolls = 0;
   let events = [];
   client.rpc = async (method, _payload, _timeoutMs, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.history') {
       if (!prompted) return { events: [] };
       historyPolls += 1;
@@ -1540,6 +1551,7 @@ test('a silent turn renews only after Harness confirms the Session is running', 
   let sessionListPolls = 0;
   const events = [];
   client.rpc = async (method, _payload, _timeoutMs, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.history') {
       if (!prompted) return { events: [] };
       historyPolls += 1;
@@ -1589,6 +1601,7 @@ test('a failed liveness probe does not renew a stalled turn', async () => {
   let sessionListPolls = 0;
   let events = [];
   client.rpc = async (method, _payload, _timeoutMs, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.history') {
       if (!prompted) return { events: [] };
       historyPolls += 1;
@@ -1641,6 +1654,7 @@ test('ask() publishes the guidance a channel captured and never reads the prompt
   let promptRpcId;
   let seq = 0;
   client.rpc = async (method, payload, _timeoutMs, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.history') {
       if (!prompted) return { events: [] };
       polls += 1;
@@ -1826,6 +1840,7 @@ test('HarnessClient does not advertise a file consumer without an artifact callb
   const tool = createOutboundArtifactTool({ registry: outboundArtifactRegistry });
   let prompted = false;
   client.rpc = async (method, _payload, _timeoutMs, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.prompt') {
       prompted = true;
       session.events = [

@@ -248,6 +248,20 @@ export class WhatsappController {
     });
   }
 
+  async presentSessionSyncApproval(botId, target, interaction, options = {}) {
+    const config = this.#configStore.get(botId);
+    if (!config) throw new Error('Unknown WhatsApp bot');
+    return this.#withBotTransition(botId, async () => {
+      const runtime = this.#runtimes.get(botId);
+      if (!runtime?.status?.ready || typeof runtime.presentSessionSyncApproval !== 'function') {
+        const error = new Error(t('WhatsApp机器人尚未连接'));
+        error.code = 'bot-not-connected';
+        throw error;
+      }
+      return runtime.presentSessionSyncApproval(target, interaction, options);
+    });
+  }
+
   async setAccessPolicy(botId, value) {
     if (this.#closed) throw new Error('WhatsApp controller is closed');
     const accessPolicy = normalizeWhatsappAccessPolicy(value);

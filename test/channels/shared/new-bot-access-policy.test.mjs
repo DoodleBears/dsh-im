@@ -53,7 +53,7 @@ for (const channel of ['feishu', 'qq']) {
     }
     const { createProductionController } = await import(`../../../plugin-src/host/channels/${channel}/production.mjs`);
     const start = () => createProductionController({
-      credentials: {}, apiProxy: {},
+      credentials: {}, typertGateway: { invoke() {}, stream() {} },
       logger: () => ({ error() {}, warn() {}, info() {}, debug() {} }),
     }, { dataDir, workspace: dataDir }, {
       ConfigStore, StateStore, HarnessClient: Harness, Controller, Runtime, FeishuRuntime: Runtime,

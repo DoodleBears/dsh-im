@@ -44,7 +44,7 @@ export async function createTokenProductionController(ctx, config, internals, de
     channel, ConfigStore, StateStore, HarnessClient, Controller, Runtime, runtimeOptions,
   } = definitions;
   if (!ctx?.credentials) throw new TypeError(`dsh-im ${channel} requires ctx.credentials`);
-  const connection = harnessConnection(ctx, config);
+  const connection = harnessConnection(ctx, config, { competitiveApprovals: ['telegram', 'discord'].includes(channel) });
 
   const ResolvedConfigStore = internals.ConfigStore ?? ConfigStore;
   const ResolvedStateStore = internals.StateStore ?? StateStore;
