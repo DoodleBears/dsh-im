@@ -377,3 +377,7 @@ File metadata is opt-in through `consumeInbound(..., {sourceFiles: true})`; lega
 ## 完整 fork 的上下文读取生命周期
 
 有界群／话题读取必须持有当前账号的独占 Consumer。释放 Consumer、Host 关闭或 Provider Registration 被替换后，不返回正在读取的结果。每次请求最多检查 20 条平台记录；无效或不支持的文字计入 omitted，跨群／话题记录拒绝。保留已有附件、发送回执、自身回显和独立回复身份契约。此 fork 的可用性不依赖上游 PR 合并。
+
+### 附近上下文的条数保底
+
+`historyChecked` 的 nearby 先分页覆盖可信来源前后各五分钟窗口，再为稀疏侧补齐 `beforeCount`（默认 10）／`afterCount`（默认 5），每侧整数 0–20。只计入受支持的 Human 文字，锚点自身不计数。条数不截断密集窗口；调用方在自身预算内跟随所有 `nextCursor`，每次仍最多读取 `limit` 条。补充阶段按最近更早／更晚的 Chat 记录读取，按原始时间过滤秒级边界重叠。不等待未来消息，翻页不能更换锚点或条数配置。群与话题历史语义保持不变；这是应用定义的受校验契约，并非原生 around-message API。

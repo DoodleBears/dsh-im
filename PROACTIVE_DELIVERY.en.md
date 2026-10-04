@@ -390,3 +390,7 @@ const page = await ctx.dshIm.historyChecked(botId, event.reply,
   { expectedFingerprint: account.account.fingerprint, signal: lifecycleSignal });
 // Persist/reconcile only after application authorization. Do not turn reads into intake.
 ```
+
+### Nearby context count minima
+
+`historyChecked` nearby traverses the five-minute window on each side of the checked source, then supplements sparse sides to `beforeCount` (default 10) and `afterCount` (default 5), each integer 0–20. Counts exclude the anchor and count only supported Human text. Dense windows are never truncated by those minima: callers must follow every `nextCursor` under their own budget. Each request still fetches at most `limit` records. Supplement phases use nearest older / newer Chat listing; second-resolution boundary overlaps are filtered by actual timestamps. No future message is awaited. Cursor count settings and the original anchor cannot change between pages. Existing group and Thread listing is unchanged; this is an application-defined checked contract, not a native around-message API.
