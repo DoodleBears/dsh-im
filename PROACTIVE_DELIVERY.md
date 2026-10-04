@@ -382,3 +382,20 @@ File metadata is opt-in through `consumeInbound(..., {sourceFiles: true})`; lega
 ### 附近上下文的条数保底
 
 `historyChecked` 的 nearby 先分页覆盖可信来源前后各五分钟窗口，再为稀疏侧补齐 `beforeCount`（默认 10）／`afterCount`（默认 5），每侧整数 0–20。只计入受支持的 Human 文字，锚点自身不计数。条数不截断密集窗口；调用方在自身预算内跟随所有 `nextCursor`，每次仍最多读取 `limit` 条。补充阶段按最近更早／更晚的 Chat 记录读取，按原始时间过滤秒级边界重叠。不等待未来消息，翻页不能更换锚点或条数配置。群与话题历史语义保持不变；这是应用定义的受校验契约，并非原生 around-message API。
+
+### Slack 受校验的上下文读取（BotHarness #819）
+
+独占 Slack Consumer 通过同一 delivery service 提供 `history-text-checked`、
+`thread-history-text-checked`。每页复查当前 Bot 账号 fingerprint、Consumer lease、
+已加入的公开频道，以及精确 Human 来源的作者和原生话题。仅使用该 Bot 的令牌，
+不使用 Human 凭据、不允许模型指定任意频道，也不把历史读取作为 Inbox 收件。
+
+`historyChecked` 查询支持 `group | thread | nearby`、1–20 条原生分页及不透明 cursor。
+附近查询完整翻页读取前后各五分钟的可见 Human 文本，稀疏时补齐最近的前 10／后 5 条；
+`beforeCount`、`afterCount` 可各设为 0–20。频道历史倒序、话题页内回复正序，而时间限定的原生游标可向旧消息块翻页，分别适配。root 可能额外附加且重复，适配器为它预留空间并只保留一次。
+频道／附近查询遵循 Slack 频道历史的可见范围，不宣称含全部子话题内容；读取子话题使用 thread。
+
+游标由运行实例签名，绑定账号／来源／查询，并在停止后失效；仅含有界原生时间戳和计数，
+不含正文或凭据。补齐后侧消息时，Slack 倒序接口可能需要多次空结果续页，直到找到最近消息；
+最多暂存 20 个候选 ID，返回前重新读取。每次最多返回 20 条事件并明确省略、覆盖范围和续页。
+权限不足、来源改变、取消或运行实例失效时拒绝返回结果；调用方仍须遵守 Slack 限流。

@@ -213,3 +213,38 @@ test('verified reply to a child stays in the root thread and channel removal pre
     assert.equal(f.sends.length, 1);
   } finally { await f.runtime.stop(); }
 });
+
+test('history pages requalify current own-Bot membership and exact native source before reading', async () => {
+  let member = true;
+  let reads = 0;
+  const f = await fixture(async () => ({ accepted: true }), {
+    conversationInfo: async () => ({ id: 'C12345678', is_member: member }),
+    historyPage: async () => { reads++; return { messages: [{ type: 'message', ts: '1791127700.000001', user: 'U87654321', text: 'ordinary context' }] }; },
+  });
+  try {
+    const route = normalizeSlackExternalText(payload(), { botId, account }).reply;
+    assert.equal((await f.runtime.historyChecked(route, { scope: 'group', limit: 1 })).events[0].text, 'ordinary context');
+    assert.equal(reads, 1);
+    member = false;
+    await assert.rejects(f.runtime.historyChecked(route, { scope: 'group', limit: 1 }), { code: 'history-permission-denied' });
+    member = true; f.source.user = 'U11111111';
+    await assert.rejects(f.runtime.historyChecked(route, { scope: 'group', limit: 1 }), { code: 'stale-route' });
+    f.source.user = route.actorId; f.source.deleted = true;
+    await assert.rejects(f.runtime.historyChecked(route, { scope: 'group', limit: 1 }), { code: 'source-not-found' });
+    assert.equal(reads, 1); assert.equal(f.sessionWrites(), 0); assert.equal(f.sends.length, 0);
+  } finally { await f.runtime.stop(); }
+});
+
+test('stopping the Slack runtime discards a result returned after its read began', async () => {
+  let release;
+  let entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const f = await fixture(async () => ({ accepted: true }), {
+    historyPage: async () => { entered(); await gate; return { messages: [] }; },
+  });
+  const route = normalizeSlackExternalText(payload(), { botId, account }).reply;
+  const read = f.runtime.historyChecked(route, { scope: 'group', limit: 1 });
+  const rejected = assert.rejects(read, { code: 'capability-unavailable' });
+  await started; await f.runtime.stop(); release(); await rejected;
+});
