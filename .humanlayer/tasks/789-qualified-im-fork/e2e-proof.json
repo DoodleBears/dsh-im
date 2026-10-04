@@ -1,0 +1,66 @@
+{
+  "candidate": "e0ba3deca5cb1f3d1ac7029df1fc0bbba8a4c0ec",
+  "applicationMain": "22fc2acbcf8312dbe58bb62778b4d28e9eb92a58",
+  "baselineCandidate": "22a7df92928e4758190aca310e9a39dd01f4219c",
+  "context": {
+    "marker": "BH789 CONTEXT",
+    "admissions": 0,
+    "historyObservation": true
+  },
+  "trigger": {
+    "marker": "BH789 READ",
+    "admissions": 1,
+    "contextReadCount": 1,
+    "returnedHumanMessages": 12,
+    "omitted": 7,
+    "incomplete": true
+  },
+  "reply": {
+    "text": "BH789-OK maple-789",
+    "state": "provider-accepted",
+    "count": 1,
+    "nativeThreadMatch": true,
+    "nativeRootMatch": true,
+    "parentIsTrigger": true,
+    "senderType": "app",
+    "localDmCopies": 0
+  },
+  "bounded": {
+    "first": {
+      "events": 0,
+      "omitted": 1,
+      "hasMore": true,
+      "hasCursor": true
+    },
+    "second": {
+      "events": 1,
+      "omitted": 0,
+      "hasMore": true
+    },
+    "refusal": "stale-route",
+    "scope": "thread",
+    "coverage": "provider-visible-human-text"
+  },
+  "applicationHead": "90b1c9e19319f0e7dcccacae9f7e359419c59339",
+  "installed": {
+    "source": "e0ba3deca5cb1f3d1ac7029df1fc0bbba8a4c0ec",
+    "dsh": "0.2.0-rc.1",
+    "runtimeFiles": 388,
+    "runtimeSha256": "0a68ac210a1cb7e1553b49f644ceac53b984c04153ffc669191ac24547f45300",
+    "upstreamReleased": false
+  },
+  "automated": {
+    "fork": {
+      "passed": 3504,
+      "skipped": 0
+    },
+    "application": {
+      "passed": 2262,
+      "skipped": 3
+    },
+    "lint": true,
+    "format": true,
+    "typecheck": true,
+    "build": true
+  }
+}
