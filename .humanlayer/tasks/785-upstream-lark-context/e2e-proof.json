@@ -1,0 +1,44 @@
+{
+  "candidate": "421ce054bcb1f1f8596318fc6a0ac55246d99c9d",
+  "applicationMain": "22fc2acbcf8312dbe58bb62778b4d28e9eb92a58",
+  "baselineCandidate": "9a1cd28954f7984b04395e65ecded2854316bd43",
+  "context": {
+    "marker": "BH785 CONTEXT",
+    "admissions": 0,
+    "historyObservation": true
+  },
+  "trigger": {
+    "marker": "BH785 READ",
+    "admissions": 1,
+    "contextReadCount": 1,
+    "returnedHumanMessages": 10,
+    "omitted": 6,
+    "incomplete": true
+  },
+  "reply": {
+    "text": "BH785-OK cedar-785",
+    "state": "provider-accepted",
+    "count": 1,
+    "nativeThreadMatch": true,
+    "nativeRootMatch": true,
+    "parentIsTrigger": true,
+    "senderType": "app",
+    "localDmCopies": 0
+  },
+  "bounded": {
+    "first": {
+      "events": 1,
+      "omitted": 0,
+      "hasMore": true,
+      "hasCursor": true
+    },
+    "second": {
+      "events": 0,
+      "omitted": 1,
+      "hasMore": true
+    },
+    "refusal": "stale-route",
+    "scope": "thread",
+    "coverage": "provider-visible-human-text"
+  }
+}
