@@ -108,7 +108,9 @@ test('Host composes IM channels and the AI Office connector inside one plugin co
 
 test('Host provides #65 and installs #84 with the same delivery service', async () => {
   const sent = [];
+  const historyReads = [];
   const deliveryService = {
+    async historyChecked(...args) { historyReads.push(args); return {events:[],hasMore:false}; },
     async send(...args) { sent.push(args); return { sent: true }; },
     async listTargets(botId) {
       return { botId, channel: 'telegram', targets: [{ targetId: 'target' }] };
@@ -149,6 +151,8 @@ test('Host provides #65 and installs #84 with the same delivery service', async 
   assert.deepEqual(await provided[0][1].listBots(), [{ botId: 'bot_one', channel: 'telegram' }]);
   assert.deepEqual(await provided[0][1].send('bot_one', 'target', 'hello'), { sent: true });
   assert.deepEqual(sent, [['bot_one', 'target', 'hello', undefined]]);
+  assert.deepEqual(await provided[0][1].historyChecked('bot_one', {messageId:'anchor'}, {scope:'thread',limit:1}, {}), {events:[],hasMore:false});
+  assert.deepEqual(historyReads, [['bot_one',{messageId:'anchor'},{scope:'thread',limit:1},{}]]);
 });
 
 test('#65 activates a real Cordis consumer without crossing the Connection RPC', async (t) => {

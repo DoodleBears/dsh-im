@@ -392,8 +392,25 @@ dispose();
 
 Check the account's `exclusive-text-consumer` and `reply-text-checked` capabilities before enabling reception. Only one consumer may own an account; conflicts fail with `consumer-conflict`. The Host-only callback is not exposed through browser RPC or HTTP.
 
-A version-1 event contains `channel`, `botId`, authenticated `fingerprint`, `eventId`, `messageId`, `actor: {kind: 'user', id}`, `conversation: {kind: 'group' | 'dm', id}`, `mentions: [{id, key}]`, `mentionedAccount`, ISO `at`, original `text`, and `reply: {messageId, conversationId, actorId, threadId?, rootId?, parentId?}`. These are platform-native IDs; sender names, avatars, attachments and history are outside this slice. Applications decide which conversations/messages to accept and when to wake an agent.
+A version-1 event contains `channel`, `botId`, authenticated `fingerprint`, `eventId`, `messageId`, `actor: {kind: 'user', id}`, `conversation: {kind: 'group' | 'dm', id}`, `mentions: [{id, key}]`, `mentionedAccount`, ISO `at`, original `text`, and `reply: {messageId, conversationId, actorId, threadId?, rootId?, parentId?}`. These are platform-native IDs; optional server names are display-only; avatars and attachments are outside this slice. Bounded history is described below. Applications decide which conversations/messages to accept and when to wake an agent.
 
 The mode is saved per account as `consumerMode: 'external-consumer'`. In that mode the native Session bridge, card callbacks and slash commands do not run. Releasing the consumer, losing its Registration, or restarting the Host does not restore standalone processing; intake fails closed until a consumer registers again. Returning to standalone requires an explicit configuration change and reconnect. A consumer must cooperate with cancellation while committing; releasing a consumer cannot undo an application commit already completed.
 
 Checked replies re-read the original message and compare sender, conversation, thread, root and parent IDs before sending. A topic reply uses Lark's original-topic reply operation; it never falls back to the group mainline. Missing/changed sources fail with `stale-route`. An SDK failure after attempting the reply returns `reply-result-unknown`: inspect the external conversation before retrying. Provider redelivery has no resume cursor and may have gaps; this contract does not promise exactly-once transport, message-read receipts, or cross-account replies. Keep deduplication and durable delivery intents in the application.
+
+## Bounded Feishu/Lark context reads (same Host)
+
+An active exclusive consumer may call the optional `dshIm.historyChecked(botId, source.reply, query, {expectedFingerprint, signal})`. Check `history-text-checked`, and also `thread-history-text-checked` for a thread. Query is `{scope: 'group' | 'nearby' | 'thread', limit: 1..20, cursor?: string}`. There is no browser/HTTP history endpoint. The verified account and live consumer lease are required; standalone accounts cannot read through this contract.
+
+Each call re-fetches the source and compares its author, chat, thread, root and parent IDs before listing. `group` lists the source chat; `nearby` uses a bounded five-minute-before/after chat time window, not a native around-message API; `thread` lists the native thread. The response is `{version:1, scope, events, omitted, hasMore, nextCursor?, window?, coverage:'provider-visible-human-text'}`. At most `limit` provider records are inspected; unsupported, deleted, application-sent or invalid text is counted as omitted. Pagination is explicit, one page per call. The caller binds its continuation to the same source/query. History-derived events use `history:<messageId>` as event ID; deduplicate with the native message ID alongside received events.
+
+Only visible Human text is returned, with the same normalized event shape. Optional platform `sender_name` and mention `name` are display labels, never identity or authorization; missing names remain absent. No directory lookup or Human token fallback is performed. A read does not admit ordinary messages to an Inbox, wake an agent, reply, mark a message read, or synchronize withdrawal. The companion application owns those decisions and canonical persistence.
+
+Missing Bot permissions return `history-permission-denied`; missing/changed source IDs return `stale-route`; an anchor without a thread returns `thread-unavailable`; provider failures or malformed pagination return `history-unavailable`. Unrelated chat/thread records fail with `untrusted-source`. Caller cancellation, consumer release, Host close and Provider replacement discard in-flight results. The consumer must retain its lifetime until the read completes. This capability is neither a complete transcript guarantee nor provider-wide search.
+
+```js
+const page = await ctx.dshIm.historyChecked(botId, event.reply,
+  { scope: 'thread', limit: 10 },
+  { expectedFingerprint: account.account.fingerprint, signal: lifecycleSignal });
+// Persist/reconcile only after application authorization. Do not turn reads into intake.
+```

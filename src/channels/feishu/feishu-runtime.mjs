@@ -1,4 +1,5 @@
 import { createConnectionDiagnostics, atConnectionStage } from '../shared/connection-error.mjs';
+import { readExternalHistory } from './history-reader.mjs';
 import { randomUUID } from 'node:crypto';
 import { FeishuHarnessBridge } from './bridge.mjs';
 import { cardActionProbeCard } from './feishu-cards.mjs';
@@ -744,6 +745,17 @@ export class FeishuRuntime {
     if (typeof messageId !== 'string' || !messageId || messageId.length > 512 || conversationId !== receiveId)
       throw Object.assign(new Error('send-result-unknown'), { code: 'send-result-unknown' });
     return { sent: true, receipt: { version: 1, messageId, conversationId } };
+  }
+
+  async historyChecked(identity, route, query, { signal } = {}) {
+    const client = this.#client;
+    if (!client || this.#consumerMode !== 'external-consumer')
+      throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    const result = await readExternalHistory(client, identity, route, query, signal);
+    signal?.throwIfAborted();
+    if (this.#client !== client)
+      throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    return result;
   }
 
   async replyChecked(route, text, { signal } = {}) {
