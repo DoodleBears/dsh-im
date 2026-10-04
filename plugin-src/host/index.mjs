@@ -106,9 +106,8 @@ export function createImHostPlugin(internals = {}) {
         await activateChannels(readyCtx, config, deliveryService);
       };
       if (typeof ctx?.inject === 'function') {
-        const modern = typeof ctx?.typertGateway?.stream === 'function';
         await ctx.inject(
-          modern ? ['sessionController', 'workspaceController'] : ['apiProxy'],
+          ['sessionController', 'workspaceController'],
           activate,
         );
         ctx.inject(['webServer'], (httpCtx) => {

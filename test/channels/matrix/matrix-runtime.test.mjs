@@ -102,6 +102,11 @@ function createFakeApi({ initial = {}, accountData = {}, memberCounts = {}, over
     getJoinedMemberCount: async (roomId) => memberCounts[roomId] ?? null,
     uploadMedia: async () => 'mxc://media.example.org/up1',
     downloadContent: async () => null,
+    push: (batch) => {
+      const pending = pendings.shift();
+      if (pending) pending.resolve(batch);
+      else queue.push({ batch });
+    },
     drainPendings: () => {
       for (const pending of pendings.splice(0)) pending.reject(new Error('test teardown'));
     },
@@ -961,4 +966,30 @@ test('a mentioned group reply is conditioned on unaddressed same-day room chatte
   } finally {
     await context.stop();
   }
+});
+
+test('Matrix synced approval uses the existing direct:dm queue and a real sender identity', async () => {
+  const context = await createContext({ apiOptions: {
+    initial: { next_batch: 'b0' },
+    accountData: { 'm.direct': { '@alice:example.org': ['!dm:example.org'] } },
+  } });
+  let finish;
+  let result;
+  const completion = new Promise((resolve) => { finish = resolve; });
+  const interaction = {
+    kind: 'approval', rpcId: 'rpc-sync', interactionId: 'sync', sessionId: 's',
+    payload: { type: 'approval/requested', sessionId: 's', approvalId: 'sync', toolName: 'bash', callId: 'call' },
+    toolCall: { name: 'bash', callId: 'call', arguments: '{"command":"echo safe"}' },
+    respond: async (value) => { result = value; finish(value.value.outcome); },
+    withdraw: async () => { finish('unavailable'); },
+  };
+  try {
+    await context.runtime.start();
+    equal(await context.runtime.presentSessionSyncApproval({ kind: 'dm', route: { userId: '@alice:example.org' } }, interaction, {
+      key: 'direct:dm:@alice:example.org', completion,
+    }), true);
+    context.fake.push({ next_batch: 'b1', rooms: { join: { '!dm:example.org': { timeline: { events: [messageEvent({ body: 'yes' })] } } } } });
+    await eventually(() => result);
+    equal(result.value.outcome, 'allowed-once');
+  } finally { await context.stop(); }
 });

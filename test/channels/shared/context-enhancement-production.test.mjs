@@ -45,7 +45,7 @@ for (const channel of ['wecom', 'weixin', 'feishu', 'dingtalk', 'qq', 'slack', '
     }
     const production = await createProductionController({
       credentials: {},
-      apiProxy: {},
+      typertGateway: { invoke() {}, stream() {} },
       logger: () => ({ error() {}, warn() {}, info() {}, debug() {} }),
     }, { dataDir, workspace: dataDir }, {
       ConfigStore,

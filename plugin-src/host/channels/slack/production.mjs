@@ -33,7 +33,7 @@ import {
 
 export async function createProductionController(ctx, config = {}, internals = {}) {
   if (!ctx?.credentials) throw new TypeError('dsh-im slack requires ctx.credentials');
-  const connection = harnessConnection(ctx, config);
+  const connection = harnessConnection(ctx, config, { competitiveApprovals: true });
 
   const ResolvedConfigStore = internals.ConfigStore ?? SlackConfigStore;
   const ResolvedStateStore = internals.StateStore ?? SlackStateStore;

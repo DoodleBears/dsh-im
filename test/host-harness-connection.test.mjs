@@ -7,20 +7,25 @@ import { toPosixPath } from './support/filesystem.mjs';
 
 const IM_CHANNELS = [
   'weixin', 'feishu', 'dingtalk', 'wecom', 'qq',
-  'slack', 'telegram', 'discord', 'whatsapp', 'imessage',
+  'slack', 'telegram', 'discord', 'whatsapp', 'matrix', 'wecom-app', 'imessage', 'email',
 ];
 
-test('Host connections share the current Cordis root without depending on a webServer', () => {
-  const root = {};
-  const apiProxy = {};
-  const first = harnessConnection({ root, apiProxy });
-  const second = harnessConnection({ root, apiProxy });
-  assert.deepEqual(first, { apiProxy, interactionScope: root });
-  assert.equal(first.interactionScope, second.interactionScope);
-  assert.notEqual(first.interactionScope, harnessConnection({ root: {}, apiProxy }).interactionScope);
+function modernContext(extra = {}) {
+  return Object.defineProperties({ typertGateway: { invoke() {}, stream() {} }, on() {} }, Object.getOwnPropertyDescriptors(extra));
+}
 
-  const fixtureContext = { apiProxy };
+test('Host connections use the modern gateway and share the current Cordis root', () => {
+  const root = {};
+  const ctx = modernContext({ root, get apiProxy() { throw new Error('legacy service must not be read'); } });
+  const first = harnessConnection(ctx);
+  const second = harnessConnection(modernContext({ root }));
+  assert.equal(first.apiProxy, second.apiProxy);
+  assert.equal(first.interactionScope, root);
+  assert.equal(first.competitiveApprovals, false);
+  assert.notEqual(first.interactionScope, harnessConnection(modernContext({ root: {} })).interactionScope);
+  const fixtureContext = modernContext();
   assert.equal(harnessConnection(fixtureContext).interactionScope, fixtureContext);
+  assert.throws(() => harnessConnection({ apiProxy: {} }), /requires the modern Host Typert gateway/);
 });
 
 test('an explicit Harness URL preserves HTTP transport and never reads the Host apiProxy', () => {
@@ -31,14 +36,14 @@ test('an explicit Harness URL preserves HTTP transport and never reads the Host 
   assert.throws(() => harnessConnection(ctx, { harnessBaseUrl: 'not a URL' }), TypeError);
 });
 
-test('a Host with neither legacy apiProxy nor a modern gateway fails clearly', () => {
+test('a Host without a modern gateway fails clearly', () => {
   assert.throws(
     () => harnessConnection({ webServer: { port: 3080 } }),
     /requires the modern Host Typert gateway/,
   );
 });
 
-test('Host and all IM channel plugins require only services shared by old and new Harness', async () => {
+test('Host and all IM channel plugins require the modern gateway', async () => {
   assert.equal(hostInject.includes('apiProxy'), false);
   assert.equal(hostInject.includes('webServer'), false);
   assert.ok(hostInject.includes('typertGateway'));
@@ -108,11 +113,12 @@ async function assembledHarness(channel, ctx, config = {}) {
 }
 
 for (const channel of [...IM_CHANNELS, 'office']) {
-  test(`${channel} production uses its Host apiProxy with no webServer or listening port`, async () => {
-    const apiProxy = {};
+  test(`${channel} production uses the modern Host gateway with no webServer or listening port`, async () => {
     const root = {};
-    const options = await assembledHarness(channel, { credentials: {}, apiProxy, root });
-    assert.equal(options.apiProxy, apiProxy);
+    const ctx = modernContext({ credentials: {}, root });
+    const options = await assembledHarness(channel, ctx);
+    assert.equal(options.apiProxy, harnessConnection(ctx).apiProxy);
+    assert.equal(options.competitiveApprovals, !['imessage', 'email', 'office'].includes(channel));
     assert.equal(options.interactionScope, root);
     assert.equal(Object.hasOwn(options, 'baseUrl'), false);
     assert.match(toPosixPath(options.workspace), /\/test\/workspace$/);

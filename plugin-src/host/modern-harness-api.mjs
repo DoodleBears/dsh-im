@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { hasActiveHarnessInteractionOwner } from '../../src/channels/shared/harness-client.mjs';
+import { activeHarnessInteractionOwner, hasActiveHarnessInteractionOwner, harnessToolCallFromEvent, HarnessInteractionError } from '../../src/channels/shared/harness-client.mjs';
 import { extractConnectionEvidence } from '../../src/channels/shared/connection-error.mjs';
 
 const modernApis = new WeakMap();
@@ -196,6 +196,7 @@ class MuxSubscription {
 
 class ModernHarnessApi {
   #gateway;
+  #deliveryService;
   #scope;
   #mux = new Set();
   #pendingQuestions = new Map();
@@ -284,6 +285,10 @@ class ModernHarnessApi {
         { global: true, prepend: true },
       ));
     }
+  }
+
+  setDeliveryService(service) {
+    if (service) this.#deliveryService = service;
   }
 
   async #invoke(namespace, method, args, signal) {
@@ -467,7 +472,9 @@ class ModernHarnessApi {
     subscription = new MuxSubscription(signal, () => this.#mux.delete(subscription));
     this.#mux.add(subscription);
     for (const pending of this.#pendingQuestions.values()) subscription.push(this.#questionFrame(pending));
-    for (const pending of this.#pendingApprovals.values()) subscription.push(this.#approvalFrame(pending));
+    for (const pending of this.#pendingApprovals.values()) {
+      if (pending.broadcast !== false && pending.imAvailable !== false) subscription.push(this.#approvalFrame(pending));
+    }
     return subscription;
   }
 
@@ -630,6 +637,7 @@ class ModernHarnessApi {
         type: 'approval/requested',
         sessionId: pending.sessionId,
         approvalId: pending.approvalId,
+        ...(pending.competitive ? { competitive: true } : {}),
         toolName: pending.toolName,
         ...(pending.callId === undefined ? {} : { callId: pending.callId }),
         ...(pending.reason === undefined ? {} : { reason: pending.reason }),
@@ -638,6 +646,123 @@ class ModernHarnessApi {
   }
 
   #requestApproval(request, next) {
+    const session = request?.agent?.session;
+    const sessionId = session?.id ?? request?.agent?.id;
+    const events = sessionEvents(session);
+    if (typeof sessionId !== 'string' || !events) return next();
+    const owner = activeHarnessInteractionOwner(this.#scope, sessionId, events);
+    if (owner && !owner.competitiveApprovals) return this.#requestExclusiveApproval(request, next);
+    if (!owner && typeof this.#deliveryService?.presentSessionSyncApproval !== 'function') return next();
+    const turnSignal = request.signal;
+    if (turnSignal?.aborted) return Promise.resolve('cancelled');
+    const claimed = new Set([...this.#pendingApprovals.values()].map((entry) => entry.approvalId));
+    const decided = new Set();
+    let approvalId;
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event.type === 'approval/decided') decided.add(event.data?.id);
+      if (event.type !== 'approval/asked') continue;
+      const id = event.data?.id;
+      if (!id || decided.has(id) || claimed.has(id)
+        || (request.callId ?? null) !== (event.data?.callId ?? null)) continue;
+      approvalId = id;
+      break;
+    }
+    if (!approvalId) return next();
+    let toolCall = owner?.toolCalls.get(request.callId);
+    if (!toolCall) {
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        const event = events[index];
+        if (event.type === 'turn/start') break;
+        const call = harnessToolCallFromEvent(event);
+        if (call?.callId === request.callId && call.name === request.toolName) {
+          toolCall = call;
+          break;
+        }
+      }
+    }
+    // This controller retires only this approval; the caller keeps its turn signal.
+    const lifetime = new AbortController();
+    request.signal = lifetime.signal;
+    let nativeAvailable = true;
+    let resolveResult;
+    const result = new Promise((resolve) => { resolveResult = resolve; });
+    const pending = {
+      rpcId: randomUUID(), sessionId, approvalId,
+      toolName: request.toolName, callId: request.callId, reason: request.reason,
+      competitive: true, broadcast: Boolean(owner), imAvailable: true,
+      settle: (outcome) => {
+        if (!this.#pendingApprovals.delete(pending.rpcId)) return false;
+        turnSignal?.removeEventListener('abort', onAbort);
+        if (pending.broadcast) this.#broadcast({
+          type: 'approval/resolved', sessionId, approvalId, outcome,
+        });
+        // Reserve the result before aborting the losing native presentation.
+        resolveResult(outcome);
+        lifetime.abort(new Error('approval settled'));
+        if (request.signal === lifetime.signal) request.signal = turnSignal;
+        return true;
+      },
+      withdraw: () => {
+        if (!this.#pendingApprovals.has(pending.rpcId) || !pending.imAvailable) return false;
+        pending.imAvailable = false;
+        if (pending.broadcast) this.#broadcast({
+          type: 'approval/resolved', sessionId, approvalId, outcome: 'unavailable',
+        });
+        if (!nativeAvailable) pending.settle('unavailable');
+        return true;
+      },
+    };
+    const onAbort = () => pending.settle('cancelled');
+    this.#pendingApprovals.set(pending.rpcId, pending);
+    turnSignal?.addEventListener('abort', onAbort, { once: true });
+    if (turnSignal?.aborted) onAbort();
+    // Start both providers without waiting for target lookup or platform delivery.
+    Promise.resolve().then(() => {
+      if (lifetime.signal.aborted) return 'cancelled';
+      return next();
+    }).then((outcome) => {
+      if (outcome === 'allowed-once' || outcome === 'rejected') pending.settle(outcome);
+      else {
+        nativeAvailable = false;
+        if (!pending.imAvailable) pending.settle('unavailable');
+      }
+    }, (error) => {
+      nativeAvailable = false;
+      if (!lifetime.signal.aborted) console.warn('[dsh-im] native approval provider unavailable:', error?.code ?? error?.name);
+      if (!pending.imAvailable) pending.settle('unavailable');
+    });
+    if (!lifetime.signal.aborted && owner) {
+      this.#broadcast(this.#approvalFrame(pending).payload, pending.rpcId);
+    } else if (!lifetime.signal.aborted) {
+      const respond = async (response) => {
+        const receipt = this.#respond({ rpcId: pending.rpcId, result: response });
+        if (!receipt.accepted) throw new HarnessInteractionError(
+          `interaction-${receipt.reason}`, 'This approval is no longer answerable',
+        );
+        return receipt;
+      };
+      const interaction = {
+        kind: 'approval', interactionId: approvalId, rpcId: pending.rpcId, sessionId,
+        payload: this.#approvalFrame(pending).payload, toolCall, respond,
+        withdraw: async () => pending.withdraw(),
+      };
+      Promise.resolve().then(() => {
+        if (lifetime.signal.aborted) return false;
+        return this.#deliveryService.presentSessionSyncApproval(sessionId, interaction, {
+          signal: lifetime.signal, completion: result,
+        });
+      }).then((available) => {
+        if (!available) pending.withdraw();
+      }, (error) => {
+        if (!lifetime.signal.aborted) console.warn('[dsh-im] synced approval delivery unavailable:', error?.code ?? error?.name);
+        pending.withdraw();
+      });
+    }
+    return result;
+  }
+
+  #requestExclusiveApproval(request, next) {
     const owner = this.#claimableAgent(request?.agent);
     if (!owner) return next();
     if (request.signal?.aborted) return Promise.resolve('cancelled');
@@ -687,6 +812,12 @@ class ModernHarnessApi {
   #respond(message) {
     const approval = this.#pendingApprovals.get(message?.rpcId);
     if (approval) {
+      if (approval.imAvailable === false) return { accepted: false, reason: 'not-pending' };
+      if (approval.competitive && message?.result?.ok === false
+        && message?.result?.error?.code === 'unavailable') {
+        return approval.withdraw()
+          ? { accepted: true } : { accepted: false, reason: 'not-pending' };
+      }
       const value = message?.result?.value;
       if (message?.result?.ok !== true
         || !value || typeof value !== 'object'
@@ -738,18 +869,22 @@ class ModernHarnessApi {
 }
 
 /** Create one modern compatibility API per Cordis Host root. */
-export function modernHarnessApi(ctx) {
+export function modernHarnessApi(ctx, { deliveryService } = {}) {
   const scope = ctx?.root ?? ctx;
   if (!scope || !['object', 'function'].includes(typeof scope)) {
     throw new TypeError('dsh-im requires a Cordis Host context');
   }
   const cached = modernApis.get(scope);
-  if (cached) return cached;
+  if (cached) {
+    cached.setDeliveryService(deliveryService);
+    return cached;
+  }
   const gateway = ctx?.typertGateway;
   if (!gateway || typeof gateway.invoke !== 'function' || typeof gateway.stream !== 'function') {
     throw new TypeError('dsh-im requires the modern Host Typert gateway');
   }
   const api = new ModernHarnessApi(ctx, gateway, scope);
+  api.setDeliveryService(deliveryService);
   modernApis.set(scope, api);
   if (typeof ctx.effect === 'function') {
     ctx.effect(() => () => {

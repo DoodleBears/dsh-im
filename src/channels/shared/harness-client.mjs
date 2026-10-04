@@ -504,33 +504,9 @@ function consumeInteractionOwnership(ownership, entries) {
       ownership.completed = true;
       continue;
     }
-    let toolCall = null;
-    if (event.type === 'tool/call'
-      && ownership.active
-      && event.data?.turn === ownership.turn
-      && typeof event.data?.callId === 'string'
-      && event.data.callId) {
-      toolCall = {
-        callId: event.data.callId,
-        name: event.data?.name,
-        arguments: event.data?.arguments,
-      };
-    } else if (event.type === 'tool/code-dispatch-start'
-      && ownership.active
-      && typeof event.data?.subCallId === 'string'
-      && event.data.subCallId) {
-      let argumentsText;
-      try {
-        argumentsText = JSON.stringify(event.data?.arguments);
-      } catch {
-        argumentsText = undefined;
-      }
-      toolCall = {
-        callId: event.data.subCallId,
-        name: event.data?.name,
-        arguments: argumentsText,
-      };
-    }
+    const toolCall = ownership.active
+      && (event.type !== 'tool/call' || event.data?.turn === ownership.turn)
+      ? harnessToolCallFromEvent(event) : null;
     if (toolCall) ownership.toolCalls.set(toolCall.callId, Object.freeze(toolCall));
   }
 }
@@ -540,17 +516,36 @@ function consumeInteractionOwnership(ownership, entries) {
  * this Session.  The modern Harness adapter uses the same ownership registry
  * as HarnessClient so it never steals a browser-owned question or approval.
  */
-export function hasActiveHarnessInteractionOwner(scope, sessionId, entries = []) {
+export function activeHarnessInteractionOwner(scope, sessionId, entries = []) {
   if (!scope || !['object', 'function', 'string'].includes(typeof scope)
-    || typeof sessionId !== 'string' || !sessionId) return false;
+    || typeof sessionId !== 'string' || !sessionId) return null;
   const owners = interactionRegistry(scope).ownerships.get(sessionId);
-  if (!owners || owners.size === 0) return false;
+  if (!owners || owners.size === 0) return null;
   for (const ownership of owners) consumeInteractionOwnership(ownership, entries);
-  return [...owners].some((ownership) => (
+  return [...owners].filter((ownership) => (
     ownership.active
     && !ownership.completed
     && typeof ownership.reconnect === 'function'
-  ));
+  )).sort((left, right) => left.order - right.order)[0] ?? null;
+}
+
+/** Whether a live IM consumer owns this turn. */
+export function hasActiveHarnessInteractionOwner(scope, sessionId, entries = []) {
+  return activeHarnessInteractionOwner(scope, sessionId, entries) !== null;
+}
+
+/** Read the operation attached to a normal or PTC tool-call event. */
+export function harnessToolCallFromEvent(event) {
+  const data = event?.data;
+  if (event?.type === 'tool/call' && typeof data?.callId === 'string') {
+    return { callId: data.callId, name: data.name, arguments: data.arguments };
+  }
+  if (event?.type === 'tool/code-dispatch-start' && typeof data?.subCallId === 'string') {
+    let argumentsText;
+    try { argumentsText = JSON.stringify(data.arguments); } catch { /* Unserializable details cannot be approved. */ }
+    return { callId: data.subCallId, name: data.name, arguments: argumentsText };
+  }
+  return null;
 }
 
 export class HarnessReplyTracker {
@@ -934,6 +929,7 @@ export class HarnessClient {
   #managedProcess = null;
   #interactionRegistry;
   #interactionOwnerships;
+  #competitiveApprovals;
   #interactionClaims;
   #controlOwnerships;
 
@@ -941,6 +937,7 @@ export class HarnessClient {
     baseUrl,
     apiProxy,
     interactionScope = apiProxy,
+    competitiveApprovals = false,
     workspace,
     ungroupedWorkspace,
     agentPreset,
@@ -991,6 +988,7 @@ export class HarnessClient {
       || !['object', 'function'].includes(typeof interactionScope))) {
       throw new TypeError('interactionScope must identify the current Host');
     }
+    this.#competitiveApprovals = competitiveApprovals === true;
     this.#workspace = workspace;
     // Only the reserved IM directory bypasses grouping, even after /ws switches.
     this.#ungroupedWorkspace = ungroupedWorkspace;
@@ -1783,6 +1781,7 @@ export class HarnessClient {
           lastSeq: baselineSeq,
           reconnect: null,
           order: -1,
+          competitiveApprovals: this.#competitiveApprovals,
           toolCalls: new Map(),
           control,
         }
@@ -2130,6 +2129,11 @@ export class HarnessClient {
             ? this.#interactionClaims.get(claimKey)?.recovered === true
             : false,
           ...(toolCall ? { toolCall } : {}),
+          ...(kind === 'approval' && payload.competitive === true ? {
+            withdraw: () => this.respondInteraction(envelope.rpcId, {
+              ok: false, error: { code: 'unavailable', message: 'IM cannot answer this approval', details: {} },
+            }, { signal: AbortSignal.timeout(5_000) }),
+          } : {}),
           reconnect: close,
           respond: (result, options = {}) => this.respondInteraction(
             envelope.rpcId,

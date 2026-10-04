@@ -30,7 +30,7 @@ async function productionFixture(t, count = 1) {
   const started = [];
   const warnings = [];
   const production = await createProductionController({
-    credentials, apiProxy: {}, logger: () => ({ warn: (...args) => warnings.push(args) }),
+    credentials, typertGateway: { invoke() {}, stream() {} }, logger: () => ({ warn: (...args) => warnings.push(args) }),
   }, { dataDir: root, workspace: root }, {
     HarnessClient: class { stopManagedProcess() {} },
     QrAuth: class { start() {} },

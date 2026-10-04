@@ -207,6 +207,20 @@ export class SlackController {
     });
   }
 
+  async presentSessionSyncApproval(botId, target, interaction, options = {}) {
+    const config = this.#configStore.get(botId);
+    if (!config) throw new Error('Unknown Slack bot');
+    return this.#withBotTransition(botId, async () => {
+      const runtime = this.#runtimes.get(botId);
+      if (!runtime?.status?.ready || typeof runtime.presentSessionSyncApproval !== 'function') {
+        const error = new Error(t('Slack机器人尚未连接'));
+        error.code = 'bot-not-connected';
+        throw error;
+      }
+      return runtime.presentSessionSyncApproval(target, interaction, options);
+    });
+  }
+
   async deleteBot(botId) {
     const warnings = [];
     const config = this.#configStore.get(botId);

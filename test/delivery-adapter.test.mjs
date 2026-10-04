@@ -55,6 +55,7 @@ const STATE_STORES = {
 };
 
 const SESSION_SUGGESTIONS = {
+  matrix: { sessions: { 'direct:dm:@alice:example.org': 'session-matrix' }, suggestions: [{ kind: 'dm', route: { userId: '@alice:example.org' } }] },
   weixin: {
     sessions: { 'p2p:wx-user': 'session-weixin', 'group:ignored': 'session-ignored' },
     suggestions: [{ kind: 'user', route: { toUserId: 'wx-user' } }],
@@ -142,6 +143,7 @@ const SESSION_SUGGESTIONS = {
 };
 
 const PRIVATE_TARGETS = {
+  matrix: { targetId: 'private', kind: 'dm', route: { userId: '@alice:example.org' } },
   weixin: { targetId: 'private', kind: 'user', route: { toUserId: 'wx-user' } },
   feishu: { targetId: 'private', kind: 'user', route: { openId: 'ou_user' } },
   dingtalk: { targetId: 'private', kind: 'user', route: { userId: 'staff-one' } },
@@ -196,7 +198,7 @@ test('all ten delivery adapters validate and forward one stable target', async (
   }
 });
 
-test('all ten adapters enable, resolve, and revalidate one private Session target', async () => {
+test('all adapters enable, resolve, and revalidate one private Session target', async () => {
   for (const [channel, target] of Object.entries(PRIVATE_TARGETS)) {
     const botId = `bot-${channel}`;
     const sessions = { ...SESSION_SUGGESTIONS[channel].sessions };
@@ -206,6 +208,7 @@ test('all ten adapters enable, resolve, and revalidate one private Session targe
     const sessionId = sessions[conversationKey];
     let syncKey = null;
     const sends = [];
+    const approvals = [];
     const workspaces = {
       has: (candidate) => candidate === botId,
       listBotIds: () => [botId],
@@ -226,6 +229,7 @@ test('all ten adapters enable, resolve, and revalidate one private Session targe
       workspaces,
       coreController: {
         async sendProactiveText(...args) { sends.push(args); },
+        async presentSessionSyncApproval(...args) { approvals.push(args); return true; },
       },
       stateFor: async () => ({ snapshot: () => ({ sessions }) }),
     });
@@ -247,7 +251,17 @@ test('all ten adapters enable, resolve, and revalidate one private Session targe
     );
     assert.deepEqual(sends.at(-1), [botId, target, 'synced', {}], channel);
 
+    let decisions = 0;
+    let withdrawn = 0;
+    const interaction = { respond: async () => { decisions++; }, withdraw: async () => { withdrawn++; } };
+    assert.equal(await adapter.presentSessionSyncApproval(botId, target.targetId, sessionId, interaction), true);
+    assert.equal(approvals[0][3].key, conversationKey);
+    await approvals[0][2].respond({});
+    assert.equal(decisions, 1);
     sessions[conversationKey] = `${sessionId}-new`;
+    await assert.rejects(approvals[0][2].respond({}), { code: 'interaction-not-pending' });
+    assert.equal(decisions, 1);
+    assert.equal(withdrawn, 1);
     assert.deepEqual(await adapter.listSessionSyncTargets(sessionId), [], channel);
     await assert.rejects(
       adapter.sendSessionSyncText(botId, target.targetId, sessionId, 'stale'),

@@ -247,6 +247,22 @@ export class TokenBotController {
     });
   }
 
+  async presentSessionSyncApproval(botId, target, interaction, options = {}) {
+    const config = this.#configStore.get(botId);
+    if (!config) throw new Error(`Unknown ${this.#descriptor.label} bot`);
+    return this.#withBotTransition(botId, async () => {
+      const runtime = this.#runtimes.get(botId);
+      if (!runtime?.status?.ready || typeof runtime.presentSessionSyncApproval !== 'function') {
+        const error = new Error(t('{label}机器人尚未连接', {
+          label: this.#descriptor.label,
+        }));
+        error.code = 'bot-not-connected';
+        throw error;
+      }
+      return runtime.presentSessionSyncApproval(target, interaction, options);
+    });
+  }
+
   async deleteBot(botId) {
     const warnings = [];
     const config = this.#configStore.get(botId);
