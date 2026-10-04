@@ -373,3 +373,20 @@ For an authenticated text mention replying to a file message, the exclusive cons
 A result file is an explicitly selected `{id,name,bytes}` with at most 25 MiB. Checked reply reuses the existing native file uploader and validates the original source again after upload and before replying. The exact source message determines the topic. There is no fallback recipient, original-file replacement or automatic retry after an uncertain result. `file-upload-failed` and explicit `file-provider-rejected` indicate that a message was not accepted; other interrupted or uncertain sends require reconciliation rather than retry. The package remains a temporary Git-qualified artifact, not an upstream release or production enablement.
 
 File metadata is opt-in through `consumeInbound(..., {sourceFiles: true})`; legacy consumers receive their unchanged version 1 text envelope. / 文件元信息通过 `sourceFiles: true` 明确协商，旧 consumer 的文本 envelope 保持原样。
+
+## Bounded Feishu/Lark context reads (same Host)
+
+An active exclusive consumer may call the optional `dshIm.historyChecked(botId, source.reply, query, {expectedFingerprint, signal})`. Check `history-text-checked`, and also `thread-history-text-checked` for a thread. Query is `{scope: 'group' | 'nearby' | 'thread', limit: 1..20, cursor?: string}`. There is no browser/HTTP history endpoint. The verified account and live consumer lease are required; standalone accounts cannot read through this contract.
+
+Each call re-fetches the source and compares its author, chat, thread, root and parent IDs before listing. `group` lists the source chat; `nearby` uses a bounded five-minute-before/after chat time window, not a native around-message API; `thread` lists the native thread. The response is `{version:1, scope, events, omitted, hasMore, nextCursor?, window?, coverage:'provider-visible-human-text'}`. At most `limit` provider records are inspected; unsupported, deleted, application-sent or invalid text is counted as omitted. Pagination is explicit, one page per call. The caller binds its continuation to the same source/query. History-derived events use `history:<messageId>` as event ID; deduplicate with the native message ID alongside received events.
+
+Only visible Human text is returned, with the same normalized event shape. Optional platform `sender_name` and mention `name` are display labels, never identity or authorization; missing names remain absent. No directory lookup or Human token fallback is performed. A read does not admit ordinary messages to an Inbox, wake an agent, reply, mark a message read, or synchronize withdrawal. The companion application owns those decisions and canonical persistence.
+
+Missing Bot permissions return `history-permission-denied`; missing/changed source IDs return `stale-route`; an anchor without a thread returns `thread-unavailable`; provider failures or malformed pagination return `history-unavailable`. Unrelated chat/thread records fail with `untrusted-source`. Caller cancellation, consumer release, Host close and Provider replacement discard in-flight results. The consumer must retain its lifetime until the read completes. This capability is neither a complete transcript guarantee nor provider-wide search.
+
+```js
+const page = await ctx.dshIm.historyChecked(botId, event.reply,
+  { scope: 'thread', limit: 10 },
+  { expectedFingerprint: account.account.fingerprint, signal: lifecycleSignal });
+// Persist/reconcile only after application authorization. Do not turn reads into intake.
+```

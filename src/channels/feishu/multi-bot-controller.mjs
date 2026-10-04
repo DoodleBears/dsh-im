@@ -623,20 +623,27 @@ export class MultiBotDshFeishuController {
   }
 
   async historyChecked(botId, route, query, { expectedFingerprint, signal } = {}) {
-    this.#assertOpen();
+    this.#assertOpen('capability-unavailable');
     return this.#withBotTransition(botId, async () => {
-      this.#assertOpen();
+      this.#assertOpen('capability-unavailable');
       signal?.throwIfAborted();
       const config = this.#requireBot(botId);
       const account = await this.#deliveryAccount(config);
+      this.#assertOpen('capability-unavailable');
+      signal?.throwIfAborted();
       if (account.fingerprint !== expectedFingerprint)
         throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
       const runtime = this.#runtimes.get(botId);
       if (config.consumerMode !== 'external-consumer' || !isConnected(connectionStatus(runtime))
         || typeof runtime.historyChecked !== 'function')
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
-      return runtime.historyChecked({ botId, appId: config.appId,
-        botOpenId: config.botOpenId, fingerprint: account.fingerprint }, route, query, { signal });
+      const leaseSignal = this.#inboundConsumers.signalFor(botId, expectedFingerprint);
+      const readSignal = signal ? AbortSignal.any([signal, leaseSignal]) : leaseSignal;
+      const result = await runtime.historyChecked({ botId, appId: config.appId,
+        botOpenId: config.botOpenId, fingerprint: account.fingerprint }, route, query, { signal: readSignal });
+      this.#assertOpen('capability-unavailable');
+      readSignal.throwIfAborted();
+      return result;
     });
   }
 
@@ -1542,8 +1549,8 @@ export class MultiBotDshFeishuController {
     return config;
   }
 
-  #assertOpen() {
-    if (this.#closed) throw new Error('The Feishu controller is closed');
+  #assertOpen(code) {
+    if (this.#closed) throw Object.assign(new Error('The Feishu controller is closed'), code ? { code } : {});
   }
 
   #serializeConfig(operation) {

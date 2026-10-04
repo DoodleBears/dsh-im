@@ -1,6 +1,10 @@
 import { normalizeExternalText } from './external-consumer.mjs';
 
 function refuse(code) { throw Object.assign(new Error(code), { code }); }
+function identifier(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 512;
+}
+
 function check(response) {
   if ([230027, 99991672, 99991679].includes(response?.code)) refuse('history-permission-denied');
   if (response?.code) refuse('history-unavailable');
@@ -9,15 +13,16 @@ function check(response) {
 // Application-defined checked read: destination is derived from an authenticated source.
 // Lark has Chat/time-range listing and Thread listing, not a native around-message API.
 export async function readExternalHistory(client, identity, route, query, signal) {
-  if (!route || typeof route.messageId !== 'string' || typeof route.conversationId !== 'string'
-    || typeof route.actorId !== 'string' || !['group', 'nearby', 'thread'].includes(query?.scope)
+  if (!route || !identifier(route.messageId) || !identifier(route.conversationId)
+    || !identifier(route.actorId) || ['threadId', 'rootId', 'parentId'].some(key => route[key] !== undefined && !identifier(route[key])) || !['group', 'nearby', 'thread'].includes(query?.scope)
     || !Number.isInteger(query.limit) || query.limit < 1 || query.limit > 20
-    || (query.cursor !== undefined && (typeof query.cursor !== 'string' || query.cursor.length > 4096)))
+    || (query.cursor !== undefined && (typeof query.cursor !== 'string' || !query.cursor || query.cursor.length > 4096)))
     refuse('bad-request');
   signal?.throwIfAborted();
   const reference = await client.im.v1.message.get({ path: { message_id: route.messageId }, params: { with_sender_name: true } }, { signal });
+  signal?.throwIfAborted();
   check(reference);
-  const source = reference?.data?.items?.find(item => item.message_id === route.messageId);
+  const source = (Array.isArray(reference?.data?.items) ? reference.data.items : []).find(item => item?.message_id === route.messageId);
   if (!source || source.deleted || source.chat_id !== route.conversationId
     || source.sender?.sender_type !== 'user' || source.sender?.id_type !== 'open_id'
     || source.sender?.id !== route.actorId || (source.thread_id || undefined) !== route.threadId
@@ -27,7 +32,7 @@ export async function readExternalHistory(client, identity, route, query, signal
   signal?.throwIfAborted();
   const seconds = Math.floor(Number(source.create_time) / 1000);
   if (!Number.isFinite(seconds) || seconds <= 0) refuse('stale-route');
-  const window = query.scope === 'nearby' ? { start: seconds - 300, end: seconds + 301 } : undefined;
+  const window = query.scope === 'nearby' ? { start: Math.max(0, seconds - 300), end: seconds + 301 } : undefined;
   const response = await client.im.v1.message.list({ params: {
     container_id_type: query.scope === 'thread' ? 'thread' : 'chat',
     container_id: query.scope === 'thread' ? route.threadId : route.conversationId,
@@ -35,23 +40,28 @@ export async function readExternalHistory(client, identity, route, query, signal
     ...(query.cursor === undefined ? {} : { page_token: query.cursor }),
     ...(window ? { start_time: String(window.start), end_time: String(window.end) } : {}),
   } }, { signal });
-  check(response);
   signal?.throwIfAborted();
+  check(response);
   const items = response?.data?.items;
   if (!Array.isArray(items) || items.length > query.limit || typeof response.data.has_more !== 'boolean')
     refuse('history-unavailable');
   const events = [];
   let omitted = 0;
   for (const item of items) {
-    if (item.chat_id !== route.conversationId
+    if (!item || item.chat_id !== route.conversationId
       || (query.scope === 'thread' && item.thread_id !== route.threadId)) refuse('untrusted-source');
     if (item.deleted || item.msg_type !== 'text' || item.sender?.sender_type !== 'user'
       || item.sender?.id_type !== 'open_id') { ++omitted; continue; }
-    const event = normalizeExternalText({ event_id: `history:${item.message_id}`,
+    if (item.mentions !== undefined && (!Array.isArray(item.mentions) || item.mentions.length > 100)) { ++omitted; continue; }
+    let event;
+    try { event = normalizeExternalText({ event_id: `history:${item.message_id}`,
       sender: { sender_type: 'user', sender_id: { open_id: item.sender.id }, sender_name: item.sender.sender_name },
       message: { ...item, chat_type: 'group', message_type: item.msg_type, content: item.body?.content,
-        mentions: (item.mentions ?? []).map(mention => ({ ...mention, id: { open_id: mention.id } })) },
-    }, identity);
+        mentions: (item.mentions ?? []).map(mention => ({ ...mention, id: { open_id: mention?.id } })) },
+    }, identity); } catch (error) {
+      if (error?.code !== 'invalid-inbound') throw error;
+      ++omitted; continue;
+    }
     if (!event) { ++omitted; continue; }
     events.push(event);
   }

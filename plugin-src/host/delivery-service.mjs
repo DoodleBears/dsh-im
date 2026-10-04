@@ -371,14 +371,17 @@ export class DeliveryService {
     const registration = await this.#checkedRegistrationFor(id);
     if (typeof registration.adapter.historyChecked !== 'function') throw deliveryError('capability-unavailable');
     this.#assertRegistered(registration);
+    const signal = options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal;
     try {
-      const result = await registration.adapter.historyChecked(id, structuredClone(route), structuredClone(query), {
-        ...options, signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal,
-      });
+      const result = await registration.adapter.historyChecked(id, structuredClone(route), structuredClone(query), { ...options, signal });
       this.#assertRegistered(registration);
       cancellation(options.signal);
       return result;
-    } catch (error) { throw publicOperationError(error); }
+    } catch (error) {
+      this.#assertRegistered(registration);
+      if (signal.aborted || error?.name === 'AbortError') throw deliveryError('cancelled');
+      throw publicOperationError(error, 'history-unavailable');
+    }
   }
 
   async qualifyReplyChecked(botId, route, options = {}) {

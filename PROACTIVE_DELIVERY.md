@@ -373,3 +373,7 @@ options 必须包含 `expectedFingerprint`、`expectedTargetDigest`，可选 `si
 结果使用明确选择的 `{id,name,bytes}`。沿用原生文件上传器，上传后、实际发送前重新核对原来源，只回复准确原话题，不改远端原件、不回退到其他目标、不自动重试不确定结果。上传失败或明确平台拒绝会给出未被接受的结果；中断／不确定发送需核实后再决策。本包仍是临时 Git 验证 artifact，并非上游发布或生产启用。
 
 File metadata is opt-in through `consumeInbound(..., {sourceFiles: true})`; legacy consumers receive their unchanged version 1 text envelope. / 文件元信息通过 `sourceFiles: true` 明确协商，旧 consumer 的文本 envelope 保持原样。
+
+## 完整 fork 的上下文读取生命周期
+
+有界群／话题读取必须持有当前账号的独占 Consumer。释放 Consumer、Host 关闭或 Provider Registration 被替换后，不返回正在读取的结果。每次请求最多检查 20 条平台记录；无效或不支持的文字计入 omitted，跨群／话题记录拒绝。保留已有附件、发送回执、自身回显和独立回复身份契约。此 fork 的可用性不依赖上游 PR 合并。

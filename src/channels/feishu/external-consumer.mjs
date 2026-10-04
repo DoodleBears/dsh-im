@@ -124,6 +124,13 @@ export class ExclusiveInboundConsumers {
     return { accepted: true };
   }
 
+  signalFor(botId, fingerprint) {
+    const entry = this.#entries.get(botId);
+    if (!entry) throw refusal('consumer-unavailable');
+    if (entry.fingerprint !== fingerprint) throw refusal('account-changed');
+    return entry.controller.signal;
+  }
+
   remove(botId) {
     const entry = this.#entries.get(botId);
     entry?.dispose();
