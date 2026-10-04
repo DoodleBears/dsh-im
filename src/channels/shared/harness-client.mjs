@@ -876,6 +876,14 @@ function harnessTurnSucceeded(reason) {
   return (nonEmptyText(reason?.kind) ?? nonEmptyText(reason)) === 'completed';
 }
 
+function sessionArchivedError(sessionId, cause) {
+  const error = new Error('The Session is archived and cannot process this message.', { cause });
+  error.code = 'session-archived';
+  error.promptAccepted = false;
+  error.details = { sessionId };
+  return error;
+}
+
 export class HarnessClient {
   #baseUrl;
   #apiProxy;
@@ -1265,11 +1273,47 @@ export class HarnessClient {
     }, timeoutMs, options);
   }
 
-  async sessionExists(sessionId, options = {}) {
+  async #isSessionArchived(sessionId, options = {}) {
+    const value = await this.rpc('workspace.list', {}, 30_000, options);
+    if (!Array.isArray(value?.archivedSessionIds)
+      || value.archivedSessionIds.some((id) => typeof id !== 'string' || !id)) {
+      throw new HarnessTransportError('harness-response-invalid', 'workspace.list');
+    }
+    return value.archivedSessionIds.includes(sessionId);
+  }
+
+  // A diagnostic recheck must not hide the original failure or cancellation.
+  async #confirmedArchiveError(sessionId, options, cause) {
     try {
-      await this.rpc('session.history', { sessionId, maxMessages: 1 }, 30_000, options);
+      if (await this.#isSessionArchived(sessionId, options)) return sessionArchivedError(sessionId, cause);
+    } catch (error) {
+      if (options?.signal?.aborted) throw options.signal.reason ?? error;
+    }
+    return null;
+  }
+
+  async #sessionRpc(method, payload, timeoutMs, options) {
+    try {
+      return await this.rpc(method, payload, timeoutMs, options);
+    } catch (error) {
+      if (options?.signal?.aborted) throw options.signal.reason ?? error;
+      if (error instanceof HarnessRpcError
+        && ['internal', 'gateway/internal', 'session-not-found', 'session/not-found'].includes(error.code)) {
+        throw await this.#confirmedArchiveError(payload.sessionId, { signal: options?.signal }, error) ?? error;
+      }
+      throw error;
+    }
+  }
+
+  async sessionExists(sessionId, options = {}) {
+    // Archived Sessions still exist. Returning false here would silently bind
+    // the conversation to a new Session; reading their active log can also fail.
+    if (await this.#isSessionArchived(sessionId, options)) return true;
+    try {
+      await this.#sessionRpc('session.history', { sessionId, maxMessages: 1 }, 30_000, options);
       return true;
     } catch (error) {
+      if (error.code === 'session-archived') return true;
       if (error instanceof HarnessRpcError && error.code === 'session-not-found') return false;
       throw error;
     }
@@ -1641,7 +1685,8 @@ export class HarnessClient {
     const inboundFiles = Array.isArray(options.files) ? options.files.filter(Boolean) : [];
     const inboundImages = Array.isArray(options.images) ? options.images.filter(Boolean) : [];
     await this.ensureRunning({ signal });
-    const before = await this.rpc(
+    if (await this.#isSessionArchived(sessionId, { signal })) throw sessionArchivedError(sessionId);
+    const before = await this.#sessionRpc(
       'session.history',
       { sessionId, maxMessages: 1 },
       30_000,
@@ -1651,6 +1696,7 @@ export class HarnessClient {
     const promptRpcId = `${this.#rpcIdPrefix}-${randomUUID()}`;
     const releasePromptInputOrigin = registerImInputOrigin(this.#interactionRegistry, promptRpcId);
     const tracker = new HarnessReplyTracker({ promptRpcId, afterSeq: baselineSeq, reasoning });
+    let checkedBlockedSeq = baselineSeq;
     let lastProgressAt = Date.now();
     let lastPollSeq = tracker.lastSeq;
     let progressTail = Promise.resolve();
@@ -1808,7 +1854,7 @@ export class HarnessClient {
       // message that merely looks like a guidance block is not configuration.
       imSourceGuidance.publish(sessionId, options.sourceGuidance);
       const clientTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const sendPrompt = (promptContent) => this.rpc('session.prompt', {
+      const sendPrompt = (promptContent) => this.#sessionRpc('session.prompt', {
         sessionId,
         mode: 'queue',
         content: promptContent,
@@ -1862,7 +1908,7 @@ export class HarnessClient {
         // active until turn/end and can therefore outlive a stalled turn.
         while (true) {
           await sleep(300, signal);
-          const history = await this.rpc(
+          const history = await this.#sessionRpc(
             'session.history',
             { sessionId, maxMessages: 50 },
             30_000,
@@ -1877,7 +1923,11 @@ export class HarnessClient {
           if (tracker.finished) {
             turnFinished = true;
             if (!ownership?.stopRequested && !harnessTurnSucceeded(tracker.reason)) {
-              throw harnessTurnError(tracker.reason);
+              const failure = harnessTurnError(tracker.reason);
+              if (failure.code === 'turn-blocked') {
+                throw await this.#confirmedArchiveError(sessionId, { signal }, failure) ?? failure;
+              }
+              throw failure;
             }
             // An accepted /stop revokes attachment delivery even when Harness
             // preserved a useful partial text answer for the existing UX.
@@ -1898,7 +1948,29 @@ export class HarnessClient {
             throw harnessTurnError(tracker.reason);
           }
 
+          if (tracker.turn === null && !ownership?.stopRequested) {
+            // An admission gate can block before user/message supplies rpcId.
+            // This event only prompts a Session-level archive check; it never
+            // grants ownership of another caller's turn, artifacts or approvals.
+            const blockedSeq = Math.max(checkedBlockedSeq, ...(history.events ?? [])
+              .map((entry) => entry?.event ?? entry)
+              .filter((event) => event?.type === 'turn/end'
+                && (event.data?.reason?.kind ?? event.data?.reason) === 'blocked'
+                && Number.isSafeInteger(event.seq))
+              .map((event) => event.seq));
+            if (blockedSeq > checkedBlockedSeq) {
+              checkedBlockedSeq = blockedSeq;
+              const archived = await this.#confirmedArchiveError(sessionId, { signal });
+              if (archived) throw archived;
+            }
+          }
+
           if (Date.now() - lastProgressAt < timeoutMs) continue;
+
+          if (!ownership?.stopRequested) {
+            const archived = await this.#confirmedArchiveError(sessionId, { signal });
+            if (archived) throw archived;
+          }
 
           let running = false;
           try {
@@ -1917,6 +1989,10 @@ export class HarnessClient {
           throw timeoutError;
         }
       } catch (error) {
+        if (error.code === 'session-archived') {
+          error.promptAccepted = promptAccepted;
+          error.details = { ...error.details, promptRpcId, baselineSeq, turn: tracker.turn, lastSeq: tracker.lastSeq };
+        }
         if (error instanceof HarnessTurnError) {
           error.details ??= {
             sessionId, promptRpcId, baselineSeq, turn: tracker.turn, lastSeq: tracker.lastSeq,

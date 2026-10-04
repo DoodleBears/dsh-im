@@ -289,6 +289,7 @@ function controlledTurn({ sessionId, initialEnd = false, controlExecutor } = {})
     return { events };
   };
   client.rpc = async (method, payload, _timeoutMs, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     calls.push({ method, payload, options });
     if (method === 'session.history') {
       if (historyFailure) throw historyFailure;

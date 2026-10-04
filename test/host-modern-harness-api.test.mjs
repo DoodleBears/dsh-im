@@ -70,6 +70,22 @@ function fakeContext(gateway) {
   };
 }
 
+test('modern workspace baseline detects an archived binding without loading its Session', async () => {
+  const calls = [];
+  const { ctx } = fakeContext({
+    invoke() { assert.fail('an archived Session must not be loaded or prompted'); },
+    stream(request) {
+      calls.push(`${request.namespace}/${request.method}`);
+      assert.equal(calls.at(-1), 'workspace/follow');
+      return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: ['archived-session'] } });
+    },
+  });
+  const client = new HarnessClient({ ...harnessConnection(ctx), workspace: '/workspace', autostart: false });
+  assert.equal(await client.sessionExists('archived-session'), true);
+  await assert.rejects(client.ask('archived-session', 'hello'), { code: 'session-archived' });
+  assert.deepEqual(calls, ['workspace/follow', 'workspace/follow']);
+});
+
 function sessionFixture(api, id = 'session') {
   const events = [];
   if (api === 'snapshotEvents') {
@@ -347,6 +363,9 @@ test('modern adapter exposes DSH v2 live assistant chunks through legacy history
       return { records, hasMore: false };
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -472,6 +491,9 @@ forEachSessionApi('an approval', async (sessionApi) => {
       throw new Error(`unexpected invoke ${endpoint}`);
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -569,6 +591,9 @@ forEachSessionApi('structured questions', async (sessionApi) => {
       throw new Error(`unexpected invoke ${endpoint}`);
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -693,6 +718,9 @@ forEachSessionApi('concurrent questions', async (sessionApi) => {
       throw new Error(`unexpected invoke ${endpoint}`);
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -800,6 +828,9 @@ forEachSessionApi('questions answered on IM', async (sessionApi) => {
       throw new Error(`unexpected invoke ${endpoint}`);
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -903,6 +934,9 @@ forEachSessionApi('questions answered by the host', async (sessionApi) => {
       throw new Error(`unexpected invoke ${endpoint}`);
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -998,6 +1032,9 @@ forEachSessionApi('a question cancelled with its turn', async (sessionApi) => {
       throw new Error(`unexpected invoke ${endpoint}`);
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }

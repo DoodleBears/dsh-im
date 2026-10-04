@@ -56,6 +56,7 @@ function hostFixture() {
   };
   host.apiProxy = {
     host: { describe: ({ rpcId }) => success(rpcId, {}) },
+    workspace: { list: ({ rpcId }) => success(rpcId, { items: [], archivedSessionIds: [] }) },
     sessions: {
       history: ({ rpcId }) => {
         historyReads += 1;
@@ -290,6 +291,7 @@ test('Session rename uses the public Harness RPC and validates local input', asy
   const success = (rpcId, value) => ({ rpcId, result: { ok: true, value } });
   const client = localClient({
     host: { describe: ({ rpcId }) => success(rpcId, {}) },
+    workspace: { list: ({ rpcId }) => success(rpcId, { items: [], archivedSessionIds: [] }) },
     sessions: {
       rename: ({ rpcId, payload }) => {
         calls.push(payload);
