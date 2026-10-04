@@ -163,6 +163,7 @@ test('controller persists exclusive mode across lease disposal and rejects a sec
   const refs = deriveSlackBotIdentity(platformId);
   await store.save({ ...refs, platformId, name: 'QA' });
   let externalConsumer;
+  let acceptsOrdinary;
   let starts = 0;
   let receives = 0;
   const controller = new SlackController({
@@ -171,6 +172,7 @@ test('controller persists exclusive mode across lease disposal and rejects a sec
     createApi: () => ({ authTest: async () => identity, botInfo: async () => bot }),
     createRuntime: async input => {
       externalConsumer = input.externalConsumer;
+      acceptsOrdinary = input.externalOrdinaryText;
       return { status: { ready: true }, start: async () => { starts++; }, stop: async () => {} };
     }, logger: { info() {}, warn() {}, error() {}, debug() {} },
   });
@@ -178,9 +180,12 @@ test('controller persists exclusive mode across lease disposal and rejects a sec
     await controller.initialize();
     const verified = await controller.describeDeliveryAccount(refs.botId);
     assert.equal(verified.account.fingerprint, account.fingerprint);
+    assert.ok(verified.capabilities.includes('ordinary-text-consumer'));
+    assert.equal(acceptsOrdinary(), false);
     const dispose = await controller.consumeInbound(refs.botId, { expectedFingerprint: account.fingerprint,
-      onEvent: async () => { receives++; return { accepted: true }; } });
+      ordinaryText: true, onEvent: async () => { receives++; return { accepted: true }; } });
     assert.equal(starts, 2);
+    assert.equal(acceptsOrdinary(), true);
     const evidence = normalizeSlackExternalText(payload(), { botId: refs.botId, account });
     await externalConsumer(evidence);
     assert.equal(receives, 1);
@@ -189,6 +194,7 @@ test('controller persists exclusive mode across lease disposal and rejects a sec
     }), { code: 'consumer-conflict' });
     assert.equal(starts, 2);
     dispose();
+    assert.equal(acceptsOrdinary(), false);
     await assert.rejects(externalConsumer(evidence), { code: 'consumer-unavailable' });
     assert.equal((await new SlackConfigStore(configPath).load()).get(refs.botId).consumerMode, 'external-consumer');
     const document = JSON.parse(await readFile(configPath, 'utf8'));
