@@ -395,3 +395,32 @@ const page = await ctx.dshIm.historyChecked(botId, event.reply,
 ### Nearby context count minima
 
 `historyChecked` nearby traverses the five-minute window on each side of the checked source, then supplements sparse sides to `beforeCount` (default 10) and `afterCount` (default 5), each integer 0–20. Counts exclude the anchor and count only supported Human text. Dense windows are never truncated by those minima: callers must follow every `nextCursor` under their own budget. Each request still fetches at most `limit` records. Supplement phases use nearest older / newer Chat listing; second-resolution boundary overlaps are filtered by actual timestamps. No future message is awaited. Cursor count settings and the original anchor cannot change between pages. Existing group and Thread listing is unchanged; this is an application-defined checked contract, not a native around-message API.
+
+### Checked Slack context reads (BotHarness #819)
+
+The exclusive Slack consumer exposes `history-text-checked` and
+`thread-history-text-checked` through the same delivery service. Every page checks the
+current Bot account fingerprint and consumer lease, joined public channel, and the
+exact Human source author/native thread. It uses that Bot's token; Human credentials,
+private conversations, arbitrary model-selected channels and historical Inbox admission
+are outside this contract.
+
+`historyChecked(botId, route, query, { expectedFingerprint, signal })` accepts
+`scope: group | thread | nearby`, `limit: 1..20` and an optional opaque cursor.
+Nearby accepts `beforeCount` (default 10) and `afterCount` (default 5), each 0..20.
+All supported Human text in the inclusive five-minute window on each side is paginated;
+sparse sides supplement the nearest visible messages. Channel history is newest-first;
+native thread replies are earliest-first. Channel/nearby reads have Slack's channel-history
+coverage, not the complete contents of every child thread. Use thread scope for that.
+
+Continuations are signed by the runtime, bound to source/account/query, and invalidated
+when it stops. They contain bounded native timestamps/counts, not message bodies or
+credentials. Because channel history is newest-first, finding the nearest after-window
+messages may return empty continuation pages while scanning towards the boundary; only
+at most 20 candidate IDs are retained, and selected messages are re-read before returning.
+Each call returns at most 20 events with coverage/omission/continuation evidence. Missing
+permissions, source changes, cancellation and stale runtime results fail closed.
+
+Slack API references: [history](https://docs.slack.dev/reference/methods/conversations.history/)
+and [replies](https://docs.slack.dev/reference/methods/conversations.replies/).
+Provider rate limits still apply; the caller must not assume unlimited history access.

@@ -37,17 +37,21 @@ export function normalizeSlackExternalText(payload, { botId, account }) {
     || !slackTimestamp(event.ts) || (event.thread_ts !== undefined && !slackTimestamp(event.thread_ts))
     || typeof payload.event_id !== 'string' || !/^Ev[A-Za-z0-9]{4,126}$/.test(payload.event_id)
     || typeof event.text !== 'string' || !event.text.trim() || event.text.length > 16000) throw slackRefusal('invalid-inbound');
+  return normalizeText(event, { botId, account, eventId: payload.event_id, requireMention: true });
+}
+
+function normalizeText(event, { botId, account, eventId, requireMention }) {
   const mentions = [...event.text.matchAll(/<@([UW][A-Z0-9]{4,30})>/g)]
     .map(([key, id]) => Object.freeze({ key, id,
       ...(id === account.userId && account.name ? { name: account.name } : {}) }));
   if (mentions.length > 100) throw slackRefusal('invalid-inbound');
   const mentionedAccount = mentions.some(mention => mention.id === account.userId);
-  if (!mentionedAccount) return null;
+  if (requireMention && !mentionedAccount) return null;
   const at = new Date(Number(event.ts) * 1000);
   if (!Number.isFinite(at.getTime())) throw slackRefusal('invalid-inbound');
   const threadId = event.thread_ts ?? event.ts;
   return Object.freeze({ version: 1, channel: 'slack', botId, fingerprint: account.fingerprint,
-    eventId: payload.event_id, messageId: event.ts,
+    eventId: eventId, messageId: event.ts,
     actor: Object.freeze({ kind: 'user', id: event.user }),
     conversation: Object.freeze({ kind: 'group', id: event.channel }),
     mentions: Object.freeze(mentions), mentionedAccount, at: at.toISOString(), text: event.text,
@@ -55,4 +59,17 @@ export function normalizeSlackExternalText(payload, { botId, account }) {
       threadId, rootId: threadId }),
     replay: Object.freeze({ kind: 'provider-redelivery', resumeCursor: false, gapPossible: true }),
   });
+}
+
+/** A historical read is evidence, never a Socket delivery or an Inbox admission. */
+export function normalizeSlackHistoryText(message, { botId, account, conversationId }) {
+  if (message?.type !== 'message' || message.deleted === true || message.bot_id || message.app_id || message.subtype
+    || (Array.isArray(message.files) && message.files.length > 0)
+    || message.user === account.userId) return null;
+  if (!slackId(message.user, 'UW') || !slackTimestamp(message.ts)
+    || (message.thread_ts !== undefined && !slackTimestamp(message.thread_ts))
+    || typeof message.text !== 'string' || !message.text.trim() || message.text.length > 16000)
+    return null;
+  return normalizeText({ ...message, channel: conversationId }, { botId, account,
+    eventId: `history:${conversationId}:${message.ts}`, requireMention: false });
 }

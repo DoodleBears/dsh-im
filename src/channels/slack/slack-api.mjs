@@ -251,6 +251,26 @@ export class SlackApi {
     return Array.isArray(value.messages) ? value.messages.find(message => message?.ts === messageTs) ?? null : null;
   }
 
+  historyPage({ channelId, cursor, oldest, latest, inclusive = false, limit, signal } = {}) {
+    return this.#contextPage('conversations.history', { channelId, cursor, oldest, latest, inclusive, limit, signal });
+  }
+
+  threadPage({ channelId, threadTs, cursor, latest, limit, signal } = {}) {
+    return this.#contextPage('conversations.replies', { channelId, threadTs, cursor, latest, limit, signal });
+  }
+
+  #contextPage(method, { channelId, threadTs, cursor, oldest, latest, inclusive, limit, signal }) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 20
+      || (cursor !== undefined && (typeof cursor !== 'string' || !cursor || cursor.length > 1800)))
+      throw new TypeError('Invalid Slack history page');
+    return this.#request(method, { tokenKind: 'bot', signal, body: {
+      channel: slackId(channelId, 'channel id'), limit,
+      ...(threadTs ? { ts: requiredString(threadTs, 'thread timestamp') } : {}),
+      ...(cursor ? { cursor } : {}), ...(oldest ? { oldest } : {}), ...(latest ? { latest } : {}),
+      ...(inclusive !== undefined ? { inclusive } : {}),
+    } });
+  }
+
   openConnection(options = {}) {
     return this.#request('apps.connections.open', {
       ...options,

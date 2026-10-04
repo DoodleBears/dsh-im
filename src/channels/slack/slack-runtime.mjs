@@ -1,6 +1,7 @@
 import { extractConnectionEvidence, createConnectionDiagnostics, atConnectionStage } from '../shared/connection-error.mjs';
 import { splitMessageText } from '../shared/editable-message-stream.mjs';
 import { t } from '../shared/i18n.mjs';
+import { createSlackHistoryReader } from './history-reader.mjs';
 import { SlackApi } from './slack-api.mjs';
 import { createSlackBridgeStatus, SlackHarnessBridge } from './slack-bridge.mjs';
 import { normalizeSlackExternalText, verifiedSlackAccount, slackRefusal, slackTimestamp } from './external-consumer.mjs';
@@ -531,13 +532,35 @@ export class SlackRuntime {
     const source = route.messageId === route.threadId
       ? await this.#api.getMessage({ channelId: route.conversationId, messageTs: route.messageId, signal })
       : await this.#api.threadMessage({ channelId: route.conversationId, threadTs: route.threadId, messageTs: route.messageId, signal });
-    if (!source) throw slackRefusal('source-not-found');
+    if (!source || source.deleted === true) throw slackRefusal('source-not-found');
     if (source.ts !== route.messageId || (source.thread_ts ?? source.ts) !== route.threadId
       || source.user !== route.actorId || source.bot_id || source.app_id)
       throw slackRefusal('stale-route');
     signal?.throwIfAborted();
     return { messageId: route.messageId, conversationId: route.conversationId,
       actorId: source.user, threadId: route.threadId, rootId: route.rootId };
+  }
+
+  #readHistory = createSlackHistoryReader();
+
+  async historyChecked(route, query, { signal } = {}) {
+    const generation = this.#generation;
+    const assertCurrent = () => {
+      if (generation !== this.#generation || this.#stopped || !this.#status.ready)
+        throw slackRefusal('capability-unavailable');
+    };
+    // Same membership/author/native thread qualification as a checked reply, every page.
+    try { await this.qualifyReplyChecked(route, { signal }); }
+    catch (error) {
+      if (error?.code === 'reply-permission-denied' || ['missing_scope', 'not_in_channel',
+        'channel_not_found', 'is_archived', 'no_permission'].includes(error?.providerCode))
+        throw slackRefusal('history-permission-denied');
+      if (error?.providerCode === 'thread_not_found') throw slackRefusal('thread-unavailable');
+      throw error;
+    }
+    assertCurrent();
+    return this.#readHistory(this.#api, { botId: this.#config.botId, account: this.#account },
+      route, query, signal, assertCurrent);
   }
 
   async #postChecked(input) {
@@ -787,6 +810,7 @@ export class SlackRuntime {
   }
 
   async stop() {
+    this.#readHistory = createSlackHistoryReader();
     this.#stopped = true;
     this.#generation += 1;
     this.#abortController?.abort();
