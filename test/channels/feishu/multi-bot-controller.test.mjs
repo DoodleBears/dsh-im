@@ -1447,3 +1447,37 @@ test('releasing the exclusive consumer cancels a pending history read', async ()
  const pending=fx.controller.historyChecked(existing.id,{}, {},options);await started;dispose();release();
  await assert.rejects(pending,{code:'consumer-unavailable'});await fx.controller.close();
 });
+
+
+test('external callback awaits checked history without deadlocking acknowledgement or later operations', async () => {
+  const existing = bot('bot_nested_history', 'nested_history');
+  const fx = fixture({ bots: [existing], secrets: { [existing.secretRef]: 'fixture-secret' },
+    verifyApp: async () => ({ openId: existing.botOpenId }) });
+  await fx.controller.initialize();
+  const account = await fx.controller.describeDeliveryAccount(existing.id);
+  let reads = 0;
+  const dispose = await fx.controller.consumeInbound(existing.id, { expectedFingerprint: account.account.fingerprint,
+    onEvent: async (event, { signal }) => {
+      const page = await fx.controller.historyChecked(existing.id, event.reply, { scope: 'thread', limit: 1 },
+        { expectedFingerprint: account.account.fingerprint, signal });
+      assert.equal(page.events[0].text, 'context'); return { accepted: true };
+    } });
+  const runtime = fx.runtimes.get(existing.id).at(-1);
+  runtime.historyChecked = async (_, route, __, { signal }) => {
+    signal.throwIfAborted(); reads++; assert.equal(route.threadId, 'topic');
+    return { events: [{ text: 'context' }] };
+  };
+  const incoming = runtime.acceptExternal({ event_id: 'event', app_id: existing.appId,
+    sender: { sender_type: 'user', sender_id: { open_id: 'human' } },
+    message: { message_id: 'source', chat_id: 'group', chat_type: 'group', message_type: 'text', thread_id: 'topic',
+      create_time: '1790787600000', content: JSON.stringify({ text: 'read context' }) } });
+  let timer;
+  try {
+    await Promise.race([incoming, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('callback history deadlocked')), 300); })]);
+    assert.equal(reads, 1);
+    await fx.controller.disconnectBot(existing.id);
+    assert.equal(fx.controller.status().totals.connected, 0);
+  } finally {
+    clearTimeout(timer); dispose(); await incoming.catch(() => {}); await fx.controller.close();
+  }
+});
