@@ -38,7 +38,8 @@ export function normalizeSlackExternalText(payload, { botId, account }) {
     || typeof payload.event_id !== 'string' || !/^Ev[A-Za-z0-9]{4,126}$/.test(payload.event_id)
     || typeof event.text !== 'string' || !event.text.trim() || event.text.length > 16000) throw slackRefusal('invalid-inbound');
   const mentions = [...event.text.matchAll(/<@([UW][A-Z0-9]{4,30})>/g)]
-    .map(([key, id]) => Object.freeze({ key, id }));
+    .map(([key, id]) => Object.freeze({ key, id,
+      ...(id === account.userId && account.name ? { name: account.name } : {}) }));
   if (mentions.length > 100) throw slackRefusal('invalid-inbound');
   const mentionedAccount = mentions.some(mention => mention.id === account.userId);
   if (!mentionedAccount) return null;

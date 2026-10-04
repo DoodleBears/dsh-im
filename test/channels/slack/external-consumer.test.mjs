@@ -91,6 +91,7 @@ test('native Slack message/channel/thread IDs are preserved independently of del
   assert.equal(root.messageId, '1791127736.123456');
   assert.equal(root.eventId, 'Ev12345678');
   assert.equal(root.conversation.id, 'C12345678');
+  assert.equal(root.mentions[0].name, 'QA Bot');
   assert.equal(root.reply.threadId, root.messageId);
   assert.equal(root.reply.parentId, undefined);
   const child = normalizeSlackExternalText(payload({ thread_ts: '1791127600.000001' }), { botId, account });
