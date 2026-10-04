@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- Checked Lark nearby context traverses all supported visible Human text in the five-minute window, then fills sparse sides to configurable message minima (default 10 before / 5 after). Fresh sources terminate without querying a future range; every call remains bounded and rechecks the authenticated anchor.
+  经过校验的 Lark 附近上下文先遍历五分钟窗口内可见、受支持的用户文本，再按可配置的前后消息保底条数补齐稀疏侧（默认前 10／后 5）。新消息不会查询未来区间；每次调用仍有界并重新校验原消息身份。
+
 - 飞书/Lark 可由同 Host 应用独占接收文本消息，等待应用确认持久化后返回，并按校验过的原消息/话题回复；外部消费模式在释放或重启后不回退到独立 Session。
   Same-Host applications can opt into exclusive Feishu/Lark text intake, acknowledge after durable acceptance, and reply through a checked original-message/topic route. Releasing or restarting an external consumer never falls back to a standalone Session.
 
