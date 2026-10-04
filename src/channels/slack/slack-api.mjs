@@ -226,6 +226,31 @@ export class SlackApi {
     return this.#request('auth.test', { ...options, tokenKind: 'bot' });
   }
 
+  async botInfo({ botId, signal } = {}) {
+    const value = await this.#request('bots.info', { tokenKind: 'bot', signal,
+      body: { bot: slackId(botId, 'bot id') } });
+    return value.bot;
+  }
+
+  async userInfo({ userId, signal } = {}) {
+    const value = await this.#request('users.info', { tokenKind: 'bot', signal,
+      body: { user: slackId(userId, 'user id') } });
+    return value.user;
+  }
+
+  async conversationInfo({ channelId, signal } = {}) {
+    const value = await this.#request('conversations.info', { tokenKind: 'bot', signal,
+      body: { channel: slackId(channelId, 'channel id') } });
+    return value.channel;
+  }
+
+  async threadMessage({ channelId, threadTs, messageTs, signal } = {}) {
+    const value = await this.#request('conversations.replies', { tokenKind: 'bot', signal,
+      body: { channel: slackId(channelId, 'channel id'), ts: requiredString(threadTs, 'thread timestamp'),
+        oldest: requiredString(messageTs, 'message timestamp'), latest: messageTs, inclusive: true, limit: 100 } });
+    return Array.isArray(value.messages) ? value.messages.find(message => message?.ts === messageTs) ?? null : null;
+  }
+
   openConnection(options = {}) {
     return this.#request('apps.connections.open', {
       ...options,
@@ -264,10 +289,11 @@ export class SlackApi {
       : null;
   }
 
-  postMessage({ channelId, text, threadTs, signal }) {
+  postMessage({ channelId, text, threadTs, signal, retry = true }) {
     return this.#request('chat.postMessage', {
       tokenKind: 'bot',
       signal,
+      retry,
       body: {
         channel: slackId(channelId, 'channel id'),
         text: safeOutgoingText(text),

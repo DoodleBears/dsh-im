@@ -3,6 +3,7 @@ import { splitMessageText } from '../shared/editable-message-stream.mjs';
 import { t } from '../shared/i18n.mjs';
 import { SlackApi } from './slack-api.mjs';
 import { createSlackBridgeStatus, SlackHarnessBridge } from './slack-bridge.mjs';
+import { normalizeSlackExternalText, verifiedSlackAccount, slackRefusal, slackTimestamp } from './external-consumer.mjs';
 
 const RECONNECT_DELAYS_MS = Object.freeze([1_000, 3_000, 5_000, 10_000, 30_000]);
 const SLACK_MESSAGE_LIMIT = 38_000;
@@ -427,6 +428,8 @@ export class SlackRuntime {
   #generation = 0;
   #stopped = true;
   #starting = null;
+  #externalConsumer;
+  #account;
 
   constructor({
     config,
@@ -436,6 +439,7 @@ export class SlackRuntime {
     state,
     contextEnhancement,
     accessPolicy,
+    externalConsumer,
     logger = console,
     replyTimeoutMs = 600_000,
     connectTimeoutMs = 20_000,
@@ -453,6 +457,7 @@ export class SlackRuntime {
     this.#state = state;
     this.#contextEnhancement = contextEnhancement;
     this.#accessPolicy = accessPolicy;
+    this.#externalConsumer = externalConsumer;
     this.#logger = logger; this.#diagnostics = createConnectionDiagnostics({ channel: 'slack', logger });
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#connectTimeoutMs = connectTimeoutMs;
@@ -474,6 +479,15 @@ export class SlackRuntime {
   }
 
   async sendProactiveText(target, text, options = {}) {
+    if (this.#config.consumerMode === 'external-consumer') {
+      if (!this.#status.ready || !this.#account) throw slackRefusal('bot-not-connected');
+      if (options.expectedFingerprint !== this.#account.fingerprint) throw slackRefusal('account-changed');
+      const channelId = target?.route?.channelId;
+      if (target?.kind !== 'conversation' || typeof channelId !== 'string') throw slackRefusal('invalid-target');
+      await this.#verifyChannel(channelId, options.signal);
+      await this.#postChecked({ channelId, text, signal: options.signal });
+      return { sent: true };
+    }
     if (!this.#status.ready || !this.#bridge) {
       const error = new Error('Slack bot is not connected');
       error.code = 'bot-not-connected';
@@ -495,6 +509,59 @@ export class SlackRuntime {
       channelId,
       ...(threadTs ? { threadTs } : {}),
     }, text, options);
+  }
+
+  async #verifyChannel(channelId, signal) {
+    signal?.throwIfAborted();
+    const channel = await this.#api.conversationInfo({ channelId, signal });
+    if (channel?.id !== channelId || channel.is_member !== true || channel.is_archived === true
+      || channel.is_private === true || channel.is_im === true || channel.is_mpim === true)
+      throw slackRefusal('reply-permission-denied');
+    return channel;
+  }
+
+  async qualifyReplyChecked(route, { signal } = {}) {
+    if (!this.#status.ready || !this.#account || this.#config.consumerMode !== 'external-consumer')
+      throw slackRefusal('capability-unavailable');
+    if (!route || !slackTimestamp(route.messageId) || !slackTimestamp(route.threadId)
+      || route.rootId !== route.threadId || route.parentId !== undefined
+      || typeof route.actorId !== 'string' || !/^[UW][A-Z0-9]{4,30}$/.test(route.actorId))
+      throw slackRefusal('stale-route');
+    await this.#verifyChannel(route.conversationId, signal);
+    const source = route.messageId === route.threadId
+      ? await this.#api.getMessage({ channelId: route.conversationId, messageTs: route.messageId, signal })
+      : await this.#api.threadMessage({ channelId: route.conversationId, threadTs: route.threadId, messageTs: route.messageId, signal });
+    if (!source) throw slackRefusal('source-not-found');
+    if (source.ts !== route.messageId || (source.thread_ts ?? source.ts) !== route.threadId
+      || source.user !== route.actorId || source.bot_id || source.app_id)
+      throw slackRefusal('stale-route');
+    signal?.throwIfAborted();
+    return { messageId: route.messageId, conversationId: route.conversationId,
+      actorId: source.user, threadId: route.threadId, rootId: route.rootId };
+  }
+
+  async #postChecked(input) {
+    try {
+      const sent = await this.#api.postMessage({ ...input, retry: false });
+      if (!slackTimestamp(sent?.ts) || sent.channel !== input.channelId)
+        throw slackRefusal('reply-result-unknown');
+      return sent;
+    } catch (error) {
+      if (['missing_scope', 'not_in_channel', 'channel_not_found', 'is_archived', 'no_permission'].includes(error?.providerCode))
+        throw slackRefusal('reply-permission-denied');
+      throw slackRefusal('reply-result-unknown');
+    }
+  }
+
+  async replyChecked(route, text, { signal, receipt = false, beforeSend } = {}) {
+    const generation = this.#generation;
+    await this.qualifyReplyChecked(route, { signal });
+    if (beforeSend && beforeSend() !== true) throw slackRefusal('stale-route');
+    signal?.throwIfAborted();
+    if (generation !== this.#generation || this.#stopped || !this.#status.ready)
+      throw slackRefusal('capability-unavailable');
+    const sent = await this.#postChecked({ channelId: route.conversationId, threadTs: route.threadId, text, signal });
+    return { sent: true, ...(receipt ? { receipt: { version: 1, messageId: sent.ts, conversationId: sent.channel } } : {}) };
   }
 
   async start() {
@@ -524,6 +591,10 @@ export class SlackRuntime {
       if (`${identity?.team_id}:${identity?.user_id}` !== this.#config.platformId) {
         throw new Error('Slack Bot Token identity does not match the saved bot');
       }
+      if (this.#config.consumerMode === 'external-consumer') {
+        this.#account = verifiedSlackAccount(identity, await api.botInfo({ botId: identity.bot_id, signal: controller.signal }));
+      }
+      if (this.#config.consumerMode !== 'external-consumer') {
       const client = new SlackBotClient({ api, signal: controller.signal, logger: this.#logger });
       this.#bridge = new SlackHarnessBridge({
         bot: client,
@@ -536,6 +607,7 @@ export class SlackRuntime {
         replyTimeoutMs: this.#replyTimeoutMs,
         signal: controller.signal,
       });
+      }
       let timer;
       try {
         await Promise.race([
@@ -579,6 +651,11 @@ export class SlackRuntime {
         if (settled || generation !== this.#generation) return;
         settled = true;
         this.#appId = packet?.connection_info?.app_id ?? null;
+        if (this.#account && this.#appId !== this.#account.appId) {
+          reject(slackRefusal('account-changed'));
+          socket.close(4000, 'Account mismatch');
+          return;
+        }
         this.#reconnectAttempt = 0;
         const now = Date.now();
         this.#status.ready = true;
@@ -604,14 +681,26 @@ export class SlackRuntime {
           markReady(packet);
           return;
         }
-        if (packet.envelope_id && socket.readyState === 1) {
+        const acknowledge = () => {
+          if (generation !== this.#generation || this.#stopped || socket.readyState !== 1) return;
+          if (!packet.envelope_id) return;
           socket.send(JSON.stringify({ envelope_id: packet.envelope_id }));
           this.#status.lastCheckedAt = Date.now();
-        }
+        };
         if (packet.type === 'disconnect') {
           socket.close(4000, 'Slack requested reconnect');
           return;
         }
+        if (this.#config.consumerMode === 'external-consumer') {
+          if (packet.type !== 'events_api' || packet.payload?.type !== 'event_callback') { acknowledge(); return; }
+          void this.#acceptExternal(packet.payload, generation).then(acknowledge).catch(error => {
+            if (generation !== this.#generation || this.#stopped) return;
+            this.#diagnostics.report(error, { operation: 'inbound.accept', botId: this.#config.botId,
+              publicError: { code: error?.code ?? 'ingress-not-accepted', message: 'External consumer did not accept the Slack event.' } });
+          });
+          return;
+        }
+        acknowledge();
         if (packet.type !== 'events_api' || packet.payload?.type !== 'event_callback') return;
         if (this.#appId && packet.payload.api_app_id
           && packet.payload.api_app_id !== this.#appId) return;
@@ -677,6 +766,26 @@ export class SlackRuntime {
     this.#reconnectTimer?.unref?.();
   }
 
+  async #acceptExternal(payload, generation) {
+    if (!this.#account || typeof this.#externalConsumer !== 'function') throw slackRefusal('consumer-unavailable');
+    const evidence = normalizeSlackExternalText(payload, { botId: this.#config.botId, account: this.#account });
+    if (!evidence) return;
+    const signal = this.#abortController.signal;
+    await this.#verifyChannel(evidence.conversation.id, signal);
+    let name;
+    try {
+      const user = await this.#api.userInfo({ userId: evidence.actor.id, signal });
+      if (user?.id === evidence.actor.id) name = user.profile?.display_name || user.real_name || user.name;
+    } catch { signal.throwIfAborted(); }
+    const enriched = { ...evidence,
+      actor: { ...evidence.actor, ...(typeof name === 'string' && name ? { name: name.slice(0, 512) } : {}) } };
+    if (generation !== this.#generation || this.#stopped) throw slackRefusal('cancelled');
+    const result = await this.#externalConsumer(enriched, signal);
+    signal.throwIfAborted();
+    if (result?.accepted !== true) throw slackRefusal('ingress-not-accepted');
+    this.#status.messagesReceived += 1;
+  }
+
   async stop() {
     this.#stopped = true;
     this.#generation += 1;
@@ -690,6 +799,7 @@ export class SlackRuntime {
     this.#bridge = null;
     this.#api = null;
     this.#appId = null;
+    this.#account = null;
     try {
       if (socket && socket.readyState < 2) socket.close(1000, 'Plugin stopped');
     } catch (error) {
