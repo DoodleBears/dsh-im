@@ -60,3 +60,17 @@ test('counts are bounded, continuation cannot change anchor/count/limit, and a s
  for(const value of [-1,21,1.5,'10'])await assert.rejects(readExternalHistory(bot,identity,route,{scope:'nearby',limit:1,beforeCount:value}),{code:'bad-request'});
  assert.equal(bot.calls.length,prior);
 });
+test('fresh anchors exhaust without querying a future supplementary start',async(t)=>{
+ t.mock.method(Date,'now',()=>time+1000);
+ const bot=client([item('om-anchor',0),item('older',-400000)]);
+ const list=bot.im.v1.message.list;
+ bot.im.v1.message.list=async args=>{
+  if(args.params.end_time===undefined && Number(args.params.start_time)*1000>Date.now())
+   throw Error('Lark refuses default end_time earlier than future start_time');
+  return list(args);
+ };
+ const result=await all(bot);
+ assert.deepEqual(result.events.map(e=>e.messageId),['om-anchor','older']);
+ assert.equal(result.pages.at(-1).hasMore,false);
+ assert.equal(bot.calls.length,2);
+});

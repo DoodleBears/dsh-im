@@ -29,7 +29,11 @@ export async function readNearbyHistory(readPage, route, query, anchorTime) {
       : state.phase === 'before' ? { end_time: String(window.start + 1) }
         : { start_time: String(Math.floor(end / 1000)) }),
   };
-  const page = await readPage(params);
+  // Lark defaults an omitted end_time to now and rejects a future start_time.
+  // A fresh anchor has no existing messages beyond its future window boundary.
+  const page = state.phase === 'after' && end >= Date.now()
+    ? { events: [], omitted: 0, hasMore: false }
+    : await readPage(params);
   const events = [];
   for (const event of page.events) {
     const at = Date.parse(event.at);
