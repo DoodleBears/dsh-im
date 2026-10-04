@@ -145,3 +145,28 @@ test('form-encoded Slack history/replies preserve native cursors and bound each 
   assert.equal(requests[1].form.get('ts'), ts(0));
   await assert.rejects(async () => api.historyPage({ channelId: route.conversationId, limit: 21 }), /Invalid/);
 });
+
+test('Slack pinned root is additional to its reply limit and repeats across native thread pages', async () => {
+  const fx = fixture([message(0), message(1, { thread_ts: ts(0) }), message(2, { thread_ts: ts(0) })]);
+  fx.api.threadPage = async query => {
+    const offset = Number(query.cursor ?? 0);
+    const children = [message(1, { thread_ts: ts(0) }), message(2, { thread_ts: ts(0) })];
+    const items = children.slice(offset, offset + query.limit);
+    const next = offset + items.length < children.length ? String(offset + items.length) : '';
+    return { messages: [message(0, { thread_ts: ts(0) }), ...items],
+      has_more: Boolean(next), response_metadata: { next_cursor: next } };
+  };
+  fx.api.threadMessage = fx.api.getMessage;
+  const pages = await exhaust(fx, { scope: 'thread', limit: 1 });
+  assert.deepEqual(pages.flatMap(p => p.events.map(e => e.messageId)), [ts(0), ts(1), ts(2)]);
+});
+
+test('time-bounded Slack thread cursor traverses older chronological chunks with the pinned root repeated', async () => {
+  const fx = fixture([message(0)]);
+  fx.api.threadPage = async query => query.cursor
+    ? { messages: [message(0), message(1, { thread_ts: ts(0) })], has_more: false }
+    : { messages: [message(0), message(2, { thread_ts: ts(0) }), message(3, { thread_ts: ts(0) })],
+      has_more: true, response_metadata: { next_cursor: 'older' } };
+  const pages = await exhaust(fx, { scope: 'thread', limit: 3 });
+  assert.deepEqual(pages.flatMap(p => p.events.map(e => e.messageId)), [ts(0), ts(2), ts(3), ts(1)]);
+});

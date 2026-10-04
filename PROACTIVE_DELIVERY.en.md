@@ -410,7 +410,7 @@ are outside this contract.
 Nearby accepts `beforeCount` (default 10) and `afterCount` (default 5), each 0..20.
 All supported Human text in the inclusive five-minute window on each side is paginated;
 sparse sides supplement the nearest visible messages. Channel history is newest-first;
-native thread replies are earliest-first. Channel/nearby reads have Slack's channel-history
+native thread replies are chronological within each page; time-bounded cursor pages can traverse older chunks. The pinned root is additional to the requested reply count and may repeat, so it is counted once and each request reserves its place. Channel/nearby reads have Slack's channel-history
 coverage, not the complete contents of every child thread. Use thread scope for that.
 
 Continuations are signed by the runtime, bound to source/account/query, and invalidated

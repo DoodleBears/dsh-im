@@ -392,7 +392,7 @@ File metadata is opt-in through `consumeInbound(..., {sourceFiles: true})`; lega
 
 `historyChecked` 查询支持 `group | thread | nearby`、1–20 条原生分页及不透明 cursor。
 附近查询完整翻页读取前后各五分钟的可见 Human 文本，稀疏时补齐最近的前 10／后 5 条；
-`beforeCount`、`afterCount` 可各设为 0–20。频道历史倒序、话题回复正序，分别适配。
+`beforeCount`、`afterCount` 可各设为 0–20。频道历史倒序、话题页内回复正序，而时间限定的原生游标可向旧消息块翻页，分别适配。root 可能额外附加且重复，适配器为它预留空间并只保留一次。
 频道／附近查询遵循 Slack 频道历史的可见范围，不宣称含全部子话题内容；读取子话题使用 thread。
 
 游标由运行实例签名，绑定账号／来源／查询，并在停止后失效；仅含有界原生时间戳和计数，

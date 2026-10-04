@@ -68,16 +68,22 @@ export function createSlackHistoryReader({ now = Date.now } = {}) {
       ...(more ? { nextCursor: encode(binding, state) } : {}), ...(window ? { window } : {}), coverage });
     const page = async (options, direction, bounds = {}) => {
       const raw = await checked(() => query.scope === 'thread'
-        ? api.threadPage({ channelId: route.conversationId, threadTs: route.threadId, ...options, limit: query.limit, signal })
+        ? api.threadPage({ channelId: route.conversationId, threadTs: route.threadId, ...options, limit: Math.max(1, query.limit - 1), signal })
         : api.historyPage({ channelId: route.conversationId, ...options, limit: query.limit, signal }));
-      if (!Array.isArray(raw?.messages) || raw.messages.length > query.limit)
-        throw slackRefusal('history-unavailable');
+      if (!Array.isArray(raw?.messages)) throw slackRefusal('history-unavailable');
+      let messages = raw.messages;
+      const pinned = query.scope === 'thread' && messages[0]?.ts === route.threadId;
+      // Slack may add the root outside the requested reply count, including on continuation pages.
+      const nativeBound = query.scope === 'thread' ? Math.max(1, query.limit - 1) : query.limit;
+      if (messages.length > nativeBound + (pinned ? 1 : 0)) throw slackRefusal('history-unavailable');
+      if (pinned && state.rootSeen) messages = messages.slice(1);
+      if (pinned) state.rootSeen = true;
       const cursor = raw.response_metadata?.next_cursor?.trim() || undefined;
       if ((cursor && (typeof cursor !== 'string' || cursor.length > 1800 || cursor === state.page))
         || (raw.has_more === true && !cursor) || (cursor && raw.messages.length === 0))
         throw slackRefusal('history-unavailable');
-      let last = state.last;
-      for (const message of raw.messages) {
+      let last = query.scope === 'thread' ? undefined : state.last;
+      for (const message of messages) {
         if (!slackTimestamp(message?.ts) || (last && compare(message.ts, last) !== direction)
           || (bounds.lower && (compare(message.ts, bounds.lower) < 0
             || (!bounds.inclusive && message.ts === bounds.lower)))
@@ -88,13 +94,44 @@ export function createSlackHistoryReader({ now = Date.now } = {}) {
         if (query.scope === 'thread' && (message.thread_ts ?? message.ts) !== route.threadId)
           throw slackRefusal('stale-route');
       }
+      if (query.scope === 'thread') {
+        const children = messages.filter(message => message.ts !== route.threadId);
+        if (children.length) {
+          const low = children[0].ts;
+          const high = children.at(-1).ts;
+          if (state.threadLow) {
+            const direction = compare(high, state.threadLow) < 0 ? 'older'
+              : compare(low, state.threadHigh) > 0 ? 'newer' : undefined;
+            if (!direction || (state.threadDirection && direction !== state.threadDirection))
+              throw slackRefusal('history-unavailable');
+            state.threadDirection = direction;
+            if (direction === 'older') state.threadLow = low;
+            else state.threadHigh = high;
+          } else { state.threadLow = low; state.threadHigh = high; }
+        }
+      }
       state.page = cursor;
       state.last = last;
-      return { messages: raw.messages, more: Boolean(cursor) };
+      if (messages.length > query.limit) {
+        // Only limit=1 can leave one extra root-page item. Re-read its exact native ID next call.
+        state.pending = messages.at(-1).ts;
+        messages = messages.slice(0, query.limit);
+      }
+      return { messages, more: Boolean(cursor) || Boolean(state.pending) };
     };
     try {
       check();
       if (query.scope !== 'nearby') {
+        if (state.pending) {
+          const pending = state.pending;
+          const raw = await checked(() => api.threadMessage({ channelId: route.conversationId,
+            threadTs: route.threadId, messageTs: pending, signal }));
+          if (raw && (raw.ts !== pending || (raw.thread_ts ?? raw.ts) !== route.threadId))
+            throw slackRefusal('stale-route');
+          const event = raw ? normalize(raw) : null;
+          delete state.pending;
+          return await output(event ? [event] : [], event ? 0 : 1, Boolean(state.page));
+        }
         const result = await page({ cursor: state.page, latest: state.snapshot }, query.scope === 'thread' ? 1 : -1,
           { upper: state.snapshot });
         const events = result.messages.map(normalize).filter(Boolean);
