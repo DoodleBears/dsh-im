@@ -231,6 +231,18 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
   if (typeof stateFor !== 'function') {
     throw new TypeError('delivery adapter requires a bot state getter');
   }
+  const syncTarget = async (botId, targetId, sessionId) => {
+    const configured = sessionSyncConfigs(workspaces, botId).find((entry) => entry.targetId === targetId);
+    const target = workspaces.deliveryTargetFor(botId, targetId);
+    if (!configured || !target || !privateConversationKeyMatchesTarget(channel, configured.conversationKey, target)) {
+      throw sessionSyncUnavailable('Session sync target is no longer enabled');
+    }
+    const sessions = stateSessions(await stateFor(botId));
+    if (sessions?.[configured.conversationKey] !== sessionId) {
+      throw sessionSyncUnavailable('Session sync target is no longer bound to this Session');
+    }
+    return { target, conversationKey: configured.conversationKey };
+  };
   return Object.freeze({
     channel,
     consumeInbound: (botId, options) => {
@@ -349,20 +361,41 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
       }
       return matches;
     },
+    async describeSessionSyncApprovalTarget(botId, targetId, sessionId) {
+      const { conversationKey } = await syncTarget(botId, targetId, sessionId);
+      return { conversationKey };
+    },
+    async presentSessionSyncApproval(botId, targetId, sessionId, interaction, options = {}) {
+      const original = await syncTarget(botId, targetId, sessionId);
+      if (typeof coreController.presentSessionSyncApproval !== 'function') {
+        throw sessionSyncUnavailable('This channel cannot present synced approvals');
+      }
+      const validate = async () => {
+        const current = await syncTarget(botId, targetId, sessionId);
+        if (current.conversationKey !== original.conversationKey || options.signal?.aborted) {
+          throw sessionSyncUnavailable('The approval target changed or the approval ended');
+        }
+      };
+      const guarded = {
+        ...interaction,
+        respond: async (result, responseOptions) => {
+          try { await validate(); }
+          catch (error) {
+            await interaction.withdraw?.();
+            throw Object.assign(new Error('Approval route is no longer available', { cause: error }), {
+              code: 'interaction-not-pending',
+            });
+          }
+          return interaction.respond(result, responseOptions);
+        },
+      };
+      return coreController.presentSessionSyncApproval(botId, original.target, guarded, {
+        ...options, key: original.conversationKey, validate,
+      });
+    },
     async sendSessionSyncText(botId, targetId, sessionId, text, options = {}) {
       if (typeof text !== 'string' || !text.trim()) throw new TypeError('text is required');
-      const configured = sessionSyncConfigs(workspaces, botId)
-        .find((target) => target.targetId === targetId);
-      const target = workspaces.deliveryTargetFor(botId, targetId);
-      if (!configured || !target || !privateConversationKeyMatchesTarget(
-        channel,
-        configured.conversationKey,
-        target,
-      )) throw sessionSyncUnavailable('Session sync target is no longer enabled');
-      const sessions = stateSessions(await stateFor(botId));
-      if (sessions?.[configured.conversationKey] !== sessionId) {
-        throw sessionSyncUnavailable('Session sync target is no longer bound to this Session');
-      }
+      const { target } = await syncTarget(botId, targetId, sessionId);
       if (typeof coreController.sendProactiveText !== 'function') {
         throw new TypeError('delivery controller cannot send proactive text');
       }

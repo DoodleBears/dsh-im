@@ -44,7 +44,7 @@ function pluginPaths(config) {
 
 export async function createProductionController(ctx, config = {}, internals = {}) {
   if (!ctx?.credentials) throw new TypeError('dsh-im Enterprise WeChat requires ctx.credentials');
-  const connection = harnessConnection(ctx, config);
+  const connection = harnessConnection(ctx, config, { competitiveApprovals: true });
 
   const ConfigStore = internals.ConfigStore ?? WecomConfigStore;
   const StateStore = internals.StateStore ?? WecomStateStore;

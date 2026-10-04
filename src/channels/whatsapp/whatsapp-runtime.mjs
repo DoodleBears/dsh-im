@@ -876,6 +876,16 @@ export class WhatsappRuntime {
     return { sent: true };
   }
 
+  async presentSessionSyncApproval(target, interaction, options = {}) {
+    if (!this.#status.ready || !this.#bridge) return false;
+    const actor = typeof target?.route?.jid === 'string' ? target.route.jid.trim() : '';
+    if (!actor) return false;
+    return this.#bridge.presentSessionSyncApproval(interaction, {
+      key: options.key, actor, validate: options.validate,
+      send: (text) => this.sendProactiveText(target, text),
+    }, options);
+  }
+
   async sendProactiveText(target, text, { signal } = {}) {
     const jid = typeof target?.route?.jid === 'string' ? target.route.jid.trim() : '';
     const validUser = target?.kind === 'user'

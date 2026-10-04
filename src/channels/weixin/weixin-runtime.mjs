@@ -392,6 +392,16 @@ export class WeixinRuntime {
     return result;
   }
 
+  async presentSessionSyncApproval(target, interaction, options = {}) {
+    if (!this.#status.ready || !this.#bridge) return false;
+    const actor = typeof target?.route?.toUserId === 'string' ? target.route.toUserId.trim() : '';
+    if (!actor) return false;
+    return this.#bridge.presentSessionSyncApproval(interaction, {
+      key: options.key, actor, validate: options.validate,
+      send: (text) => this.sendProactiveText(target, text),
+    }, options);
+  }
+
   async sendProactiveText(target, text, { signal } = {}) {
     const toUserId = typeof target?.route?.toUserId === 'string'
       ? target.route.toUserId.trim() : '';

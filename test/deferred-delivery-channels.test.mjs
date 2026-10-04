@@ -145,7 +145,12 @@ for (const channel of ['feishu', 'wecom', 'weixin', 'dingtalk', 'qq', ...Object.
     const restarted = create(restored);
     await restarted.waitForIdle();
     assert.equal(sent.filter((row) => row.text === ANSWER).length, 0);
-    history = completeHistory;
+    history = channel === 'qq' ? [
+      ...openHistory,
+      { seq: 3, type: 'assistant/message', data: { turn: 3, step: 0, message: { content: [{ type: 'text', text: 'Checking before timeout' }, { type: 'tool-call', name: 'bash' }] } } },
+      { seq: 4, type: 'tool/call', data: { turn: 3, step: 0, name: 'bash' } },
+      { seq: 5, type: 'assistant/message', data: { turn: 3, step: 1, message: { content: [{ type: 'text', text: ANSWER }] } } }, { ...end, seq: 6 },
+    ] : completeHistory;
     await Promise.all([listeners.at(-1).onReconnect(), listeners.at(-1).onSessionEvent({ sessionId: 'session', event: end })]);
     await restarted.waitForIdle();
     const results = sent.filter((row) => row.text === ANSWER);

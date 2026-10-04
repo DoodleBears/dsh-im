@@ -78,8 +78,12 @@ export default {
     'The model rejected the current content. Revise the request and try again.',
   '模型达到输出长度上限，但没有生成可显示的结果。请缩小任务范围后重试。':
     'The model reached its output limit without producing a displayable result. Reduce the task scope and try again.',
-  '任务正在等待无法在当前渠道完成的操作。请在 DeepSeek Harness 中处理后再试。':
-    'The task is waiting for an action that cannot be completed in this channel. Handle it in DeepSeek Harness, then try again.',
+  '本轮处理被阻止，未能完成。请在 DSH 中查看会话状态和相关提示。':
+    'This turn was blocked and did not finish. Check the Session status and related notices in DSH.',
+  '当前会话已归档，无法继续处理。请在 DSH 中取消归档，或发送 /new 创建新会话。':
+    'The current Session is archived and cannot continue. Unarchive it in DSH, or send /new to create a new Session.',
+  '本条消息可能仍在会话队列中，请先到 DSH 查看状态，避免重复提交。':
+    'This message may still be queued in the Session. Check its status in DSH before submitting it again.',
   '任务被意外中断，本次未完成。请重试。':
     'The task was unexpectedly interrupted and did not finish. Please try again.',
   '当前会话已不存在。请发送 /new 创建新会话后重试。':

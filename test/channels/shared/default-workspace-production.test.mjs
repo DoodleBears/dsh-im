@@ -48,7 +48,7 @@ for (const channel of channels) {
         async stop() {}
       }
       const start = () => createProductionController({
-        credentials: {}, apiProxy: {},
+        credentials: {}, typertGateway: { invoke() {}, stream() {} },
         logger: () => ({ error() {}, warn() {}, info() {}, debug() {} }),
       }, { dshHome, workspacesPath, ...(mode === 'channel' ? { workspace } : {}) }, {
         ConfigStore, StateStore, HarnessClient: Harness, Controller, Runtime, FeishuRuntime: Runtime,

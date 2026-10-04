@@ -473,6 +473,18 @@ export class SlackRuntime {
     return this.#bridge.sendConnectionTest(text);
   }
 
+  async presentSessionSyncApproval(target, interaction, options = {}) {
+    if (!this.#status.ready || !this.#bridge) return false;
+    const channelId = target?.route?.channelId;
+    const channel = await this.#api.conversationInfo({ channelId, signal: options.signal });
+    const actor = channel?.is_im === true && typeof channel.user === 'string' ? channel.user : '';
+    if (!actor) return false;
+    return this.#bridge.presentSessionSyncApproval(interaction, {
+      key: options.key, actor, validate: options.validate,
+      send: (text) => this.sendProactiveText(target, text),
+    }, options);
+  }
+
   async sendProactiveText(target, text, options = {}) {
     if (!this.#status.ready || !this.#bridge) {
       const error = new Error('Slack bot is not connected');

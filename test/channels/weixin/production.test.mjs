@@ -99,7 +99,7 @@ test('production CDN uploads isolate the global dispatcher, honour proxy bypass,
       constructor(options) { api = options.api; }
       async close() { if (scenario.failure === 'controller') throw closeError; }
     }
-    const production = await createProductionController({ credentials: {}, apiProxy: {} }, { dataDir }, {
+    const production = await createProductionController({ credentials: {}, typertGateway: { invoke() {}, stream() {} } }, { dataDir }, {
       ConfigStore, HarnessClient: Harness, Controller,
       createConnectionSupervisor: () => ({ ready: Promise.resolve(), start() { return this; },
         async close() { if (scenario.failure === 'supervisor') throw closeError; },
@@ -168,7 +168,7 @@ test('Weixin production has no per-bot result-file Gate', async (t) => {
   };
   const ctx = {
     credentials: {},
-    apiProxy: {},
+    typertGateway: { invoke() {}, stream() {} },
     logger: () => ({ error() {}, warn() {}, info() {}, debug() {} }),
   };
 
@@ -221,7 +221,7 @@ test('production preserves workspace/session isolation and reports a committed c
     async start() { this.status = { ready: true, weixinConnectionState: 'connected', harnessReachable: true }; }
     async stop() { this.status = { ready: false, weixinConnectionState: 'idle' }; }
   }
-  const ctx = { apiProxy: {}, credentials: {
+  const ctx = { typertGateway: { invoke() {}, stream() {} }, credentials: {
     resolve: async ref => credentials.has(ref) ? { value: credentials.get(ref) } : undefined,
     set: async (ref, value) => credentials.set(ref, value), unset: async ref => credentials.delete(ref),
   }, logger: { error: text => logs.push(text), warn: text => logs.push(text), info: text => logs.push(text) } };

@@ -429,3 +429,73 @@ test('a reply waiting for provider preflight cannot send after its Registration 
   await assert.rejects(result, { code: 'provider-unavailable' });
   assert.equal(sends, 0);
 });
+
+function approvalAdapter(channel, keys, { present = async () => true } = {}) {
+  const botId = `bot_${channel.replaceAll('-', '_')}`;
+  const adapter = memoryAdapter({ channel, botId });
+  const offers = [];
+  const notices = [];
+  Object.assign(adapter, {
+    setSessionSync() {},
+    listSessionSyncTargets: () => keys.map((_, index) => ({ botId, targetId: `target${index}` })),
+    describeSessionSyncApprovalTarget: (_bot, targetId) => ({ conversationKey: keys[Number(targetId.slice(6))] }),
+    sendSessionSyncText: async (...args) => notices.push(args),
+    presentSessionSyncApproval: async (...args) => { offers.push(args); return present(...args); },
+  });
+  return { adapter, offers, notices };
+}
+
+for (const channel of ['feishu', 'weixin', 'dingtalk', 'wecom', 'wecom-app', 'qq', 'telegram', 'slack', 'discord', 'whatsapp', 'matrix']) {
+  test(`${channel}: one real bound private chat gets one approval despite target aliases`, async () => {
+    const service = createDeliveryService();
+    const { adapter, offers, notices } = approvalAdapter(channel, ['private:actor', 'private:actor']);
+    service.registerAdapter(adapter);
+    const interaction = { payload: { toolName: 'bash' } };
+    assert.equal(await service.presentSessionSyncApproval('session', interaction, {
+      completion: new Promise(() => {}),
+    }), true);
+    assert.equal(offers.length, 1);
+    assert.equal(offers[0][3], interaction);
+    assert.equal(notices.length, 0);
+  });
+}
+
+test('multiple bound chats receive a Web notice and cannot compete for approval', async () => {
+  const service = createDeliveryService();
+  const first = approvalAdapter('feishu', ['p2p:a']);
+  const second = approvalAdapter('telegram', ['direct:2']);
+  service.registerAdapter(first.adapter);
+  service.registerAdapter(second.adapter);
+  let finish;
+  const completion = new Promise((resolve) => { finish = resolve; });
+  assert.equal(await service.presentSessionSyncApproval('session', { payload: { toolName: 'bash' } }, { completion }), false);
+  assert.equal(first.offers.length + second.offers.length, 0);
+  assert.match(first.notices[0][3], /Web/);
+  finish('unavailable');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(first.notices.at(-1)[3], /未获批准/);
+});
+
+for (const channel of ['imessage', 'email', 'office']) {
+  test(`${channel}: excluded channels never receive competitive approvals`, async () => {
+    const service = createDeliveryService();
+    const { adapter, offers, notices } = approvalAdapter(channel, ['private:actor']);
+    service.registerAdapter(adapter);
+    assert.equal(await service.presentSessionSyncApproval('session', { payload: { toolName: 'bash' } }), false);
+    assert.equal(offers.length + notices.length, 0);
+  });
+}
+
+
+test('an unresolved second binding cannot make the first chat look unique', async () => {
+  const service = createDeliveryService();
+  const first = approvalAdapter('feishu', ['p2p:a']);
+  const second = approvalAdapter('telegram', ['direct:2']);
+  second.adapter.describeSessionSyncApprovalTarget = () => { throw new Error('state unavailable'); };
+  service.registerAdapter(first.adapter);
+  service.registerAdapter(second.adapter);
+  assert.equal(await service.presentSessionSyncApproval('session', { payload: { toolName: 'bash' } }, {
+    completion: new Promise(() => {}),
+  }), false);
+  assert.equal(first.offers.length + second.offers.length, 0);
+});

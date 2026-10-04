@@ -1354,3 +1354,41 @@ test('Slack runtime opens Socket Mode, acknowledges envelopes, and becomes ready
   assert.equal(errors.length, 2);
   assert.equal(runtime.status.ready, false);
 });
+
+
+test('slack synced approval accepts the DM recipient, never the channel id as actor', async () => {
+  let socket;
+  let finish;
+  let result;
+  const notices = [];
+  const completion = new Promise(resolve => { finish = resolve; });
+  const runtime = new SlackRuntime({
+    config: { botId: 'slack_test', platformId: 'T12345678:U12345678' }, botToken: BOT_TOKEN, appToken: APP_TOKEN,
+    harness: { ensureRunning: async () => true, ask: () => assert.fail('approval must not create a prompt') },
+    state: { hasSeen: () => false, markSeen: async () => {}, sessionFor: () => null },
+    createApi: () => ({ authTest: async () => ({ team_id: 'T12345678', user_id: 'U12345678' }), openConnection: async () => ({ url: 'wss://wss-primary.slack.com/link/?ticket=test' }), conversationInfo: async () => ({ is_im: true, user: 'U87654321' }), postMessage: async r => { notices.push(r.text); return { ts: '1700000000.900' }; } }),
+    createWebSocket: () => {
+      socket = new FakeSocket();
+      queueMicrotask(() => socket.emit('message', { data: JSON.stringify({ type: 'hello', connection_info: { app_id: 'A12345678' } }) }));
+      return socket;
+    },
+    random: () => 0.5, logger: { warn() {}, error() {} },
+  });
+  const emit = actor => socket.emit('message', { data: JSON.stringify({ type: 'events_api', envelope_id: 'env-' + actor, payload: { type: 'event_callback', api_app_id: 'A12345678', event_id: 'Ev-' + actor, event: { type: 'message', channel_type: 'im', channel: 'D12345678', user: actor, ts: '1700000000.001', text: 'yes' } } }) });
+  try {
+    await runtime.start();
+    assert.equal(await runtime.presentSessionSyncApproval({ kind: 'conversation', route: { channelId: 'D12345678' } }, {
+      kind: 'approval', rpcId: 'rpc-sync', interactionId: 'sync', sessionId: 's',
+      payload: { type: 'approval/requested', sessionId: 's', approvalId: 'sync', toolName: 'bash', callId: 'call' },
+      toolCall: { name: 'bash', callId: 'call', arguments: '{"command":"echo safe"}' },
+      respond: async value => { result = value; finish(value.value.outcome); },
+      withdraw: async () => finish('unavailable'),
+    }, { key: 'direct:D12345678', completion }), true);
+    emit('D12345678');
+    await eventually(() => notices.some(text => text.includes('只有发起当前任务')));
+    assert.equal(result, undefined);
+    emit('U87654321');
+    await eventually(() => result);
+    assert.equal(result.value.outcome, 'allowed-once');
+  } finally { await runtime.stop(); }
+});
