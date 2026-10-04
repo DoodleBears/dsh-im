@@ -401,6 +401,33 @@ test('ask uses an initially empty in-process mux and correlates replies with its
   assert.equal(host.streams.size, 0, 'ask completion must dispose its mux subscription');
 });
 
+for (const finalAnswerOnly of [false, true]) {
+for (const finalText of ['Answer', '']) {
+  test(`ask selects final text without losing progress (finalOnly=${finalAnswerOnly}, empty=${!finalText})`, async () => {
+    const host = hostFixture();
+    const updates = [];
+    host.onPrompt = (rpcId) => {
+      const events = [
+        { type: 'turn/start', data: { turn: 1 } },
+        { type: 'user/message', data: { turn: 1, source: { rpcId } } },
+        { type: 'assistant/message', data: { turn: 1, step: 0, message: { content: [{ type: 'text', text: 'Checking' }, { type: 'tool-call', name: 'bash' }] } } },
+        { type: 'tool/call', data: { turn: 1, step: 0, name: 'bash' } },
+        { type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: finalText }] } } },
+        { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+      ];
+      events.forEach((event, seq) => host.append({ ...event, seq }));
+    };
+    const answer = await localClient(host.apiProxy).ask('session', 'hello', {
+      finalAnswerOnly, progressMode: 'all', onUpdate: update => updates.push(update),
+      onInteraction: () => {}, timeoutMs: 1000,
+    });
+    assert.equal(answer, finalAnswerOnly ? finalText || '本轮处理已结束，没有文本回复。' : ['Checking', finalText].filter(Boolean).join('\n\n'));
+    assert.equal(updates.some(update => update.type === 'tool'), true);
+    assert.equal(updates.some(update => update.type === 'assistant-message' && update.text === 'Checking'), true);
+  });
+}
+}
+
 test('live ask consumes transient reasoning from mux even when history never retains it', async () => {
   const host = hostFixture();
   const updates = [];

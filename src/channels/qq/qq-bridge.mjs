@@ -488,6 +488,7 @@ export class QqHarnessBridge {
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#signal = signal;
     this.#deferred = createDeferredDeliveryCoordinator({ harness, state, signal, logger,
+      finalAnswerOnly: true,
       deliver: (entry, outcome) => this.#deliverDeferredOutcome(entry, outcome),
     });
     this.#fetchImpl = fetchImpl;
@@ -1085,6 +1086,7 @@ export class QqHarnessBridge {
             signal: this.#signal,
             control: { owner: this, key },
             progressMode: 'all',
+            finalAnswerOnly: true,
             onUpdate: (update) => {
               if (update.error) {
                 const name = (nonEmptyString(update.toolName) ?? t('工具'))

@@ -24,6 +24,7 @@ function orderedEvents(history) {
 export function createDeferredDeliveryCoordinator({
   harness, state, deliver, signal, logger = console,
   retryDelayMs = 1_000, pollDelayMs = 30_000, watch = true,
+  finalAnswerOnly = false,
 } = {}) {
   const enabled = ['deferredEntries', 'putDeferred', 'patchDeferred', 'removeDeferred']
     .every((name) => typeof state?.[name] === 'function');
@@ -100,7 +101,7 @@ export function createDeferredDeliveryCoordinator({
       }
       const outcome = targetTurn === null
         ? { found: false, endSeq: -1, turn: null }
-        : extractCompletedTurnAnswer(ordered, { turn: targetTurn });
+        : extractCompletedTurnAnswer(ordered, { turn: targetTurn, finalAnswerOnly });
       const hasStart = ordered.some((event) => event.type === 'turn/start' && event.data?.turn === targetTurn);
       if (!history.hasMore || hasStart) return { ...outcome, turn: targetTurn };
       const oldest = batch[0]?.seq;

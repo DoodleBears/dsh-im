@@ -6,6 +6,11 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+### Fixed / 修复
+
+- QQ 正常回复和超时补发只包含最后一次工具调用后的答复正文，避免把“正在查询”等过程文字混入最终答案；保留正文分段、工具错误提示及停止后的部分回复。（[#310](https://github.com/xmanrui/dsh-im/issues/310)）
+  QQ replies and deferred deliveries now retain answer text after the last tool call, excluding intermediate progress text while preserving answer paragraphs, tool error notices, and partial replies after stopping. ([#310](https://github.com/xmanrui/dsh-im/issues/310))
+
 ## [4.35.0] - 2026-10-04
 
 ### Added / 新增

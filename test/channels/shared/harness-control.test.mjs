@@ -244,7 +244,7 @@ test('selectSessionModel holds the maintenance executor across its RPC', async (
   assert.equal(rpcOptions.signal.aborted, true, 'maintenance cancellation must abort the RPC');
 });
 
-function controlledTurn({ sessionId, initialEnd = false, controlExecutor } = {}) {
+function controlledTurn({ sessionId, initialEnd = false, controlExecutor, toolAfterText = false } = {}) {
   const id = sessionId ?? `session-${Math.random()}`;
   const calls = [];
   const admitted = deferred();
@@ -279,9 +279,12 @@ function controlledTurn({ sessionId, initialEnd = false, controlExecutor } = {})
         },
       } });
     }
+    if (answer && toolAfterText) {
+      events.push({ event: { seq: 4, type: 'tool/call', data: { turn: 7, name: 'bash' } } });
+    }
     if (ended) {
       events.push({ event: {
-        seq: 4,
+        seq: toolAfterText ? 5 : 4,
         type: 'turn/end',
         data: { turn: 7, reason: endReason },
       } });
@@ -461,9 +464,9 @@ test('control methods require exact owner identity, key, and Session before any 
 });
 
 test('a stopped turn returns partial text instead of a generic failure', async () => {
-  const turn = controlledTurn();
+  const turn = controlledTurn({ toolAfterText: true });
   const control = { owner: {}, key: 'direct:partial' };
-  const asking = turn.client.ask(turn.id, 'work', { control, timeoutMs: 2_000 });
+  const asking = turn.client.ask(turn.id, 'work', { control, timeoutMs: 2_000, finalAnswerOnly: true });
   await turn.admitted;
   assert.equal(await turn.client.stopActiveTurn(turn.id, control), true);
   turn.finish({ text: 'partial result' });

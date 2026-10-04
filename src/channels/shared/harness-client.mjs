@@ -380,6 +380,11 @@ export class AssistantTextAccumulator {
   #steps = new Map();
   #legacyText = '';
 
+  clear() {
+    this.#steps.clear();
+    this.#legacyText = '';
+  }
+
   appendDelta(step, index, text) {
     if (typeof text !== 'string' || !text) return;
     const stepNumber = Number.isSafeInteger(step) ? step : 0;
@@ -412,6 +417,22 @@ export class AssistantTextAccumulator {
         .trim())
       .filter(Boolean)
       .join('\n\n');
+  }
+}
+
+/** Keep answer text after the last tool boundary, shared by live and recovered replies. */
+export function accumulateFinalAssistantText(accumulator, event) {
+  if (event.type === 'tool/call') {
+    accumulator.clear();
+  } else if (event.type === 'assistant/chunk' && event.data?.chunk?.type === 'text-delta') {
+    accumulator.appendDelta(event.data.step, event.data.chunk.index, event.data.chunk.text);
+  } else if (event.type === 'assistant/message') {
+    const content = event.data?.message?.content;
+    const text = textFromHarnessContent(content);
+    // Canonical tool messages can arrive before or after the separate call.
+    // An explicitly empty final message must not revive an earlier preamble.
+    if (!text || content.some((part) => part?.type === 'tool-call')) accumulator.clear();
+    else accumulator.setCanonical(event.data.step, text);
   }
 }
 
@@ -538,6 +559,7 @@ export class HarnessReplyTracker {
   #openTurn = null;
   #targetTurn = null;
   #assistantText = new AssistantTextAccumulator();
+  #finalAssistantText = null;
   #latestText = '';
   #finished = false;
   #reason = null;
@@ -548,13 +570,14 @@ export class HarnessReplyTracker {
   #pendingReasoningChars = 0;
   #reasoning = false;
 
-  constructor({ promptRpcId, afterSeq = -1, reasoning = false }) {
+  constructor({ promptRpcId, afterSeq = -1, reasoning = false, finalAnswerOnly = false }) {
     this.#promptRpcId = promptRpcId;
     this.#lastSeq = afterSeq;
     // Reasoning updates are opt-in per consumer: only channels that surface
     // thinking traces (Telegram thinking mode) subscribe; every other channel
     // keeps its pre-thinking-traces update stream untouched.
     this.#reasoning = reasoning === true;
+    if (finalAnswerOnly === true) this.#finalAssistantText = new AssistantTextAccumulator();
   }
 
   get finished() {
@@ -568,6 +591,10 @@ export class HarnessReplyTracker {
 
   get answer() {
     return this.#latestText.trim();
+  }
+
+  get finalAnswer() {
+    return this.#finalAssistantText ? this.#finalAssistantText.text : this.answer;
   }
 
   get reason() {
@@ -696,6 +723,8 @@ export class HarnessReplyTracker {
         continue;
       }
       if (event.data?.turn !== this.#targetTurn) continue;
+
+      if (this.#finalAssistantText) accumulateFinalAssistantText(this.#finalAssistantText, event);
 
       if (event.type === 'assistant/chunk' && event.data?.chunk?.type === 'text-delta') {
         const step = event.data?.step ?? 0;
@@ -1695,7 +1724,9 @@ export class HarnessClient {
     const baselineSeq = Math.max(-1, ...(before.events ?? []).map(({ event }) => event.seq ?? -1));
     const promptRpcId = `${this.#rpcIdPrefix}-${randomUUID()}`;
     const releasePromptInputOrigin = registerImInputOrigin(this.#interactionRegistry, promptRpcId);
-    const tracker = new HarnessReplyTracker({ promptRpcId, afterSeq: baselineSeq, reasoning });
+    const tracker = new HarnessReplyTracker({
+      promptRpcId, afterSeq: baselineSeq, reasoning, finalAnswerOnly: options.finalAnswerOnly,
+    });
     let checkedBlockedSeq = baselineSeq;
     let lastProgressAt = Date.now();
     let lastPollSeq = tracker.lastSeq;
@@ -1934,9 +1965,8 @@ export class HarnessClient {
             const artifactCount = ownership?.stopRequested
               ? 0
               : await deliverArtifacts();
-            if (tracker.answer) {
-              return tracker.answer;
-            }
+            const answer = ownership?.stopRequested ? tracker.answer : tracker.finalAnswer;
+            if (answer) return answer;
             if (artifactCount > 0) return '';
             if (ownership?.stopRequested) throw turnStoppedError();
             if (artifactHandoffError) throw artifactHandoffError;
