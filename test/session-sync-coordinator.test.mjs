@@ -9,6 +9,7 @@ import {
 const TARGET_A = Object.freeze({ channel: 'feishu', botId: 'bot-a', targetId: 'alice' });
 const TARGET_B = Object.freeze({ channel: 'telegram', botId: 'bot-b', targetId: 'bob' });
 const TARGET_C = Object.freeze({ channel: 'slack', botId: 'bot-c', targetId: 'carol' });
+const TARGET_WEIXIN = Object.freeze({ channel: 'weixin', botId: 'bot-weixin', targetId: 'owner' });
 
 function turnStart(turn = 1) {
   return { type: 'turn/start', data: { turn } };
@@ -171,4 +172,64 @@ test('installed Session sync classifies an unregistered Host user rpcId as direc
   effects[0]();
   installed.close();
   assert.equal(disposed, 1);
+});
+
+test('installed Session sync sends one scheduled answer without echoing its internal input', async () => {
+  let listener;
+  const sends = [];
+  const installed = installSessionSyncCoordinator({
+    root: {},
+    on(_name, callback) { listener = callback; return () => {}; },
+  }, {
+    async listSessionSyncTargets() { return [TARGET_WEIXIN, TARGET_WEIXIN, {}]; },
+    async sendSessionSyncText(...args) { sends.push(args); },
+  });
+  const session = { id: 'scheduled-session' };
+  listener(session, turnStart());
+  listener(session, {
+    ...userMessage('internal reminder framing'),
+    data: { source: { kind: 'schedule' }, content: [{ type: 'text', text: 'internal reminder framing' }] },
+  });
+  listener(session, assistantMessage(1, 'second step'));
+  listener(session, assistantMessage(0, 'first step'));
+  await installed.whenIdle();
+  assert.deepEqual(sends, [], 'wait for successful completion; never echo the reminder');
+  listener(session, turnEnd());
+  listener(session, turnEnd());
+  await installed.whenIdle();
+  assert.deepEqual(sends, [[
+    'bot-weixin', 'owner', 'scheduled-session', '[DSH 助手]\nfirst step\n\nsecond step',
+  ]]);
+  installed.close();
+});
+
+test('scheduled sync keeps target selection, completion, and IM ownership checks', async () => {
+  const sends = [];
+  const warnings = [];
+  const coordinator = createSessionSyncCoordinator({
+    deliveryService: {
+      async listSessionSyncTargets(sessionId) {
+        return sessionId === 'unbound' ? [] : [TARGET_WEIXIN];
+      },
+      async sendSessionSyncText(...args) { sends.push(args); },
+    },
+    logger: { warn: (...args) => warnings.push(args) },
+  });
+  const reminder = {
+    ...userMessage('internal reminder'),
+    data: { source: { kind: 'schedule' }, content: [{ type: 'text', text: 'internal reminder' }] },
+  };
+  for (const sessionId of ['unbound', 'aborted', 'im-owned']) {
+    void coordinator.enqueue(sessionId, turnStart());
+    if (sessionId === 'im-owned') {
+      void coordinator.enqueue(sessionId, userMessage('IM question'), 'im');
+    }
+    void coordinator.enqueue(sessionId, reminder, 'dsh');
+    void coordinator.enqueue(sessionId, assistantMessage(0, 'answer'));
+    void coordinator.enqueue(sessionId, turnEnd(sessionId === 'aborted' ? 'aborted' : 'completed'));
+  }
+  await coordinator.whenIdle();
+  assert.deepEqual(sends, []);
+  assert.deepEqual(warnings, []);
+  coordinator.close();
 });

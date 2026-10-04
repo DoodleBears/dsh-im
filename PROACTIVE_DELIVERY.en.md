@@ -85,6 +85,7 @@ A saved direct-message target has an opt-in **Two-way Session sync** switch. Whe
 1. User text submitted from DSH Web/CLI to the DM's current Session is sent to the DM with a `[来自 DSH]` prefix.
 2. After that turn completes successfully, the final assistant text merged in step order is sent once more with a `[DSH 助手]` prefix.
 3. Ordinary IM prompts and `/steer` continue through the existing reply path. They are neither duplicated nor forwarded to another target.
+4. Scheduled tasks (`schedule`, `deliveryMode: host`) also sync their final assistant text after successful completion in the bound Session. Internal reminder framing is not echoed as a `[来自 DSH]` message.
 
 The setting stores the private conversation target, never a `sessionId`, so it follows `/session` changes automatically. After `/new` or a workspace change, its status becomes **Waiting for this DM to establish a new Session** and recovers as soon as that DM creates one; the switch does not need to be toggled again.
 

@@ -9,6 +9,7 @@ const target = { channel: 'feishu', botId: 'bot-a', targetId: 'owner' };
 const other = { channel: 'telegram', botId: 'bot-b', targetId: 'owner' };
 const start = (turn = 1) => ({ type: 'turn/start', seq: turn * 100, data: { turn } });
 const user = (turn = 1) => ({ type: 'user/message', seq: turn * 100 + 1, surfaceOp: 'append', data: { content: [{ type: 'text', text: `question ${turn}` }] } });
+const scheduled = (turn = 1) => ({ ...user(turn), data: { ...user(turn).data, source: { kind: 'schedule' } } });
 const answer = (text = 'complete answer', turn = 1) => ({ type: 'assistant/message', seq: turn * 100 + 2, surfaceOp: 'append', data: { turn, step: 1, message: { content: [{ type: 'text', text }] } } });
 const end = (turn = 1, kind = 'completed') => ({ type: 'turn/end', seq: turn * 100 + 3, data: { turn, reason: { kind } } });
 
@@ -78,32 +79,44 @@ async function fixture(t, { state, targets = [target], create, patch, history = 
   };
 }
 
-for (const phase of ['create', 'final patch']) {
-  test(`mirror ${phase} failure preserves final text fallback and permits next turn`, async t => {
-    let release;
-    const gate = new Promise((_resolve, reject) => { release = () => reject(new Error('provider failure')); });
-    let failed = false;
-    const f = await fixture(t, {
-      [phase === 'create' ? 'create' : 'patch']: async () => {
-        if (!failed) { failed = true; await gate; }
-      },
+for (const input of [user, scheduled]) {
+  for (const phase of ['create', 'final patch']) {
+    test(`${input === scheduled ? 'scheduled ' : ''}mirror ${phase} failure preserves final text fallback and permits next turn`, async t => {
+      let release;
+      const gate = new Promise((_resolve, reject) => { release = () => reject(new Error('provider failure')); });
+      let failed = false;
+      const f = await fixture(t, {
+        [phase === 'create' ? 'create' : 'patch']: async () => {
+          if (!failed) { failed = true; await gate; }
+        },
+      });
+      f.emit(start()); f.emit(input());
+      await flush();
+      f.emit(answer());
+      await flush();
+      f.emit(end());
+      await flush();
+      assert.equal(f.texts.filter(r => r[3].startsWith('[DSH 助手]')).length, 0, 'wait for real card outcome');
+      release();
+      await f.drain();
+      assert.equal(f.texts.filter(r => r[3] === '[DSH 助手]\ncomplete answer').length, 1);
+      if (input === scheduled) assert.equal(f.texts.filter(r => r[3].startsWith('[来自 DSH]')).length, 0);
+      f.emit(start(2)); f.emit(input(2)); f.emit(answer('next answer', 2)); f.emit(end(2));
+      await f.drain();
+      assert.ok([...f.visible.values()].some(text => text.includes('next answer')));
+      assert.equal(f.texts.filter(r => r[3].includes('[DSH 助手]\nnext answer')).length, 0);
     });
-    f.emit(start()); f.emit(user());
-    await flush();
-    f.emit(answer());
-    await flush();
-    f.emit(end());
-    await flush();
-    assert.equal(f.texts.filter(r => r[3].startsWith('[DSH 助手]')).length, 0, 'wait for real card outcome');
-    release();
-    await f.drain();
-    assert.equal(f.texts.filter(r => r[3] === '[DSH 助手]\ncomplete answer').length, 1);
-    f.emit(start(2)); f.emit(user(2)); f.emit(answer('next answer', 2)); f.emit(end(2));
-    await f.drain();
-    assert.ok([...f.visible.values()].some(text => text.includes('next answer')));
-    assert.equal(f.texts.filter(r => r[3].includes('[DSH 助手]\nnext answer')).length, 0);
-  });
+  }
 }
+
+test('scheduled sync accepts the existing card receipt without duplicate text', async t => {
+  const f = await fixture(t);
+  for (const event of [start(), scheduled(), answer(), end()]) f.emit(event);
+  await f.drain();
+  assert.equal(f.creates.length, 1);
+  assert.ok([...f.visible.values()].some(text => text.includes('complete answer')));
+  assert.deepEqual(f.texts, []);
+});
 
 test('same target id on another channel/bot still receives its answer', async t => {
   const f = await fixture(t, { targets: [target, other, { ...target, botId: 'bot-c' }, { ...target, targetId: 'second' }] });

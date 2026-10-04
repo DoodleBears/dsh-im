@@ -23,6 +23,7 @@ function sessionIdOf(session) {
 
 function userInputOrigin(scope, event) {
   const source = event?.data?.source;
+  if (source?.kind === 'schedule') return 'dsh';
   if (source?.kind !== 'user' || typeof source.rpcId !== 'string' || !source.rpcId) {
     return 'other';
   }
@@ -112,12 +113,9 @@ export function createSessionSyncCoordinator({ deliveryService, logger = console
       if (event.surfaceOp !== 'append') return;
       if (state.origin === 'unknown') state.origin = origin;
       if (state.origin !== 'dsh' || origin !== 'dsh') return;
-      // The user echo stays as plain text even when the mirror owns the
-      // turn: the card also quotes the question, but keeping the echo here
-      // guarantees recipients are established so a failed mirror can still
-      // fall back to the final-answer text delivery.
+      const scheduled = event.data?.source?.kind === 'schedule';
       const text = textFromHarnessContent(event.data?.content);
-      if (!text) return;
+      if (!text && !scheduled) return;
 
       let targets;
       try {
@@ -126,17 +124,16 @@ export function createSessionSyncCoordinator({ deliveryService, logger = console
         logFailure('lookup', null, error);
         targets = [];
       }
-      const successful = await deliver(
-        sessionId,
-        targets,
-        `${DSH_USER_PREFIX}${text}`,
-        'user delivery',
-      );
+      // Scheduled framing is internal: select its recipients without echoing it.
+      // Direct DSH input still requires a successful echo before the final answer.
+      const recipients = scheduled
+        ? new Map(targets.filter(validRecipient).map((target) => [recipientKey(target), target]))
+        : await deliver(sessionId, targets, `${DSH_USER_PREFIX}${text}`, 'user delivery');
       if (state.recipients === null) {
-        state.recipients = successful;
+        state.recipients = recipients;
       } else {
         for (const key of [...state.recipients.keys()]) {
-          if (!successful.has(key)) state.recipients.delete(key);
+          if (!recipients.has(key)) state.recipients.delete(key);
         }
       }
       return;
