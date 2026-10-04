@@ -1,0 +1,29 @@
+{
+  "applicationHead": "01d40386e741196bbc53ed396facdf9cd9bf8476",
+  "providerCommit": "4604e0e73b090056abdd406bed8ee61558f8ef3e",
+  "sourceEventId": "im-42baf7f3952e514facb00a1e4bbd87df10820e3414b09f4fcafd8846a026cad7",
+  "pages": [
+    0,
+    10,
+    0
+  ],
+  "exhausted": true,
+  "unique": 10,
+  "historyAdmissions": 0,
+  "anchorAdmissions": 1,
+  "acceptedReplies": 1,
+  "originalThread": true,
+  "originalRoot": true,
+  "exactSourceParent": true,
+  "nativeReplyVerified": true,
+  "ownAppIdentityVerified": true,
+  "freshSourceReplyPending": false,
+  "candidateCheck": {
+    "pass": 3687,
+    "fail": 0,
+    "skip": 0,
+    "runtimeFiles": 393,
+    "sha256": "4ddd24a4b44d4d336c8d219fbc4a2ad2726fc2baa13ee93d5237281bbeaa09b6"
+  },
+  "scope": "Chat nearby; topic messages remain separate Thread scope"
+}
