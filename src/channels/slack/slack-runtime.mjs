@@ -2,6 +2,7 @@ import { extractConnectionEvidence, createConnectionDiagnostics, atConnectionSta
 import { splitMessageText } from '../shared/editable-message-stream.mjs';
 import { t } from '../shared/i18n.mjs';
 import { createSlackHistoryReader } from './history-reader.mjs';
+import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
 import { SlackApi } from './slack-api.mjs';
 import { createSlackBridgeStatus, SlackHarnessBridge } from './slack-bridge.mjs';
 import { normalizeSlackExternalText, verifiedSlackAccount, slackRefusal, slackTimestamp } from './external-consumer.mjs';
@@ -430,6 +431,7 @@ export class SlackRuntime {
   #stopped = true;
   #starting = null;
   #externalConsumer;
+  #externalSourceFiles;
   #account;
 
   constructor({
@@ -441,6 +443,7 @@ export class SlackRuntime {
     contextEnhancement,
     accessPolicy,
     externalConsumer,
+    externalSourceFiles = () => false,
     logger = console,
     replyTimeoutMs = 600_000,
     connectTimeoutMs = 20_000,
@@ -459,6 +462,7 @@ export class SlackRuntime {
     this.#contextEnhancement = contextEnhancement;
     this.#accessPolicy = accessPolicy;
     this.#externalConsumer = externalConsumer;
+    this.#externalSourceFiles = externalSourceFiles;
     this.#logger = logger; this.#diagnostics = createConnectionDiagnostics({ channel: 'slack', logger });
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#connectTimeoutMs = connectTimeoutMs;
@@ -521,7 +525,7 @@ export class SlackRuntime {
     return channel;
   }
 
-  async qualifyReplyChecked(route, { signal } = {}) {
+  async #replySource(route, signal) {
     if (!this.#status.ready || !this.#account || this.#config.consumerMode !== 'external-consumer')
       throw slackRefusal('capability-unavailable');
     if (!route || !slackTimestamp(route.messageId) || !slackTimestamp(route.threadId)
@@ -537,8 +541,30 @@ export class SlackRuntime {
       || source.user !== route.actorId || source.bot_id || source.app_id)
       throw slackRefusal('stale-route');
     signal?.throwIfAborted();
+    return source;
+  }
+
+  async qualifyReplyChecked(route, { signal } = {}) {
+    const source = await this.#replySource(route, signal);
     return { messageId: route.messageId, conversationId: route.conversationId,
       actorId: source.user, threadId: route.threadId, rootId: route.rootId };
+  }
+
+  async externalFileChecked(route, file, { signal, reply = false } = {}) {
+    const generation = this.#generation;
+    const api = this.#api;
+    const lifetime = this.#abortController?.signal;
+    if (!api || !lifetime) throw slackRefusal('capability-unavailable');
+    const combined = signal ? AbortSignal.any([signal, lifetime]) : lifetime;
+    const assertCurrent = () => {
+      combined.throwIfAborted();
+      if (generation !== this.#generation || this.#stopped || !this.#status.ready)
+        throw slackRefusal('capability-unavailable');
+    };
+    const source = () => this.#replySource(route, combined);
+    return reply
+      ? replyExternalFile(api, route, file, { signal: combined, assertCurrent, source })
+      : readExternalFile(api, route, file, { signal: combined, assertCurrent, source });
   }
 
   #readHistory = createSlackHistoryReader();
@@ -791,7 +817,7 @@ export class SlackRuntime {
 
   async #acceptExternal(payload, generation) {
     if (!this.#account || typeof this.#externalConsumer !== 'function') throw slackRefusal('consumer-unavailable');
-    const evidence = normalizeSlackExternalText(payload, { botId: this.#config.botId, account: this.#account });
+    const evidence = normalizeSlackExternalText(payload, { botId: this.#config.botId, account: this.#account, sourceFiles: this.#externalSourceFiles() });
     if (!evidence) return;
     const signal = this.#abortController.signal;
     await this.#verifyChannel(evidence.conversation.id, signal);
@@ -800,7 +826,9 @@ export class SlackRuntime {
       const user = await this.#api.userInfo({ userId: evidence.actor.id, signal });
       if (user?.id === evidence.actor.id) name = user.profile?.display_name || user.real_name || user.name;
     } catch { signal.throwIfAborted(); }
-    const enriched = { ...evidence,
+    const withFiles = this.#externalSourceFiles()
+      ? await externalAttachments(evidence, () => this.#replySource(evidence.reply, signal)) : evidence;
+    const enriched = { ...withFiles,
       actor: { ...evidence.actor, ...(typeof name === 'string' && name ? { name: name.slice(0, 512) } : {}) } };
     if (generation !== this.#generation || this.#stopped) throw slackRefusal('cancelled');
     const result = await this.#externalConsumer(enriched, signal);

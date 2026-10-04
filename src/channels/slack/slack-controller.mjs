@@ -238,17 +238,17 @@ export class SlackController {
         connected: this.#runtimes.get(botId)?.status?.ready === true,
         capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'reply-text-checked',
           'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked',
-          'history-text-checked', 'thread-history-text-checked'] };
+          'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
     });
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false } = {}) {
     return this.#withBotTransition(botId, async () => {
       const config = this.#configStore.get(botId);
       if (!config) throw slackRefusal('unknown-bot');
       const account = await this.#deliveryAccount(config, signal);
       if (account.fingerprint !== expectedFingerprint) throw slackRefusal('account-changed');
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles });
       try {
         const saved = await this.#configStore.save({ ...config, consumerMode: 'external-consumer' });
         const resolved = await this.#resolveCredentials(saved);
@@ -276,6 +276,14 @@ export class SlackController {
     return this.#withBotTransition(botId, async () => {
       const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
       return checked.runtime.qualifyReplyChecked(route, { signal: checked.signal });
+    });
+  }
+
+  async externalFileChecked(botId, route, file, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      if (!this.#inboundConsumers.acceptsFiles(botId)) throw slackRefusal('capability-unavailable');
+      return checked.runtime.externalFileChecked(route, file, { ...options, signal: checked.signal });
     });
   }
 
@@ -401,6 +409,7 @@ export class SlackController {
       botToken,
       appToken,
       externalConsumer: (evidence, signal) => this.#inboundConsumers.accept(config.botId, evidence, signal),
+      externalSourceFiles: () => this.#inboundConsumers.acceptsFiles(config.botId),
     }));
     if (!runtime || typeof runtime.start !== 'function' || typeof runtime.stop !== 'function') {
       throw new TypeError('createRuntime returned an invalid Slack runtime');

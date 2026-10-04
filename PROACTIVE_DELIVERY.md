@@ -399,3 +399,29 @@ File metadata is opt-in through `consumeInbound(..., {sourceFiles: true})`; lega
 不含正文或凭据。补齐后侧消息时，Slack 倒序接口可能需要多次空结果续页，直到找到最近消息；
 最多暂存 20 个候选 ID，返回前重新读取。每次最多返回 20 条事件并明确省略、覆盖范围和续页。
 权限不足、来源改变、取消或运行实例失效时拒绝返回结果；调用方仍须遵守 Slack 限流。
+
+
+## Checked Slack source files / Slack 原消息附件
+
+An exclusive Slack Consumer explicitly opts in with `sourceFiles: true`. A Human mention
+may contain one hosted file belonging to that exact message (not a fabricated parent).
+The checked Provider re-reads the current public-channel source and retains only native
+file ID, message ID, safe name and optional `sizeBytes` / `mediaType`; private file URLs
+stay inside the Provider. Unsupported modes or multiple files refuse in this slice.
+
+`readSourceFile` revalidates own account, current Consumer lease, membership, author,
+thread and exact file association, then privately streams `files.info`'s hosted resource.
+Declared and actual bytes are bounded to 25 MiB and checked for completeness. Cancellation
+or runtime replacement interrupts the read; redirects and untrusted hosts refuse.
+
+`replyFileChecked` uses the native external-upload flow in the original thread. After
+preparing bytes, it requalifies the source and runtime immediately before
+`files.completeUploadExternal`. Final completion is not automatically retried; malformed
+or ambiguous results remain uncertain. App scopes `files:read` / `files:write` require an
+explicitly authorized reinstall. This does not subscribe to ordinary, DM or private messages.
+
+Slack 独占 Consumer 通过 `sourceFiles: true` 明确接收一个 hosted 附件。附件属于 @ 原消息，
+不制造 parent ID；安全文件身份与可选大小／类型进入上层，私有 URL 仅在 Provider 内部使用。
+读取与发送复查自身账号、lease、群成员资格、发送人、原生话题和文件关联。下载最多 25 MiB，
+校验实际大小，拒绝跳转；连接停止或授权撤销取消下载。文件完成上传可见前再次验证来源，
+不盲目重试结果不明的完成请求。文件权限须单独授权后重新安装，普通／私聊／私有频道收件不变。

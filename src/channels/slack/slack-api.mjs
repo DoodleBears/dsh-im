@@ -408,7 +408,7 @@ export class SlackApi {
     });
   }
 
-  async uploadFile({ channelId, threadTs, file, signal }) {
+  async uploadFile({ channelId, threadTs, file, signal, beforeSend }) {
     if (!file || typeof file !== 'object'
       || typeof file.fileName !== 'string' || !file.fileName
       || !Buffer.isBuffer(file.bytes)) {
@@ -481,6 +481,8 @@ export class SlackApi {
       if (signal?.aborted) throw abortReason(signal);
       throw slackArtifactPreparationError(uploadSignal.reason);
     }
+    await beforeSend?.();
+    if (uploadSignal.aborted) throw abortReason(uploadSignal);
     try {
       const completed = await this.#request('files.completeUploadExternal', {
         tokenKind: 'bot',
