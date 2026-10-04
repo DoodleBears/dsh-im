@@ -1,5 +1,5 @@
 {
-  "providerCommit": "dc9af0181e451b554dd3e3ceeb594d18f8b21df6",
+  "providerCommit": "9cbe3d6f5362dff69f2410874c970b142148b994",
   "main": "d993f57448a48738cc365b9d601f459f67be35af",
   "default": {
     "pages": [
@@ -29,16 +29,16 @@
     "outboxCountUnchanged": 4
   },
   "reply": {
-    "newReplyAccepted": false,
-    "refusal": "request-conflict",
-    "freshSourceReplyPending": true
+    "newReplyAccepted": true,
+    "freshSourceReplyPending": false,
+    "originalTopicVerified": true
   },
   "platform": {
     "nearby": "Chat listing only",
     "topicReplies": "separate Thread listing"
   },
-  "pending": "Fresh Human Lark source plus original-topic reply; Mac locked and Human CLI auth missing",
-  "applicationHead": "2d5f25847e2b0ccfe48791dbce05451801ac90d0",
+  "pending": [],
+  "applicationHead": "5ffac593adc14fe8092c35ec052cdc9ee0677ced",
   "finalHeadAudit": {
     "pages": [
       0,
@@ -54,5 +54,38 @@
     "applicationPassed": 2305,
     "applicationSkipped": 9,
     "fullForkPassed": 3509
+  },
+  "finalFresh": {
+    "applicationHead": "5ffac593adc14fe8092c35ec052cdc9ee0677ced",
+    "providerCommit": "9cbe3d6f5362dff69f2410874c970b142148b994",
+    "sourceEventId": "im-c7d9fe5a824aed4f8af150392de136170fce52169ee1527f5464f76c9a223d62",
+    "pages": [
+      0,
+      10,
+      0
+    ],
+    "exhausted": true,
+    "unique": 10,
+    "historyAdmissions": 0,
+    "anchorAdmissions": 1,
+    "acceptedReplies": 1,
+    "originalThread": true,
+    "originalRoot": true,
+    "exactSourceParent": true,
+    "nativeReplyVerified": true,
+    "freshSourceReplyPending": false,
+    "regression": {
+      "redBeforeFix": true,
+      "greenAfterFix": true,
+      "forkPass": 3510,
+      "pinTests": 6
+    },
+    "scope": "Chat nearby; topic messages remain separate Thread scope"
+  },
+  "initialFreshFailure": {
+    "code": "history-unavailable",
+    "nativeCode": 230001,
+    "reason": "future supplementary start exceeds default end time",
+    "fixed": true
   }
 }
