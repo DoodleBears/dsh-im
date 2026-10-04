@@ -1,0 +1,58 @@
+{
+  "providerCommit": "dc9af0181e451b554dd3e3ceeb594d18f8b21df6",
+  "main": "d993f57448a48738cc365b9d601f459f67be35af",
+  "default": {
+    "pages": [
+      0,
+      10,
+      0
+    ],
+    "before": 10,
+    "after": 0,
+    "outsideWindow": 10,
+    "unique": true,
+    "noNextPage": true
+  },
+  "custom": {
+    "beforeCount": 5,
+    "afterCount": 0,
+    "pages": [
+      0,
+      5
+    ],
+    "subsetOfDefault": true,
+    "omitted": 6
+  },
+  "canonical": {
+    "historyAdmissions": 0,
+    "anchorAdmissions": 1,
+    "outboxCountUnchanged": 4
+  },
+  "reply": {
+    "newReplyAccepted": false,
+    "refusal": "request-conflict",
+    "freshSourceReplyPending": true
+  },
+  "platform": {
+    "nearby": "Chat listing only",
+    "topicReplies": "separate Thread listing"
+  },
+  "pending": "Fresh Human Lark source plus original-topic reply; Mac locked and Human CLI auth missing",
+  "applicationHead": "2d5f25847e2b0ccfe48791dbce05451801ac90d0",
+  "finalHeadAudit": {
+    "pages": [
+      0,
+      10,
+      0,
+      0,
+      5
+    ],
+    "sameOrchestrator": true,
+    "historyAdmissions": 0
+  },
+  "validation": {
+    "applicationPassed": 2305,
+    "applicationSkipped": 9,
+    "fullForkPassed": 3509
+  }
+}
