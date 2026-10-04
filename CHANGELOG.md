@@ -6,10 +6,24 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+## [4.35.1] - 2026-10-05
+
 ### Fixed / 修复
 
 - QQ 正常回复和超时补发只包含最后一次工具调用后的答复正文，避免把“正在查询”等过程文字混入最终答案；保留正文分段、工具错误提示及停止后的部分回复。（[#310](https://github.com/xmanrui/dsh-im/issues/310)）
   QQ replies and deferred deliveries now retain answer text after the last tool call, excluding intermediate progress text while preserving answer paragraphs, tool error notices, and partial replies after stopping. ([#310](https://github.com/xmanrui/dsh-im/issues/310))
+
+- 各渠道统一识别已归档会话，发送前明确提示到 DSH 取消归档或使用 `/new`，不再因归档日志不可读取而误判会话不存在、静默切换绑定。发送期间发生归档、相关内部错误或被阻止的轮次时重新核实归档状态；已被接受的消息会提示可能仍在队列中，避免重复提交。（[#316](https://github.com/xmanrui/dsh-im/issues/316)）
+  All channels now recognize archived Sessions and explain how to unarchive in DSH or use `/new` before submitting. Unreadable archived logs no longer cause missing-Session misclassification or silent rebinding. Archive races, related internal errors, and blocked turns trigger a fresh archive check; already-accepted messages warn that they may still be queued to prevent duplicate submissions. ([#316](https://github.com/xmanrui/dsh-im/issues/316))
+- 普通被阻止的轮次改为中性状态提示，不再直接断言为当前渠道无法处理的操作；归档诊断保留原请求归属、取消行为和其他网络、模型及附件错误，中英文错误提示同步更新。
+  Ordinary blocked turns now use a neutral status notice instead of assuming an action unsupported by the channel. Archive diagnostics preserve request ownership, cancellation, and unrelated network, model, and attachment errors, with updated Chinese and English notices.
+
+### Notes / 使用说明
+
+- QQ 最终正文筛选仅用于正常完成及超时后的补发，不改变工具错误提示、停止后的部分回复或其他渠道的正文行为；本次不会自动取消归档或自动重发已接受的消息。
+  QQ final-answer filtering applies to normal completion and deferred delivery, without changing tool-error notices, partial replies after stopping, or other channels' answer behavior. This release does not automatically unarchive Sessions or resubmit accepted messages.
+- 依赖声明和 DSH `0.1.7-alpha.1` 兼容性声明保持不变；升级后重启 Host 并刷新管理页面。
+  Dependency declarations and declared DSH `0.1.7-alpha.1` compatibility remain unchanged. Restart the Host and refresh the management page after upgrading.
 
 ## [4.35.0] - 2026-10-04
 
@@ -1547,7 +1561,8 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 改进 npm 发布包结构，保留 CLI 入口并避免安装脚本拦截。
   Improved npm package contents to preserve the CLI entry point and avoid install-script blocking.
 
-[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.35.0...HEAD
+[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.35.1...HEAD
+[4.35.1]: https://github.com/xmanrui/dsh-im/compare/v4.35.0...v4.35.1
 [4.35.0]: https://github.com/xmanrui/dsh-im/compare/v4.34.2...v4.35.0
 [4.34.2]: https://github.com/xmanrui/dsh-im/compare/v4.34.1...v4.34.2
 [4.34.1]: https://github.com/xmanrui/dsh-im/compare/v4.34.0...v4.34.1
