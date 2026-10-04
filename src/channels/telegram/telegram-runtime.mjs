@@ -1171,6 +1171,16 @@ export class TelegramRuntime {
     return this.#bridge.sendConnectionTest(text);
   }
 
+  async presentSessionSyncApproval(target, interaction, options = {}) {
+    if (!this.#status.ready || !this.#bridge) return false;
+    const actor = typeof target?.route?.chatId === 'string' ? target.route.chatId.trim() : '';
+    if (!actor) return false;
+    return this.#bridge.presentSessionSyncApproval(interaction, {
+      key: options.key, actor, validate: options.validate,
+      send: (text) => this.sendProactiveText(target, text),
+    }, options);
+  }
+
   async sendProactiveText(target, text, options = {}) {
     if (!this.#status.ready || !this.#bridge) {
       const error = new Error('Telegram bot is not connected');

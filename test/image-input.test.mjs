@@ -51,6 +51,7 @@ async function clientFixture(t, { onPrompt, policy, retention = 'persistent' } =
   client.sessionExists = async () => true;
   client.createSession = async () => 'test-session';
   client.rpc = async (method, payload, _timeout, options) => {
+    if (method === 'workspace.list') return { items: [], archivedSessionIds: [] };
     if (method === 'session.list') return { items: [{ sessionId: 'test-session', cwd: root }] };
     if (method === 'session.prompt') {
       prompts.push({ ...payload, rpcId: options.rpcId });

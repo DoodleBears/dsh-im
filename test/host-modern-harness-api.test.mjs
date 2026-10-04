@@ -70,6 +70,22 @@ function fakeContext(gateway) {
   };
 }
 
+test('modern workspace baseline detects an archived binding without loading its Session', async () => {
+  const calls = [];
+  const { ctx } = fakeContext({
+    invoke() { assert.fail('an archived Session must not be loaded or prompted'); },
+    stream(request) {
+      calls.push(`${request.namespace}/${request.method}`);
+      assert.equal(calls.at(-1), 'workspace/follow');
+      return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: ['archived-session'] } });
+    },
+  });
+  const client = new HarnessClient({ ...harnessConnection(ctx), workspace: '/workspace', autostart: false });
+  assert.equal(await client.sessionExists('archived-session'), true);
+  await assert.rejects(client.ask('archived-session', 'hello'), { code: 'session-archived' });
+  assert.deepEqual(calls, ['workspace/follow', 'workspace/follow']);
+});
+
 function sessionFixture(api, id = 'session') {
   const events = [];
   if (api === 'snapshotEvents') {
@@ -347,6 +363,9 @@ test('modern adapter exposes DSH v2 live assistant chunks through legacy history
       return { records, hasMore: false };
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -472,6 +491,9 @@ forEachSessionApi('an approval', async (sessionApi) => {
       throw new Error(`unexpected invoke ${endpoint}`);
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -569,6 +591,9 @@ forEachSessionApi('structured questions', async (sessionApi) => {
       throw new Error(`unexpected invoke ${endpoint}`);
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -693,6 +718,9 @@ forEachSessionApi('concurrent questions', async (sessionApi) => {
       throw new Error(`unexpected invoke ${endpoint}`);
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -800,6 +828,9 @@ forEachSessionApi('questions answered on IM', async (sessionApi) => {
       throw new Error(`unexpected invoke ${endpoint}`);
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -903,6 +934,9 @@ forEachSessionApi('questions answered by the host', async (sessionApi) => {
       throw new Error(`unexpected invoke ${endpoint}`);
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -998,6 +1032,9 @@ forEachSessionApi('a question cancelled with its turn', async (sessionApi) => {
       throw new Error(`unexpected invoke ${endpoint}`);
     },
     async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
       if (`${request.namespace}/${request.method}` !== 'session/follow') {
         throw new Error('unexpected stream');
       }
@@ -1021,4 +1058,191 @@ forEachSessionApi('a question cancelled with its turn', async (sessionApi) => {
   await turnTask;
 
   assert.equal(answer, 'turn unwound');
+});
+
+function competitiveApprovalFixture({ native = new Promise(() => {}), deliver } = {}) {
+  const fixture = fakeContext({ invoke() {}, stream() {} });
+  let offered;
+  let nativeSignal;
+  const turn = new AbortController();
+  const completion = new Promise((resolve) => {
+    modernHarnessApi(fixture.ctx, { deliveryService: {
+      async presentSessionSyncApproval(sessionId, interaction, options) {
+        offered = { sessionId, interaction, options };
+        resolve(offered);
+        return deliver ? deliver(offered) : true;
+      },
+    } });
+  });
+  const { events, session } = sessionFixture('snapshotEvents');
+  events.push(
+    { type: 'turn/start', data: { turn: 1 } },
+    { type: 'tool/code-dispatch-start', data: { subCallId: 'call', name: 'bash', arguments: { command: 'printf safe' } } },
+    { type: 'approval/asked', data: { id: 'approval', callId: 'call', toolName: 'bash' } },
+  );
+  const request = { agent: { session }, toolName: 'bash', callId: 'call', signal: turn.signal };
+  const result = fixture.waterfall('approval/request', request, () => {
+    nativeSignal = request.signal;
+    return native;
+  });
+  return { fixture, completion, request, result, turn, nativeSignal: () => nativeSignal };
+}
+
+for (const winner of ['web', 'im']) {
+  for (const decision of ['allowed-once', 'rejected']) {
+    test(`competitive Web-origin approval: ${winner} ${decision} wins once without aborting the turn`, async () => {
+      let answerWeb;
+      const native = new Promise((resolve) => { answerWeb = resolve; });
+      const f = competitiveApprovalFixture({ native });
+      const { interaction, options } = await f.completion;
+      assert.deepEqual(JSON.parse(interaction.toolCall.arguments), { command: 'printf safe' });
+      const response = { ok: true, value: { sessionId: 'session', approvalId: 'approval', outcome: decision } };
+      if (winner === 'web') answerWeb(decision);
+      else await interaction.respond(response);
+      assert.equal(await f.result, decision);
+      assert.equal(await options.completion, decision);
+      assert.equal(f.turn.signal.aborted, false);
+      assert.equal(f.nativeSignal().aborted, true);
+      assert.equal(f.request.signal, f.turn.signal);
+      await assert.rejects(interaction.respond(response), { code: 'interaction-not-pending' });
+      answerWeb(decision === 'rejected' ? 'allowed-once' : 'rejected');
+      assert.equal(await f.result, decision);
+    });
+  }
+}
+
+test('native unavailable keeps a live IM approval pending', async () => {
+  const f = competitiveApprovalFixture({ native: Promise.resolve('unavailable') });
+  const { interaction } = await f.completion;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.nativeSignal().aborted, false);
+  await interaction.respond({ ok: true, value: { sessionId: 'session', approvalId: 'approval', outcome: 'rejected' } });
+  assert.equal(await f.result, 'rejected');
+});
+
+test('IM withdrawal leaves Web usable, and both unavailable finishes without approval', async () => {
+  let answerWeb;
+  const f = competitiveApprovalFixture({ native: new Promise((resolve) => { answerWeb = resolve; }) });
+  const { interaction } = await f.completion;
+  await interaction.withdraw();
+  assert.equal(f.nativeSignal().aborted, false);
+  await assert.rejects(interaction.respond({ ok: true, value: { sessionId: 'session', approvalId: 'approval', outcome: 'allowed-once' } }), { code: 'interaction-not-pending' });
+  answerWeb('allowed-once');
+  assert.equal(await f.result, 'allowed-once');
+  const unavailable = competitiveApprovalFixture({ native: Promise.resolve('unavailable'), deliver: () => false });
+  assert.equal(await unavailable.result, 'unavailable');
+});
+
+test('turn cancellation retires both presentations and refuses a late decision', async () => {
+  const f = competitiveApprovalFixture();
+  const { interaction, options } = await f.completion;
+  f.turn.abort();
+  assert.equal(await f.result, 'cancelled');
+  assert.equal(options.signal.aborted, true);
+  assert.equal(f.nativeSignal().aborted, true);
+  await assert.rejects(interaction.respond({ ok: true, value: { sessionId: 'session', approvalId: 'approval', outcome: 'allowed-once' } }), { code: 'interaction-not-pending' });
+});
+
+forEachSessionApi('a competitive approval', async (sessionApi) => {
+  const { events, session } = sessionFixture(sessionApi);
+  const eventRecord = (event) => ({ type: 'event', event });
+  let fixture;
+  let turnTask;
+  const append = (event) => {
+    events.push(event);
+    fixture.emit('session/event', session, event);
+  };
+  const gateway = {
+    async invoke(request) {
+      const endpoint = `${request.namespace}/${request.method}`;
+      if (endpoint === 'session/page') {
+        return { records: events.map(eventRecord), hasMore: false };
+      }
+      if (endpoint === 'session/prompt') {
+        const rpcId = request.args.request.requestId;
+        turnTask = (async () => {
+          append({ type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } });
+          append({
+            type: 'user/message', seq: 1, time: 1,
+            data: { turn: 1, source: { kind: 'user', rpcId }, message: { content: [] } },
+          });
+          append({
+            type: 'approval/asked', seq: 2, time: 2,
+            data: { id: 'approval-one', toolName: 'bash', callId: 'call-one' },
+          });
+          const outcome = await fixture.waterfall('approval/request', {
+            agent: { id: 'session', session },
+            toolName: 'bash',
+            callId: 'call-one',
+          }, () => Promise.resolve('unavailable'));
+          append({
+            type: 'approval/decided', seq: 3, time: 3,
+            data: { id: 'approval-one', outcome },
+          });
+          append({
+            type: 'assistant/message', seq: 4, time: 4,
+            data: { turn: 1, message: { content: [{ type: 'text', text: 'approved' }] } },
+          });
+          append({
+            type: 'turn/end', seq: 5, time: 5,
+            data: { turn: 1, reason: { kind: 'completed' } },
+          });
+        })();
+        return { accepted: true };
+      }
+      throw new Error(`unexpected invoke ${endpoint}`);
+    },
+    async stream(request) {
+      if (`${request.namespace}/${request.method}` === 'workspace/follow') {
+        return asyncValues({ type: 'baseline', value: { items: [], archivedSessionIds: [] } });
+      }
+      if (`${request.namespace}/${request.method}` !== 'session/follow') {
+        throw new Error('unexpected stream');
+      }
+      return asyncValues({
+        type: 'snapshot', cursor: -1, records: [], hasMore: false,
+        projections: { asOfSeq: -1, values: {} },
+      });
+    },
+  };
+  fixture = fakeContext(gateway);
+  const connection = harnessConnection(fixture.ctx, {}, { competitiveApprovals: true });
+  const client = new HarnessClient({
+    ...connection,
+    workspace: '/workspace',
+    rpcIdPrefix: 'modern-test',
+    logPrefix: 'modern-test',
+  });
+  const interactions = [];
+  const resolutions = [];
+  const answer = await client.ask('session', 'approve it', {
+    timeoutMs: 5_000,
+    onInteraction: async (interaction) => {
+      interactions.push(interaction);
+      await interaction.respond({
+        ok: true,
+        value: {
+          sessionId: interaction.sessionId,
+          approvalId: interaction.payload.approvalId,
+          outcome: 'allowed-once',
+        },
+      });
+    },
+    onInteractionResolved: (resolution) => resolutions.push(resolution),
+  });
+  await turnTask;
+  assert.equal(answer, 'approved');
+  assert.equal(interactions.length, 1);
+  assert.equal(interactions[0].kind, 'approval');
+  assert.equal(events[3].data.outcome, 'allowed-once');
+  assert.equal(resolutions.length, 1);
+  assert.equal(resolutions[0].kind, 'approval');
+  assert.equal(resolutions[0].outcome, 'allowed-once');
+
+  const other = sessionFixture(sessionApi, 'other').session;
+  const delegated = await fixture.waterfall('approval/request', {
+    agent: { id: 'other', session: other },
+    toolName: 'bash',
+  }, () => Promise.resolve('browser-owned'));
+  assert.equal(delegated, 'browser-owned');
 });

@@ -918,3 +918,58 @@ test('closing a displayed not-pending approval leaves a resolved notice', async 
   assert.equal(sent.some((text) => text.includes('已拒绝')), false);
   assert.deepEqual(resolved, ['该审批已处理，无需再次回复。']);
 });
+
+for (const reason of ['binding', 'permission', 'runtime', 'render']) {
+  test(`synced approval withdraws on ${reason} failure without rejecting the Web approval`, async () => {
+    const completion = deferred();
+    const runtime = new AbortController();
+    let valid = true;
+    let withdrawals = 0;
+    let responses = 0;
+    const queue = new HarnessApprovalQueue({ logger: { warn() {} } });
+    const context = {
+      key: 'direct:actor', actor: 'actor', send: async () => {},
+      validate: () => { if (!valid && reason === 'binding') throw new Error('binding changed'); },
+      ...(reason === 'render' ? { render: () => { throw new Error('platform offline'); } } : {}),
+    };
+    const settings = { mode: 'open' };
+    const input = interaction({ id: 'sync', toolName: 'bash',
+      respond: async () => { responses++; }, withdraw: async () => { withdrawals++; },
+    });
+    await queue.handleSessionSyncRequested(input, context, {
+      completion: completion.promise, runtimeSignal: runtime.signal,
+      accessPolicy: { getSettings: () => settings, isPrivileged: () => valid },
+    });
+    if (reason !== 'render') {
+      assert.equal(queue.hasPending(context.key), true);
+      valid = false;
+      if (reason === 'runtime') {
+        runtime.abort();
+        await new Promise((resolve) => setImmediate(resolve));
+      } else await queue.submitByApprovalId('sync', 'allowed-once', { actor: 'actor' });
+    }
+    assert.equal(queue.hasPending(context.key), false);
+    assert.equal(responses, 0);
+    assert.equal(withdrawals, 1);
+    completion.resolve('allowed-once');
+  });
+}
+
+test('synced approval uses the existing actor check and retires on a Web result', async () => {
+  const completion = deferred();
+  const notices = [];
+  let responses = 0;
+  const queue = new HarnessApprovalQueue();
+  await queue.handleSessionSyncRequested(interaction({ id: 'sync', toolName: 'bash',
+    respond: async () => { responses++; }, withdraw: async () => {},
+  }), { key: 'direct:actor', actor: 'actor', send: async (text) => notices.push(text) }, {
+    completion: completion.promise,
+  });
+  assert.equal(await queue.submitByApprovalId('sync', 'allowed-once', { actor: 'other' }), false);
+  completion.resolve('rejected');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(queue.hasPending('direct:actor'), false);
+  assert.equal(await queue.submitByApprovalId('sync', 'allowed-once', { actor: 'actor' }), false);
+  assert.equal(responses, 0);
+  assert.match(notices.at(-1), /已拒绝/);
+});

@@ -227,6 +227,8 @@ Shells can embed the complete IM management panel through the optional `dshImCli
 | Interactive question | Reply with an option number, option label, or custom text; separate multiple choices with commas. In Feishu, an image or image post from the person answering ends the pending question turn and is processed in the same Session, without finishing the remaining questions or resending the image. |
 | Remote approval | Reply with `批准` / `拒绝` / `同意` / `不同意` / `yes` / `no`. |
 
+Web and bot approvals share one decision: the first allow-once or reject wins and retires the other prompt. Supported channels are WeChat, Feishu, DingTalk, WeCom bot/app, QQ, Telegram, Slack, Discord, WhatsApp, and Matrix; iMessage, email, and AI Office are excluded. Bot-origin approvals use the original chat. Web/Host-origin approvals require exactly one bound private chat with bidirectional sync enabled; aliases of that chat count once, while multiple chats receive a Web-only notice. Binding and access checks apply again when submitting, and permanent approval is not offered. Slack delivery from Web additionally requires `im:read`; update the app Manifest and reinstall the app if needed. Web remains usable when the bot cannot present an approval.
+
 ### Command details
 
 [Read the command details](docs/bot-commands.md)
@@ -260,7 +262,7 @@ Startup configuration validation failures also include `file`, `field`, and `iss
 
 ## Local development
 
-The latest dsh-im follows the latest DSH, with DSH `0.1.7-alpha.1` (Session format V4) as this update's supported baseline. New features and fixes do not add compatibility branches for older DSH versions; existing unrelated compatibility code remains in place. Older hosts should use the corresponding historical plugin release. `package.json` declares only the host versions actually verified for this build, without promising support for untested future releases. After upgrading the plugin, restart the Host and refresh the settings page so both sides use the same plugin build.
+The latest dsh-im follows the latest DSH, with DSH `0.2.0-rc.2` (Session format V4) as this update's supported baseline. New features and fixes do not add compatibility branches for older DSH versions; existing unrelated compatibility code remains in place. Older hosts should use the corresponding historical plugin release. `package.json` declares only the host versions actually verified for this build, without promising support for untested future releases. After upgrading the plugin, restart the Host and refresh the settings page so both sides use the same plugin build.
 
 Source details, guidance, and quoted replies now use the V4 `plugin:dsh-im` source kind, fixing `SessionFormatError: format v4 message requires a producer-owned source kind`. Message ordering, user text, and session-level guidance deduplication retain their existing behavior. The host owns historical Session migration.
 

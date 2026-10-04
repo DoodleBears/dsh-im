@@ -1310,6 +1310,32 @@ test('/stop uses the shared command fast lane without waiting for the running pr
   assert.equal(sent.at(-1), '原任务完成');
 });
 
+test('an archive error finalizes the shared-channel stream and keeps the Session binding', async () => {
+  const fixture = stateFixture({ 'direct:chat-a': 'archived-session' });
+  const finished = [];
+  const bridge = createBridge({
+    state: fixture.state,
+    bot: {
+      sendText: async () => assert.fail('the visible stream already contains the failure'),
+      openStream: async () => ({
+        update() {},
+        async finish(text) { finished.push(text); },
+        cancel() { assert.fail('finished stream must not be cancelled'); },
+      }),
+    },
+    harness: {
+      sessionExists: async () => true,
+      ask: async () => { throw Object.assign(new Error('archived'), { code: 'session-archived' }); },
+    },
+    logger: { warn() {}, error() {} },
+  });
+  await bridge.accept(message('archived-stream', 'hello'));
+  assert.equal(finished.length, 1);
+  assert.match(finished[0], /SESSION_ARCHIVED/);
+  assert.equal(bridge.status.lastMessageError.code, 'SESSION_ARCHIVED');
+  assert.equal(fixture.state.sessionFor('direct:chat-a'), 'archived-session');
+});
+
 test('a neutral completion reply finishes the shared-channel stream and clears the prior failure', async () => {
   const fixture = stateFixture({ 'direct:chat-a': 'session-empty-completed' });
   const finished = [];

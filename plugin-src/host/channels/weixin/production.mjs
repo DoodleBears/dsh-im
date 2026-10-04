@@ -77,7 +77,7 @@ function diagnosticWorkspaces(store) {
 
 export async function createProductionController(ctx, config = {}, internals = {}) {
   if (!ctx?.credentials) throw new TypeError('dsh-weixin requires ctx.credentials');
-  const connection = harnessConnection(ctx, config);
+  const connection = harnessConnection(ctx, config, { competitiveApprovals: true });
 
   const ConfigStore = internals.ConfigStore ?? WeixinConfigStore;
   const StateStore = internals.StateStore ?? WeixinStateStore;

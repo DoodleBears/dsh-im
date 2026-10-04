@@ -39,7 +39,7 @@ test('Feishu production rejects its own bot ID only in active allowlists and exp
     async close() {}
   }
   const production = await createProductionController({
-    credentials: {}, apiProxy: {}, logger: { warn() {}, info() {}, error() {} },
+    credentials: {}, typertGateway: { invoke() {}, stream() {} }, logger: { warn() {}, info() {}, error() {} },
   }, { dataDir: directory, workspace: directory }, {
     Controller, HarnessClient: Harness,
     createConnectionSupervisor: () => ({ ready: Promise.resolve(), start() { return this; }, async close() {} }),

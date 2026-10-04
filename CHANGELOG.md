@@ -11,6 +11,62 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 飞书/Lark 可由同 Host 应用独占接收文本消息，等待应用确认持久化后返回，并按校验过的原消息/话题回复；外部消费模式在释放或重启后不回退到独立 Session。
   Same-Host applications can opt into exclusive Feishu/Lark text intake, acknowledge after durable acceptance, and reply through a checked original-message/topic route. Releasing or restarting an external consumer never falls back to a standalone Session.
 
+### Fixed / 修复
+
+- 群与话题历史读取现在同时识别 SDK 成功响应和 HTTP 拒绝中的权限错误；取消优先于错误映射，不向应用暴露带认证信息的底层 HTTP 错误。
+  Checked history reads recognize permission errors in both resolved responses and rejected SDK HTTP responses; cancellation takes precedence and raw authenticated HTTP errors never escape to application callers.
+
+- 独占收件接管与凭据重绑共用配置事务队列；展示设置更新不再被误判为账号变更。应用回调不占用机器人操作队列，断开可取消待处理回调，回调也可读取或回复原消息。
+  Exclusive takeover shares configuration serialization with credential rebinding; presentation changes no longer look like account changes. Application callbacks release the bot operation queue so disconnect can cancel them and callbacks can await checked reads or replies.
+
+
+## [4.35.1] - 2026-10-05
+
+### Fixed / 修复
+
+- QQ 正常回复和超时补发只包含最后一次工具调用后的答复正文，避免把“正在查询”等过程文字混入最终答案；保留正文分段、工具错误提示及停止后的部分回复。（[#310](https://github.com/xmanrui/dsh-im/issues/310)）
+  QQ replies and deferred deliveries now retain answer text after the last tool call, excluding intermediate progress text while preserving answer paragraphs, tool error notices, and partial replies after stopping. ([#310](https://github.com/xmanrui/dsh-im/issues/310))
+
+- 各渠道统一识别已归档会话，发送前明确提示到 DSH 取消归档或使用 `/new`，不再因归档日志不可读取而误判会话不存在、静默切换绑定。发送期间发生归档、相关内部错误或被阻止的轮次时重新核实归档状态；已被接受的消息会提示可能仍在队列中，避免重复提交。（[#316](https://github.com/xmanrui/dsh-im/issues/316)）
+  All channels now recognize archived Sessions and explain how to unarchive in DSH or use `/new` before submitting. Unreadable archived logs no longer cause missing-Session misclassification or silent rebinding. Archive races, related internal errors, and blocked turns trigger a fresh archive check; already-accepted messages warn that they may still be queued to prevent duplicate submissions. ([#316](https://github.com/xmanrui/dsh-im/issues/316))
+- 普通被阻止的轮次改为中性状态提示，不再直接断言为当前渠道无法处理的操作；归档诊断保留原请求归属、取消行为和其他网络、模型及附件错误，中英文错误提示同步更新。
+  Ordinary blocked turns now use a neutral status notice instead of assuming an action unsupported by the channel. Archive diagnostics preserve request ownership, cancellation, and unrelated network, model, and attachment errors, with updated Chinese and English notices.
+
+### Notes / 使用说明
+
+- QQ 最终正文筛选仅用于正常完成及超时后的补发，不改变工具错误提示、停止后的部分回复或其他渠道的正文行为；本次不会自动取消归档或自动重发已接受的消息。
+  QQ final-answer filtering applies to normal completion and deferred delivery, without changing tool-error notices, partial replies after stopping, or other channels' answer behavior. This release does not automatically unarchive Sessions or resubmit accepted messages.
+- 依赖声明和 DSH `0.1.7-alpha.1` 兼容性声明保持不变；升级后重启 Host 并刷新管理页面。
+  Dependency declarations and declared DSH `0.1.7-alpha.1` compatibility remain unchanged. Restart the Host and refresh the management page after upgrading.
+
+## [4.35.0] - 2026-10-04
+
+### Added / 新增
+
+- 同 Host 的公开 `dshIm` Service 新增可选的飞书 / Lark 群消息投递回执：通过 `receiptVersion: 1` 和 `proactive-receipt-checked` 能力声明识别，调用 `sendChecked(..., { receipt: true })` 可获得经过目标校验的最小消息 ID 和会话 ID。未启用回执时继续返回 `{ sent: true }`，沿用账号指纹、目标摘要及发送前注册状态校验。感谢 [@DoodleBears](https://github.com/DoodleBears) 的贡献（[#308](https://github.com/xmanrui/dsh-im/pull/308)）。
+  The same-Host public `dshIm` Service adds opt-in Feishu/Lark group delivery receipts, advertised through `receiptVersion: 1` and `proactive-receipt-checked`. Calling `sendChecked(..., { receipt: true })` returns minimal message and conversation IDs validated against the target. Existing sends retain `{ sent: true }` and account-fingerprint, target-digest, and pre-send registration checks. Thanks to [@DoodleBears](https://github.com/DoodleBears) ([#308](https://github.com/xmanrui/dsh-im/pull/308)).
+
+### Fixed / 修复
+
+- QQ 开启平台「接收所有群消息」后，识别 `GROUP_MESSAGE_CREATE` 中指向当前机器人的 @，不再仅依赖专用 @ 事件。识别信息在 SDK 清理文字前保留，并用于消息、命令、交互回复和输入状态；未 @ 当前机器人的消息不会触发回复，访问策略保持不变。（[#311](https://github.com/xmanrui/dsh-im/issues/311)）
+  QQ now recognizes self mentions in `GROUP_MESSAGE_CREATE` when the platform delivers all group messages, rather than relying solely on dedicated mention events. The decision survives SDK text sanitization and applies to messages, commands, interaction replies, and typing status. Messages not addressing this bot do not trigger replies, and access policies remain unchanged. ([#311](https://github.com/xmanrui/dsh-im/issues/311))
+- 飞书菜单和工作区选择卡片优先显示 Host 工作区名称，缺少名称时回退目录名；同名工作区增加路径片段区分，长名称缩略，仍冲突时补充序号。路径、回调值和数字选择的快照顺序不变，并兼容旧 Host 的路径列表接口。（[#300](https://github.com/xmanrui/dsh-im/issues/300)）
+  Feishu menus and workspace cards prefer Host workspace titles, falling back to directory names. Duplicate labels gain path context, long labels are shortened, and remaining collisions receive numbers. Paths, callback values, and numeric-selection snapshot order remain unchanged, with compatibility for older path-only Host APIs. ([#300](https://github.com/xmanrui/dsh-im/issues/300))
+- 插件元数据补齐中英文显示名称「IM 机器人」和「IM bots」。
+  Plugin metadata now supplies the localized display names “IM 机器人” and “IM bots”.
+
+### Changed / 变更
+
+- README 更新 Token 赞助说明，并明确项目由社区开发者独立开发与维护。
+  README sponsorship information is updated and clarifies independent community development and maintenance.
+
+### Notes / 使用说明
+
+- 回执仅证明平台接受请求，不代表消息已送达或被阅读。发送后的回执缺失或与目标不符时返回 `send-result-unknown`，调用方应保留结果未知状态，不要自动重试；本次未新增入站消费、调度或重试机制。详见[回执接口说明](https://github.com/xmanrui/dsh-im/blob/v4.35.0/docs/checked-proactive-receipts.md)。
+  Receipts prove platform acceptance, not delivery or human read status. Missing or mismatched receipts after dispatch raise `send-result-unknown`; callers must retain an unknown outcome and must not automatically retry. This release adds no inbound consumer, scheduler, or retry mechanism. See the [receipt contract](https://github.com/xmanrui/dsh-im/blob/v4.35.0/docs/checked-proactive-receipts.md).
+- 依赖声明和 DSH `0.1.7-alpha.1` 兼容性声明保持不变；升级后重启 Host 并刷新管理页面。
+  Dependency declarations and declared DSH `0.1.7-alpha.1` compatibility remain unchanged. Restart the Host and refresh the management page after upgrading.
+
 ## [4.34.2] - 2026-10-03
 
 ### Fixed / 修复
@@ -1519,7 +1575,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 改进 npm 发布包结构，保留 CLI 入口并避免安装脚本拦截。
   Improved npm package contents to preserve the CLI entry point and avoid install-script blocking.
 
-[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.34.2...HEAD
+[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.35.1...HEAD
+[4.35.1]: https://github.com/xmanrui/dsh-im/compare/v4.35.0...v4.35.1
+[4.35.0]: https://github.com/xmanrui/dsh-im/compare/v4.34.2...v4.35.0
 [4.34.2]: https://github.com/xmanrui/dsh-im/compare/v4.34.1...v4.34.2
 [4.34.1]: https://github.com/xmanrui/dsh-im/compare/v4.34.0...v4.34.1
 [4.34.0]: https://github.com/xmanrui/dsh-im/compare/v4.33.0...v4.34.0

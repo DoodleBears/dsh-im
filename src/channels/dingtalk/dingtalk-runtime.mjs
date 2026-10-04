@@ -432,6 +432,16 @@ export class DingtalkRuntime {
     });
   }
 
+  async presentSessionSyncApproval(target, interaction, options = {}) {
+    if (!this.#status.ready || !this.#bridge) return false;
+    const actor = typeof target?.route?.userId === 'string' ? target.route.userId.trim() : '';
+    if (!actor) return false;
+    return this.#bridge.presentSessionSyncApproval(interaction, {
+      key: options.key, actor, validate: options.validate,
+      send: (text) => this.sendProactiveText(target, text),
+    }, options);
+  }
+
   async sendProactiveText(target, text, { signal } = {}) {
     const userId = typeof target?.route?.userId === 'string'
       ? target.route.userId.trim() : '';

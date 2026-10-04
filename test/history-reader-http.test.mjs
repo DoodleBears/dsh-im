@@ -57,3 +57,15 @@ for (const stage of ['get', 'list']) {
     assert.equal(name, 'AbortError');
   });
 }
+
+
+for (const stage of ['get', 'list']) {
+  test(`SDK HTTP ${stage} other provider refusals remain history-unavailable`, async t => {
+    const { bot, seen } = await httpFixture(t, stage, 123456);
+    let code;
+    try { await readExternalHistory(bot, identity, route, { scope: 'group', limit: 1 }); }
+    catch (error) { code = error.code; }
+    assert.equal(code, 'history-unavailable');
+    assert.deepEqual(seen, stage === 'get' ? ['get'] : ['get', 'list']);
+  });
+}

@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PluginConfigStore } from '../../../src/channels/feishu/plugin-config-store.mjs';
 import { MultiBotDshFeishuController } from '../../../src/channels/feishu/multi-bot-controller.mjs';
 import { normalizeFeishuVoiceConfig } from '../../../src/channels/feishu/voice-config.mjs';
 
@@ -49,6 +53,7 @@ function bot(id, suffix = id) {
 
 function fixture({
   bots = [],
+  configStore: suppliedStore,
   secrets = {},
   createBotIds = [],
   failResolveRefs = new Set(),
@@ -59,7 +64,7 @@ function fixture({
   credentialSet,
   deleteState,
 } = {}) {
-  const configStore = new MemoryConfigStore(bots);
+  const configStore = suppliedStore ?? new MemoryConfigStore(bots);
   const values = new Map(Object.entries(secrets));
   const unsetCalls = [];
   const registrationRuns = [];
@@ -96,6 +101,7 @@ function fixture({
     },
     configStore,
     createRuntime: async ({ botId, config, appSecret, repair, acceptExternal }) => {
+      const lifetime = new AbortController();
       const status = {
         ready: false,
         feishuLongConnectionState: 'idle',
@@ -113,7 +119,7 @@ function fixture({
         responseModes: [],
         voiceCalls: [],
         repair,
-        acceptExternal,
+        acceptExternal: (event, { signal } = {}) => acceptExternal(event, { signal: signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal }),
         get status() { return structuredClone(status); },
         async start() {
           runtime.starts += 1;
@@ -123,6 +129,7 @@ function fixture({
           status.harnessReachable = true;
         },
         async stop() {
+          lifetime.abort(Object.assign(new Error('runtime-stopped'), { code: 'consumer-unavailable' }));
           runtime.stops += 1;
           status.ready = false;
           status.feishuLongConnectionState = 'idle';
@@ -1480,4 +1487,115 @@ test('external callback awaits checked history without deadlocking acknowledgeme
   } finally {
     clearTimeout(timer); dispose(); await incoming.catch(() => {}); await fx.controller.close();
   }
+});
+
+
+function externalInput(existing) {
+  return { event_id: 'external-event', app_id: existing.appId,
+    sender: { sender_type: 'user', sender_id: { open_id: 'human' } },
+    message: { message_id: 'external-message', chat_id: 'group', chat_type: 'group', message_type: 'text',
+      thread_id: 'topic', root_id: 'root', parent_id: 'parent',
+      mentions: [{ id: { open_id: existing.botOpenId }, key: '@_user_1' }],
+      create_time: '1790787600000', content: JSON.stringify({ text: 'hello' }) } };
+}
+
+async function persistentExternalFixture(t, overrides = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-external-regression-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const existing = bot('bot_external_feedback', 'external_feedback');
+  const store = await new PluginConfigStore(join(directory, 'config.json')).load();
+  await store.saveBot(existing);
+  const fx = fixture({ configStore: store, secrets: { [existing.secretRef]: 'fixture-secret' },
+    verifyApp: async () => ({ openId: existing.botOpenId, name: 'Verified' }), ...overrides });
+  await fx.controller.initialize();
+  t.after(() => fx.controller.close());
+  const info = await fx.controller.describeDeliveryAccount(existing.id);
+  return { ...fx, existing, fingerprint: info.account.fingerprint };
+}
+
+function deferred() {
+  let resolve; const promise = new Promise(r => { resolve = r; });
+  return { promise, resolve };
+}
+const bounded = async (promise, message) => {
+  let timer;
+  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), 300); })]); }
+  finally { clearTimeout(timer); }
+};
+
+test('external takeover survives an overlapping credential rebind in the durable config and replacement runtime', async t => {
+  const writing = deferred(), release = deferred();
+  const fx = await persistentExternalFixture(t, { credentialSet: async ({ ref, value, values }) => {
+    writing.resolve(); await release.promise; values.set(ref, value);
+  } });
+  const binding = fx.controller.bindCredentials({ appId: fx.existing.appId, appSecret: 'new-fixture-secret' });
+  await writing.promise;
+  let calls = 0;
+  const takeover = fx.controller.consumeInbound(fx.existing.id, { expectedFingerprint: fx.fingerprint,
+    onEvent: async () => { calls++; return { accepted: true }; } });
+  // Old code can finish takeover before the earlier bind; corrected serialization
+  // waits for bind. Exercise either ordering without leaving a blocked test behind.
+  await bounded(takeover, 'takeover serialized behind credential save').catch(() => {});
+  release.resolve();
+  const [, dispose] = await Promise.all([binding, takeover]);
+  t.after(dispose);
+  assert.equal(fx.configStore.getBot(fx.existing.id).consumerMode, 'external-consumer');
+  const runtime = fx.runtimes.get(fx.existing.id).at(-1);
+  assert.equal(runtime.config.consumerMode, 'external-consumer');
+  await runtime.acceptExternal(externalInput(fx.existing));
+  assert.equal(calls, 1);
+});
+
+test('external intake survives presentation settings but still refuses changed identity and ownership', async t => {
+  const fx = await persistentExternalFixture(t);
+  let calls = 0;
+  const dispose = await fx.controller.consumeInbound(fx.existing.id, { expectedFingerprint: fx.fingerprint,
+    onEvent: async () => { calls++; return { accepted: true }; } });
+  t.after(dispose);
+  const runtime = fx.runtimes.get(fx.existing.id).at(-1);
+  await runtime.acceptExternal(externalInput(fx.existing));
+  await fx.controller.updateStepPush(fx.existing.id, true);
+  await runtime.acceptExternal(externalInput(fx.existing));
+  assert.equal(calls, 2);
+  await fx.configStore.saveBot({ ...fx.configStore.getBot(fx.existing.id), ownerOpenIds: ['another-owner'] });
+  await assert.rejects(runtime.acceptExternal(externalInput(fx.existing)), { code: 'account-changed' });
+  assert.equal(calls, 2);
+});
+
+test('disconnect cancels an outstanding consumer callback before waiting for application work', async t => {
+  const fx = await persistentExternalFixture(t);
+  const entered = deferred(), completed = deferred(), aborted = deferred();
+  const dispose = await fx.controller.consumeInbound(fx.existing.id, { expectedFingerprint: fx.fingerprint,
+    onEvent: async (_, { signal }) => {
+      signal.addEventListener('abort', () => { aborted.resolve(); completed.resolve(); }, { once: true });
+      entered.resolve(); await completed.promise; return { accepted: true };
+    } });
+  t.after(dispose);
+  const runtime = fx.runtimes.get(fx.existing.id).at(-1);
+  const incoming = runtime.acceptExternal(externalInput(fx.existing));
+  const refused = assert.rejects(incoming, { code: 'consumer-unavailable' });
+  await entered.promise;
+  const disconnect = fx.controller.disconnectBot(fx.existing.id);
+  try { await bounded(aborted.promise, 'disconnect did not cancel callback'); }
+  finally { completed.resolve(); await disconnect; await Promise.allSettled([refused]); }
+  assert.equal(fx.controller.status().totals.connected, 0);
+  assert.equal(fx.configStore.getBot(fx.existing.id).consumerMode, 'external-consumer');
+});
+
+
+test('external callback can await a checked original-route reply without owning the bot queue', async t => {
+  const fx = await persistentExternalFixture(t);
+  let calls = 0;
+  const dispose = await fx.controller.consumeInbound(fx.existing.id, { expectedFingerprint: fx.fingerprint,
+    onEvent: async (event, { signal }) => {
+      await fx.controller.replyChecked(fx.existing.id, event.reply, 'ack', { expectedFingerprint: fx.fingerprint, signal });
+      return { accepted: true };
+    } });
+  t.after(dispose);
+  const runtime = fx.runtimes.get(fx.existing.id).at(-1);
+  runtime.replyChecked = async route => { calls++; assert.equal(route.messageId, 'external-message'); return { sent: true }; };
+  const incoming = runtime.acceptExternal(externalInput(fx.existing));
+  try { await bounded(incoming, 'callback checked reply deadlocked'); }
+  finally { dispose(); await incoming.catch(() => {}); }
+  assert.equal(calls, 1);
 });

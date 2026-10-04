@@ -1013,8 +1013,9 @@ test('QQ private messages deliver the final answer as Markdown without opening a
       sessionExists: async () => true,
       createSession: async () => 'session-new',
       ensureRunning: async () => true,
-      ask: async (_session, _text, { onUpdate, progressMode }) => {
+      ask: async (_session, _text, { onUpdate, progressMode, finalAnswerOnly }) => {
         assert.equal(progressMode, 'all');
+        assert.equal(finalAnswerOnly, true);
         await onUpdate({ type: 'text', text: '最终回' });
         await onUpdate({ type: 'text', text: '最终回答' });
         return '最终回答';
@@ -1055,7 +1056,8 @@ test('QQ group messages suppress every successful progress update', async () => 
     ownerUserOpenid: 'owner-openid',
     harness: {
       sessionExists: async () => true,
-      ask: async (_session, _text, { onUpdate }) => {
+      ask: async (_session, _text, { onUpdate, finalAnswerOnly }) => {
+        assert.equal(finalAnswerOnly, true);
         await onUpdate({ type: 'tool', name: 'bash' });
         // 工具结束后 Harness 客户端会下发 status 帧“正在整理结果…”。
         await onUpdate({ type: 'status', text: '正在整理结果…', toolName: 'bash' });

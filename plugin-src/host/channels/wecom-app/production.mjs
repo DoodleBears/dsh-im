@@ -49,7 +49,7 @@ function normalizeOrigin(value) {
 
 export async function createProductionController(ctx, config = {}, internals = {}) {
   if (!ctx?.credentials) throw new TypeError('dsh-im Enterprise WeChat app requires ctx.credentials');
-  const connection = harnessConnection(ctx, config);
+  const connection = harnessConnection(ctx, config, { competitiveApprovals: true });
 
   const ConfigStore = internals.ConfigStore ?? WecomAppConfigStore;
   const StateStore = internals.StateStore ?? WecomAppStateStore;

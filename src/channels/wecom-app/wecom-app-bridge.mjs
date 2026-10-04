@@ -855,6 +855,12 @@ export class WecomAppBridge {
     }
   }
 
+  async presentSessionSyncApproval(interaction, context, options = {}) {
+    return this.#approvals.handleSessionSyncRequested(interaction, context, {
+      ...options, runtimeSignal: this.#signal, accessPolicy: this.#accessPolicy,
+    });
+  }
+
   async #handleInteraction(interaction, { key, actor }) {
     if (interaction?.kind === 'approval') {
       return this.#approvals.handleRequested(interaction, {

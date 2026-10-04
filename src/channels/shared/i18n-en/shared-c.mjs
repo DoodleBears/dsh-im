@@ -70,6 +70,9 @@ export default {
   '已批准，仅对本次操作有效。':
     'Approved — valid for this operation only.',
   '已拒绝此次操作。': 'This operation was rejected.',
+  '机器人端无法处理这次审批，请到 Web 查看。': 'The bot cannot handle this approval. Please check the Web interface.',
+  '未找到可处理端，本次操作未获批准。': 'No approval interface is available. This operation was not approved.',
+  '有操作在等待审批：{tool}，请到 Web 处理。': 'An operation is awaiting approval: {tool}. Please handle it in the Web interface.',
   '无法完整展示这次操作，已安全拒绝此次审批。':
     'The operation could not be displayed in full, so this approval was safely rejected.',
   '审批提交失败，请重新回复「批准」或「拒绝」。':

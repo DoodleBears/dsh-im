@@ -124,7 +124,7 @@ export function deliverySuggestionFromConversationKey(channel, key) {
     case 'whatsapp':
       return whatsappSuggestion(key);
     case 'matrix':
-      return matrixSuggestion(key);
+      return matrixSuggestion(key.replace(/^(direct|group):/, ''));
     default:
       return null;
   }
@@ -132,6 +132,7 @@ export function deliverySuggestionFromConversationKey(channel, key) {
 
 /** Convert only a persisted private-chat key into its stable delivery route. */
 export function privateDeliverySuggestionFromConversationKey(channel, key) {
+  if (channel === 'matrix' && typeof key === 'string') key = key.replace(/^direct:dm:/, 'dm:');
   const separator = typeof key === 'string' ? key.indexOf(':') : -1;
   const prefix = separator > 0 ? key.slice(0, separator) : '';
   const privatePrefix = {

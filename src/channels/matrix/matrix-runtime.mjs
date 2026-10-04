@@ -173,6 +173,7 @@ export class MatrixRuntime {
   #replyTimeoutMs;
   #api = null;
   #bridge = null;
+  #approvalController = new AbortController();
   #botUserId = null;
   #deviceId = null;
   #crypto = null;
@@ -289,6 +290,7 @@ export class MatrixRuntime {
   async start() {
     if (this.#started && this.#status.ready) return;
     this.#stopped = false;
+    this.#approvalController = new AbortController();
     this.#started = true;
     const generation = ++this.#generation;
     const homeserver = this.#config.homeserver;
@@ -361,6 +363,7 @@ export class MatrixRuntime {
   async stop() {
     if (this.#stopped) return;
     this.#stopped = true;
+    this.#approvalController.abort();
     this.#started = false;
     this.#generation += 1;
     if (this.#reconnectTimer !== null) clearTimeout(this.#reconnectTimer);
@@ -387,6 +390,17 @@ export class MatrixRuntime {
     const bridge = this.#bridge;
     if (!bridge) throw new Error('Matrix bot is not connected');
     return await bridge.sendConnectionTest(text);
+  }
+
+  async presentSessionSyncApproval(target, interaction, options = {}) {
+    if (!this.#status.ready || !this.#bridge) return false;
+    const actor = typeof target?.route?.userId === 'string' ? target.route.userId.trim() : '';
+    if (!actor) return false;
+    return this.#bridge.presentSessionSyncApproval(interaction, {
+      key: options.key.startsWith('dm:') ? `direct:${options.key}` : options.key,
+      actor, validate: options.validate,
+      send: (text) => this.sendProactiveText(target, text),
+    }, { ...options, runtimeSignal: this.#approvalController.signal });
   }
 
   async sendProactiveText(target, text, options = {}) {

@@ -1,4 +1,5 @@
 import { t } from './i18n.mjs';
+import { evaluateInboundAccess } from './inbound-access.mjs';
 
 const APPROVAL_REPLIES = new Map([
   ['批准', 'allowed-once'],
@@ -9,6 +10,12 @@ const APPROVAL_REPLIES = new Map([
   ['no', 'rejected'],
 ]);
 
+export const COMPETITIVE_APPROVAL_CHANNELS = Object.freeze([
+  'feishu', 'weixin', 'dingtalk', 'wecom', 'wecom-app', 'qq',
+  'telegram', 'slack', 'discord', 'whatsapp', 'matrix',
+]);
+
+const APPROVAL_UNAVAILABLE_TEXT = '机器人端无法处理这次审批，请到 Web 查看。';
 const APPROVAL_PROMPT = '请精准回复「批准」或「拒绝」（也支持：同意 / 不同意 / yes / no）。';
 const APPROVAL_AFTER_QUESTION_PROMPT = '请先完成当前问题，再精准回复「批准」或「拒绝」。';
 const APPROVAL_RESOLVED_TEXT = '该审批已处理，无需再次回复。';
@@ -95,6 +102,7 @@ function approvalResult(pending, outcome) {
 }
 
 function approvalOutcomeText(outcome) {
+  if (outcome === 'unavailable') return t(APPROVAL_UNAVAILABLE_TEXT);
   if (outcome === 'allowed-once') return t('已批准，仅对本次操作有效。');
   if (outcome === 'rejected') return t('已拒绝此次操作。');
   return t(APPROVAL_RESOLVED_TEXT);
@@ -210,6 +218,51 @@ export class HarnessApprovalQueue {
     };
   }
 
+  /** Present a bound private-chat approval without creating an IM prompt. */
+  async handleSessionSyncRequested(interaction, context, { signal, completion, runtimeSignal, accessPolicy } = {}) {
+    if (signal?.aborted || runtimeSignal?.aborted) return false;
+    const validateRoute = context.validate;
+    context = { ...context, validate: async () => {
+      await validateRoute?.();
+      if (!context.actor || !evaluateInboundAccess(accessPolicy, {
+        conversationType: 'direct', senderIds: [context.actor], text: 'yes',
+      }).allowed) throw new Error('Approval recipient is no longer allowed');
+    } };
+    await context.validate();
+    if (signal?.aborted || runtimeSignal?.aborted) return false;
+    let resolved = false;
+    const finish = (outcome) => this.handleResolved({
+      kind: 'approval', interactionId: interaction.interactionId, outcome,
+    });
+    const onStop = () => {
+      queueMicrotask(async () => {
+        if (resolved) return;
+        try {
+          await interaction.withdraw?.();
+          await finish('unavailable');
+        } catch (error) {
+          this.#logger.warn?.(`[dsh-im:${this.#label}] failed to withdraw a stopped approval:`, error);
+        }
+      });
+    };
+    runtimeSignal?.addEventListener('abort', onStop, { once: true });
+    Promise.resolve(completion).then(async (outcome) => {
+      resolved = true;
+      runtimeSignal?.removeEventListener('abort', onStop);
+      await finish(outcome);
+    }).catch((error) => this.#logger.warn?.(`[dsh-im:${this.#label}] failed to retire a synced approval:`, error));
+    try {
+      await this.handleRequested(interaction, context);
+      if (runtimeSignal?.aborted) onStop();
+      return this.#byId.has(interaction.interactionId);
+    } catch (error) {
+      runtimeSignal?.removeEventListener('abort', onStop);
+      await interaction.withdraw?.();
+      await finish('unavailable');
+      throw error;
+    }
+  }
+
   async handleRequested(interaction, context) {
     if (interaction?.kind !== 'approval') return false;
     const payload = interaction.payload;
@@ -257,7 +310,7 @@ export class HarnessApprovalQueue {
     if (!text) {
       const rejected = await this.#rejectInteraction(interaction, payload);
       await send(rejected
-        ? t('无法完整展示这次操作，已安全拒绝此次审批。')
+        ? (interaction.withdraw ? t(APPROVAL_UNAVAILABLE_TEXT) : t('无法完整展示这次操作，已安全拒绝此次审批。'))
         : t(APPROVAL_RESOLVED_TEXT));
       return true;
     }
@@ -272,6 +325,7 @@ export class HarnessApprovalQueue {
       requiresMention: context.requiresMention === true,
       send,
       render,
+      validate: context.validate,
       onResolved: typeof context.onResolved === 'function' ? context.onResolved : null,
       text,
       presented: false,
@@ -342,13 +396,14 @@ export class HarnessApprovalQueue {
     for (const pending of pendingItems) this.#remove(pending);
     await Promise.all(pendingItems.map(async (pending) => {
       try {
-        await pending.interaction.respond(
+        if (pending.interaction.withdraw) await pending.interaction.withdraw();
+        else await pending.interaction.respond(
           approvalResult(pending, 'rejected'),
           { signal: AbortSignal.timeout(5_000) },
         );
-        pending.closedOutcome = 'rejected';
+        pending.closedOutcome = pending.interaction.withdraw ? 'unavailable' : 'rejected';
         if (pending.presented || pending.deliveryCompleted) {
-          await this.#notifyResolved(pending, 'rejected');
+          await this.#notifyResolved(pending, pending.closedOutcome);
         }
       } catch (error) {
         if (error?.code === 'interaction-not-pending') {
@@ -372,9 +427,12 @@ export class HarnessApprovalQueue {
     if (pending.presentationTask) return pending.presentationTask;
     // A channel-provided renderer shows the approval as an interactive card
     // (e.g. approve/reject buttons); otherwise fall back to plain text.
-    const task = pending.render
-      ? Promise.resolve().then(() => pending.render(pending, pending.send))
-      : Promise.resolve().then(() => pending.send(pending.text));
+    const task = Promise.resolve().then(async () => {
+      await pending.validate?.();
+      if (pending.inactive || pending.resolving) return;
+      if (pending.render) await pending.render(pending, pending.send);
+      else await pending.send(pending.text);
+    });
     pending.presentationTask = task;
     try {
       await task;
@@ -384,6 +442,12 @@ export class HarnessApprovalQueue {
       } else if (pending.closedOutcome) {
         await this.#notifyResolved(pending, pending.closedOutcome);
       }
+    } catch (error) {
+      if (!pending.interaction.withdraw) throw error;
+      pending.presentationTask = null;
+      await pending.interaction.withdraw();
+      await this.handleResolved({ kind: 'approval', interactionId: pending.approvalId, outcome: 'unavailable' });
+      this.#logger.warn?.(`[dsh-im:${this.#label}] approval presentation unavailable:`, error);
     } finally {
       if (pending.presentationTask === task) pending.presentationTask = null;
     }
@@ -392,6 +456,15 @@ export class HarnessApprovalQueue {
   async #submit(pending, outcome) {
     pending.submitting = true;
     try {
+      if (pending.validate) {
+        try { await pending.validate(); }
+        catch (error) {
+          await pending.interaction.withdraw?.();
+          throw Object.assign(new Error('Approval route is no longer available', { cause: error }), {
+            code: 'interaction-not-pending',
+          });
+        }
+      }
       await pending.interaction.respond(approvalResult(pending, outcome));
     } catch (error) {
       if (error?.code === 'interaction-not-pending') {
@@ -491,6 +564,10 @@ export class HarnessApprovalQueue {
 
   async #rejectInteraction(interaction, payload) {
     try {
+      if (interaction.withdraw) {
+        await interaction.withdraw();
+        return true;
+      }
       await interaction.respond({
         ok: true,
         value: {

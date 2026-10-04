@@ -67,11 +67,13 @@ const FAILURE_MESSAGES = Object.freeze({
   MODEL_OUTPUT_LIMIT:
     '模型达到输出长度上限，但没有生成可显示的结果。请缩小任务范围后重试。',
   TURN_BLOCKED:
-    '任务正在等待无法在当前渠道完成的操作。请在 DeepSeek Harness 中处理后再试。',
+    '本轮处理被阻止，未能完成。请在 DSH 中查看会话状态和相关提示。',
   TURN_INTERRUPTED:
     '任务被意外中断，本次未完成。请重试。',
   SESSION_NOT_FOUND:
     '当前会话已不存在。请发送 /new 创建新会话后重试。',
+  SESSION_ARCHIVED:
+    '当前会话已归档，无法继续处理。请在 DSH 中取消归档，或发送 /new 创建新会话。',
   SESSION_BUSY:
     '当前会话仍在处理上一项任务。请等待完成，或发送 /stop 后重试。',
   SESSION_STALE:
@@ -137,6 +139,7 @@ function failureCode(error) {
   if (code === 'turn-blocked') return 'TURN_BLOCKED';
   if (['turn-interrupted', 'turn-aborted'].includes(code)) return 'TURN_INTERRUPTED';
   if (code === 'session-not-found') return 'SESSION_NOT_FOUND';
+  if (code === 'session-archived') return 'SESSION_ARCHIVED';
   if (code === 'agent-busy') return 'SESSION_BUSY';
   if (code === 'workspace-session-stale') return 'SESSION_STALE';
   if (code.startsWith('workspace-')) return 'WORKSPACE_UNAVAILABLE';
@@ -220,7 +223,8 @@ export function classifyMessageFailure(error, {
     reason: safeReason ?? safeFailureReason(error?.code) ?? code,
     message: typeof userMessage === 'string' && userMessage.trim()
       ? userMessage.trim()
-      : t(FAILURE_MESSAGES[code]),
+      : t(FAILURE_MESSAGES[code]) + (code === 'SESSION_ARCHIVED' && error?.promptAccepted === true
+        ? `\n${t('本条消息可能仍在会话队列中，请先到 DSH 查看状态，避免重复提交。')}` : ''),
     referenceId: safeReferenceId(referenceId),
     at: Number.isFinite(at) ? at : Date.now(),
   });
