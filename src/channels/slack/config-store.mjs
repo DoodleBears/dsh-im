@@ -109,6 +109,7 @@ export class SlackConfigStore {
 
   #normalizeBot(value) {
     if (!value || typeof value !== 'object') return null;
+    if (value.consumerMode !== undefined && !['external-consumer', 'standalone-session'].includes(value.consumerMode)) return null;
     const botId = cleanString(value.botId);
     const platformId = cleanString(value.platformId);
     const botTokenRef = cleanString(value.botTokenRef);
@@ -131,6 +132,7 @@ export class SlackConfigStore {
       username: cleanString(value.username),
       teamId: cleanString(value.teamId),
       teamName: cleanString(value.teamName),
+      consumerMode: value.consumerMode === 'external-consumer' ? 'external-consumer' : 'standalone-session',
       createdAt: cleanString(value.createdAt) ?? new Date().toISOString(),
       connectedAt: cleanString(value.connectedAt),
     });

@@ -354,3 +354,44 @@ A `sessionId` identifies a Harness Session. It is not a uniform, stable message 
 ### The test succeeded, but the recipient cannot see the message
 
 A successful test proves only that the platform accepted the send. Check bot permissions, platform restrictions, target accuracy, and client-side filtering or archive settings.
+
+## Checked proactive sending for companion plugins
+
+The same-Host `dshIm` Service exposes `contractVersion: 1`, `describeBot(botId)` and `sendChecked(botId, targetId, text, options)`. The initial authenticated-account implementation supports Feishu/Lark; other channels explicitly report `capability-unavailable` until they implement the contract. Existing `send`, HTTP and management RPC behavior remains unchanged.
+
+`describeBot` returns `{version: 1, botId, channel, account: {fingerprint, name?}, connected, capabilities}`. The `proactive-text-checked` capability is not a user grant. Feishu/Lark resolves credentials through the credentials service and verifies the current platform Bot Open ID. Its lowercase SHA-256 fingerprint is derived from UTF-8 `JSON.stringify({provider:'feishu', domain, appId, botOpenId})` in that field order. It never returns credentials or tokens and rejects a principal different from the configured verified bot. Discovery is asynchronous during Host startup; refresh after channel initialization.
+
+Options require `expectedFingerprint` and `expectedTargetDigest` and optionally accept `signal` and `format`. Derive the target digest from lowercase SHA-256 of UTF-8 `JSON.stringify({kind, route})`, with route keys sorted by ascending JavaScript string code-unit order. Names and aliases do not affect this digest. The service checks the currently saved target, freezes its normalized route, revalidates the authenticated account inside the account transition and sends that frozen route. Editing an alias during verification cannot redirect the request. Removing or changing a target before lookup rejects the request; after a request starts, changes cannot undo its external effect.
+
+`account-unverified`, `account-changed`, `target-changed` and `capability-unavailable` are pre-send refusals. `{sent:true}` still means platform acceptance, not delivery/read. SDK cancellation after start, timeout and other ambiguous outcomes are not proof that nothing was sent. The caller owns durable authorization, intent/attempt records and reconciliation and must not blindly retry. Provider Registration disposal rejects subsequent preflight; it cannot unsend an already started SDK request.
+
+## Checked external source files (temporary qualification)
+
+The additive `dshIm.fileVersion: 1` Service exposes `readSourceFile(botId, route, attachment, options)` and `replyFileChecked(botId, route, file, options)`. Options retain `expectedFingerprint` and `signal`; account description advertises `source-file-checked` and `reply-file-checked`. Legacy text contracts remain version 1.
+
+For an authenticated text mention replying to a file message, the exclusive consumer resolves exactly that parent through the account's SDK and retains `{id,messageId,resourceKey,name}`. It does not fetch arbitrary history or download bytes at receipt. Parent and mention must belong to the same conversation and topic; a later read rechecks the exact original reply route and parent resource association. The resource stream stops on cancellation, account/runtime replacement or 25 MiB of received bytes. The consumer decides canonical persistence and current authorization; these capabilities do not grant access themselves.
+
+A result file is an explicitly selected `{id,name,bytes}` with at most 25 MiB. Checked reply reuses the existing native file uploader and validates the original source again after upload and before replying. The exact source message determines the topic. There is no fallback recipient, original-file replacement or automatic retry after an uncertain result. `file-upload-failed` and explicit `file-provider-rejected` indicate that a message was not accepted; other interrupted or uncertain sends require reconciliation rather than retry. The package remains a temporary Git-qualified artifact, not an upstream release or production enablement.
+
+File metadata is opt-in through `consumeInbound(..., {sourceFiles: true})`; legacy consumers receive their unchanged version 1 text envelope. / 文件元信息通过 `sourceFiles: true` 明确协商，旧 consumer 的文本 envelope 保持原样。
+
+## Bounded Feishu/Lark context reads (same Host)
+
+An active exclusive consumer may call the optional `dshIm.historyChecked(botId, source.reply, query, {expectedFingerprint, signal})`. Check `history-text-checked`, and also `thread-history-text-checked` for a thread. Query is `{scope: 'group' | 'nearby' | 'thread', limit: 1..20, cursor?: string}`. There is no browser/HTTP history endpoint. The verified account and live consumer lease are required; standalone accounts cannot read through this contract.
+
+Each call re-fetches the source and compares its author, chat, thread, root and parent IDs before listing. `group` lists the source chat; `nearby` uses a bounded five-minute-before/after chat time window, not a native around-message API; `thread` lists the native thread. The response is `{version:1, scope, events, omitted, hasMore, nextCursor?, window?, coverage:'provider-visible-human-text'}`. At most `limit` provider records are inspected; unsupported, deleted, application-sent or invalid text is counted as omitted. Pagination is explicit, one page per call. The caller binds its continuation to the same source/query. History-derived events use `history:<messageId>` as event ID; deduplicate with the native message ID alongside received events.
+
+Only visible Human text is returned, with the same normalized event shape. Optional platform `sender_name` and mention `name` are display labels, never identity or authorization; missing names remain absent. No directory lookup or Human token fallback is performed. A read does not admit ordinary messages to an Inbox, wake an agent, reply, mark a message read, or synchronize withdrawal. The companion application owns those decisions and canonical persistence.
+
+Missing Bot permissions return `history-permission-denied`; missing/changed source IDs return `stale-route`; an anchor without a thread returns `thread-unavailable`; provider failures or malformed pagination return `history-unavailable`. Unrelated chat/thread records fail with `untrusted-source`. Caller cancellation, consumer release, Host close and Provider replacement discard in-flight results. The consumer must retain its lifetime until the read completes. This capability is neither a complete transcript guarantee nor provider-wide search.
+
+```js
+const page = await ctx.dshIm.historyChecked(botId, event.reply,
+  { scope: 'thread', limit: 10 },
+  { expectedFingerprint: account.account.fingerprint, signal: lifecycleSignal });
+// Persist/reconcile only after application authorization. Do not turn reads into intake.
+```
+
+### Nearby context count minima
+
+`historyChecked` nearby traverses the five-minute window on each side of the checked source, then supplements sparse sides to `beforeCount` (default 10) and `afterCount` (default 5), each integer 0–20. Counts exclude the anchor and count only supported Human text. Dense windows are never truncated by those minima: callers must follow every `nextCursor` under their own budget. Each request still fetches at most `limit` records. Supplement phases use nearest older / newer Chat listing; second-resolution boundary overlaps are filtered by actual timestamps. No future message is awaited. Cursor count settings and the original anchor cannot change between pages. Existing group and Thread listing is unchanged; this is an application-defined checked contract, not a native around-message API.

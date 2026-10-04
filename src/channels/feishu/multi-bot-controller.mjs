@@ -1,5 +1,6 @@
+import { ExclusiveInboundConsumers, normalizeExternalText, normalizeOwnTextEcho } from './external-consumer.mjs';
 import { atConnectionStage, createConnectionDiagnostics } from '../shared/connection-error.mjs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { connectionTestMessage } from '../shared/connection-test.mjs';
 import { publicMessageFailure } from '../shared/message-failure.mjs';
 import { RegistrationManager } from './registration-manager.mjs';
@@ -93,6 +94,7 @@ function secretRefFor(botId) {
 function configuredBotFingerprint(config) {
   return JSON.stringify({
     id: config.id,
+    consumerMode: config.consumerMode ?? 'standalone',
     appId: config.appId,
     secretRef: config.secretRef,
     ownerOpenIds: config.ownerOpenIds,
@@ -133,6 +135,7 @@ export class MultiBotDshFeishuController {
   #createBotId;
   #createRegistrationId;
   #runtimes = new Map();
+  #inboundConsumers = new ExclusiveInboundConsumers();
   #botErrors = new Map();
   #registrations = new Map();
   #activeAppUpdates = new Map();
@@ -563,10 +566,151 @@ export class MultiBotDshFeishuController {
     });
   }
 
+  async #deliveryAccount(config) {
+    const resolved = await this.#credentials.resolve(config.secretRef);
+    if (!resolved?.value) {
+      const error = new Error('Account credentials unavailable');
+      error.code = 'account-unverified';
+      throw error;
+    }
+    const verified = await this.#verifyApp({ appId: config.appId, appSecret: resolved.value, domain: config.domain });
+    if (!verified?.openId || verified.openId !== config.botOpenId) {
+      const error = new Error('Authenticated account identity changed');
+      error.code = 'account-changed';
+      throw error;
+    }
+    const fingerprint = createHash('sha256').update(JSON.stringify({
+      provider: 'feishu', domain: config.domain, appId: config.appId, botOpenId: verified.openId,
+    })).digest('hex');
+    return { fingerprint, ...(verified.name ? { name: verified.name } : {}) };
+  }
+
+  async describeDeliveryAccount(botId) {
+    this.#assertOpen();
+    return this.#withBotTransition(botId, async () => {
+      this.#assertOpen();
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      return { version: 1, botId, channel: 'feishu', account,
+        connected: isConnected(connectionStatus(this.#runtimes.get(botId))),
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
+    });
+  }
+
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, onEcho } = {}) {
+    this.#assertOpen();
+    return this.#withBotTransition(botId, async () => {
+      this.#assertOpen();
+      signal?.throwIfAborted();
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      if (account.fingerprint !== expectedFingerprint)
+        throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, onEcho });
+      try {
+        const saved = await this.#configStore.saveBot({ ...config, consumerMode: 'external-consumer' });
+        const resolved = await this.#credentials.resolve(saved.secretRef);
+        if (!resolved?.value) throw Object.assign(new Error('account-unverified'), { code: 'account-unverified' });
+        await this.#startRuntime(saved, resolved.value);
+        signal?.throwIfAborted();
+        this.#touch();
+        return dispose;
+      } catch (error) {
+        dispose();
+        throw error;
+      }
+    });
+  }
+
+  async historyChecked(botId, route, query, { expectedFingerprint, signal } = {}) {
+    this.#assertOpen('capability-unavailable');
+    return this.#withBotTransition(botId, async () => {
+      this.#assertOpen('capability-unavailable');
+      signal?.throwIfAborted();
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      this.#assertOpen('capability-unavailable');
+      signal?.throwIfAborted();
+      if (account.fingerprint !== expectedFingerprint)
+        throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      const runtime = this.#runtimes.get(botId);
+      if (config.consumerMode !== 'external-consumer' || !isConnected(connectionStatus(runtime))
+        || typeof runtime.historyChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      const leaseSignal = this.#inboundConsumers.signalFor(botId, expectedFingerprint);
+      const readSignal = signal ? AbortSignal.any([signal, leaseSignal]) : leaseSignal;
+      const result = await runtime.historyChecked({ botId, appId: config.appId,
+        botOpenId: config.botOpenId, fingerprint: account.fingerprint }, route, query, { signal: readSignal });
+      this.#assertOpen('capability-unavailable');
+      readSignal.throwIfAborted();
+      return result;
+    });
+  }
+
+  async qualifyReplyChecked(botId, route, { expectedFingerprint, signal } = {}) {
+    this.#assertOpen();
+    return this.#withBotTransition(botId, async () => {
+      this.#assertOpen();
+      signal?.throwIfAborted();
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      if (account.fingerprint !== expectedFingerprint)
+        throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      const runtime = this.#runtimes.get(botId);
+      if (config.consumerMode !== 'external-consumer' || !isConnected(connectionStatus(runtime))
+        || typeof runtime.qualifyReplyChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return runtime.qualifyReplyChecked(route, { signal });
+    });
+  }
+
+  async replyChecked(botId, route, text, { expectedFingerprint, signal, receipt = false, beforeSend } = {}) {
+    this.#assertOpen();
+    return this.#withBotTransition(botId, async () => {
+      this.#assertOpen();
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      if (account.fingerprint !== expectedFingerprint)
+        throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      signal?.throwIfAborted();
+      const runtime = this.#runtimes.get(botId);
+      if (config.consumerMode !== 'external-consumer' || !isConnected(connectionStatus(runtime))
+        || typeof runtime.replyChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return runtime.replyChecked(route, text, { signal, receipt, beforeSend });
+    });
+  }
+
+  async externalFileChecked(botId, route, value, { expectedFingerprint, signal, reply = false } = {}) {
+    this.#assertOpen();
+    return this.#withBotTransition(botId, async () => {
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      if (account.fingerprint !== expectedFingerprint)
+        throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      signal?.throwIfAborted();
+      const runtime = this.#runtimes.get(botId);
+      if (config.consumerMode !== 'external-consumer' || !isConnected(connectionStatus(runtime))
+        || typeof runtime.externalFileChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return runtime.externalFileChecked(route, value, { signal, reply });
+    });
+  }
+
   async sendProactiveText(botId, target, text, options = {}) {
     this.#assertOpen();
     return this.#withBotTransition(botId, async () => {
-      this.#requireBot(botId);
+      this.#assertOpen();
+      const config = this.#requireBot(botId);
+      if (options.expectedFingerprint !== undefined) {
+        const account = await this.#deliveryAccount(config);
+        if (account.fingerprint !== options.expectedFingerprint) {
+          const error = new Error('Authenticated account identity changed');
+          error.code = 'account-changed';
+          throw error;
+        }
+        options.signal?.throwIfAborted();
+      }
       const runtime = this.#runtimes.get(botId);
       if (!isConnected(connectionStatus(runtime))
         || typeof runtime.sendProactiveText !== 'function') {
@@ -711,6 +855,7 @@ export class MultiBotDshFeishuController {
   async close() {
     if (this.#closed) return;
     this.#closed = true;
+    this.#inboundConsumers.close();
     const appUpdateProcessing = [];
     for (const record of this.#registrations.values()) {
       const state = record.manager.status().state;
@@ -1302,11 +1447,28 @@ export class MultiBotDshFeishuController {
 
   async #startRuntime(config, appSecret) {
     await this.#stopRuntime(config.id);
-    const runtime = await atConnectionStage('runtime.prepare', () => this.#createRuntime({
+    let runtime;
+    runtime = await atConnectionStage('runtime.prepare', () => this.#createRuntime({
       botId: config.id,
       config,
       appSecret,
       repair: this.#runtimeRepairCapability(config.id),
+      acceptExternal: (event, { signal } = {}) => this.#withBotTransition(config.id, async () => {
+        signal?.throwIfAborted();
+        if (this.#runtimes.get(config.id) !== runtime) throw Object.assign(new Error('consumer-unavailable'), { code: 'consumer-unavailable' });
+        const current = this.#requireBot(config.id);
+        if (current.consumerMode !== 'external-consumer'
+          || configuredBotFingerprint(current) !== configuredBotFingerprint(config))
+          throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+        const account = await this.#deliveryAccount(current);
+        signal?.throwIfAborted();
+        const echo = normalizeOwnTextEcho(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
+        if (echo) return this.#inboundConsumers.accept(config.id, echo, signal, true);
+        const evidence = normalizeExternalText(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
+        if (evidence === null) return { accepted: true, ignored: true };
+        const enriched = this.#inboundConsumers.acceptsFiles(config.id) && typeof runtime.enrichExternal === 'function' ? await runtime.enrichExternal(evidence, { signal }) : evidence;
+        return this.#inboundConsumers.accept(config.id, enriched, signal);
+      }),
     }));
     this.#runtimes.set(config.id, runtime);
     try {
@@ -1348,6 +1510,7 @@ export class MultiBotDshFeishuController {
   async #deleteBot(botId) {
     let config = this.#configStore.getBot(botId);
     if (!config) return;
+    this.#inboundConsumers.remove(botId);
     if (!config.deletionPending) {
       config = await this.#configStore.saveBot({ ...config, deletionPending: true });
     }
@@ -1386,8 +1549,8 @@ export class MultiBotDshFeishuController {
     return config;
   }
 
-  #assertOpen() {
-    if (this.#closed) throw new Error('The Feishu controller is closed');
+  #assertOpen(code) {
+    if (this.#closed) throw Object.assign(new Error('The Feishu controller is closed'), code ? { code } : {});
   }
 
   #serializeConfig(operation) {

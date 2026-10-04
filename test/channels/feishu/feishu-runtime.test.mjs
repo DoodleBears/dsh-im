@@ -882,3 +882,90 @@ test('FeishuRuntime rejects imprecise probe operators and probes before connecti
   );
   await runtime.stop();
 });
+
+
+test('external group handler awaits durable acceptance and cannot start the native bridge or card actions', async () => {
+  let calls = 0;
+  const committed = deferred();
+  const runtime = new FeishuRuntime({
+    lark: fakeLark(), appId: 'app', appSecret: 'secret', ownerOpenIds: ['*'],
+    consumerMode: 'external-consumer',
+    acceptExternal: async () => { calls++; await committed.promise; return { accepted: true }; },
+    harness: { async ensureRunning() {}, ask() { throw new Error('native bridge must not execute'); } },
+    state: { hasSeen() { throw new Error('standalone state must not be consulted'); } },
+  });
+  const starting = runtime.start();
+  await waitFor(() => FakeWSClient.instances.length === 1);
+  const socket = FakeWSClient.instances[0];
+  socket.becomeReady(); await starting;
+  let acknowledged = false;
+  const pending = socket.dispatcher.handlers['im.message.receive_v1']({ message: { chat_type: 'group', thread_id: 'thread' } }).then(() => { acknowledged = true; });
+  await Promise.resolve();
+  assert.equal(calls, 1); assert.equal(acknowledged, false);
+  socket.dispatcher.handlers['card.action.trigger']({});
+  assert.equal(runtime.status.cardActionsReceived, 0);
+  committed.resolve(); await pending;
+  assert.equal(acknowledged, true);
+  await runtime.stop();
+});
+
+test('checked replies validate the original source before sending and retain unknown SDK outcomes', async () => {
+  const runtime = new FeishuRuntime({ lark: fakeLark(), appId: 'app', appSecret: 'secret', ownerOpenIds: ['*'],
+    consumerMode: 'external-consumer', harness: { async ensureRunning() {} }, state: {} });
+  const starting = runtime.start();
+  await waitFor(() => FakeWSClient.instances.length === 1);
+  FakeWSClient.instances[0].becomeReady(); await starting;
+  const source = { message_id: 'message', chat_id: 'chat', thread_id: 'thread', root_id: 'root', parent_id: 'parent', sender: { sender_type: 'user', id_type: 'open_id', id: 'human' } };
+  const client = FakeClient.instances[0];
+  client.im.v1.message.get = async () => ({ code: 0, data: { items: [source] } });
+  let sends = 0;
+  client.im.v1.message.reply = async request => {
+    sends++;
+    assert.equal(request.path.message_id, 'message');
+    assert.equal(request.data.reply_in_thread, true);
+    return { code: 0, data: { message_id: 'reply' } };
+  };
+  const route = { messageId: 'message', conversationId: 'chat', actorId: 'human', threadId: 'thread', rootId: 'root', parentId: 'parent' };
+  assert.deepEqual(await runtime.replyChecked(route, 'hello'), { sent: true, messageId: 'reply' });
+  source.thread_id = 'other-topic';
+  await assert.rejects(runtime.replyChecked(route, 'hello'), { code: 'stale-route' });
+  assert.equal(sends, 1);
+  source.thread_id = 'thread';
+  source.chat_id = 'other';
+  await assert.rejects(runtime.replyChecked(route, 'hello'), { code: 'stale-route' });
+  assert.equal(sends, 1);
+  source.chat_id = 'chat';
+  client.im.v1.message.reply = async () => { sends++; throw new Error('ambiguous timeout'); };
+  await assert.rejects(runtime.replyChecked(route, 'hello'), /ambiguous timeout/);
+  assert.equal(sends, 2);
+  await runtime.stop();
+});
+
+
+test('own-account qualification maps the sender without borrowing an ingress app identity and yields a checked reply receipt', async () => {
+  const runtime = new FeishuRuntime({ lark: fakeLark(), appId: 'responder', appSecret: 'secret', ownerOpenIds: ['*'],
+    consumerMode: 'external-consumer', harness: { async ensureRunning() {} }, state: {} });
+  const starting = runtime.start();
+  await waitFor(() => FakeWSClient.instances.length === 1);
+  FakeWSClient.instances[0].becomeReady(); await starting;
+  const client = FakeClient.instances[0];
+  client.im.v1.message.get = async () => ({code: 0, data: {items: [{message_id: 'message', chat_id: 'chat', thread_id: 'thread', root_id: 'root', parent_id: 'parent',
+    sender: {sender_type: 'user', id_type: 'open_id', id: 'responder-scoped-human'}}]}});
+  let sends = 0;
+  client.im.v1.message.reply = async request => {
+    sends++; assert.equal(request.data.reply_in_thread, true);
+    return {code: 0, data: {message_id: 'reply', chat_id: 'chat'}};
+  };
+  const ingress = {messageId: 'message', conversationId: 'chat', actorId: 'ingress-scoped-human', threadId: 'thread', rootId: 'root', parentId: 'parent'};
+  const route = await runtime.qualifyReplyChecked(ingress);
+  assert.equal(route.actorId, 'responder-scoped-human');
+  assert.equal(sends, 0);
+  await assert.rejects(runtime.replyChecked(route, 'hello', {receipt: true, beforeSend: () => false}), {code: 'stale-route'});
+  assert.equal(sends, 0);
+  await assert.rejects(runtime.replyChecked(ingress, 'hello', {receipt: true}), {code: 'stale-route'});
+  assert.deepEqual(await runtime.replyChecked(route, 'hello', {receipt: true}), {sent: true, receipt: {version: 1, messageId: 'reply', conversationId: 'chat'}});
+  client.im.v1.message.reply = async () => {sends++; return {code: 0, data: {message_id: 'wrong', chat_id: 'other'}};};
+  await assert.rejects(runtime.replyChecked(route, 'hello', {receipt: true}), {code: 'reply-result-unknown'});
+  assert.equal(sends, 2);
+  await runtime.stop();
+});

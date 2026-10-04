@@ -339,12 +339,15 @@ export class VerifiedFeishuChannel {
     signal,
     replyInThread = false,
     onReplyThreadId,
+    beforeSend,
+    retryUncertain = true,
   } = {}) {
     return this.#sendArtifact(chatId, file, {
       replyTo,
       signal,
       replyInThread,
       onReplyThreadId,
+    beforeSend,
       messageType: 'file',
       presentation: 'feishu-file',
     });
@@ -407,6 +410,8 @@ export class VerifiedFeishuChannel {
     onReplyThreadId,
     messageType,
     presentation,
+    beforeSend,
+    retryUncertain = true,
   }) {
     signal?.throwIfAborted();
     if (typeof chatId !== 'string' || !chatId) throw new TypeError('chatId is required');
@@ -454,6 +459,8 @@ export class VerifiedFeishuChannel {
       throw fileDeliveryError('upload', undefined, uploaded?.code);
     }
 
+    await beforeSend?.();
+    signal?.throwIfAborted();
     const uuid = deliveryUuid(file, chatId, messageType);
     const content = JSON.stringify(messageType === 'image'
       ? { image_key: resourceKey }
@@ -495,7 +502,7 @@ export class VerifiedFeishuChannel {
 
         // Feishu documents 230049 as an uncertain asynchronous send result.
         // Reuse the same resource key and UUID once so the provider can deduplicate.
-        if (Number(result?.code) === 230049) {
+        if (Number(result?.code) === 230049 && retryUncertain) {
           result = await send();
           operationSignal.throwIfAborted();
         }

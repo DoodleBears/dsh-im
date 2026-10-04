@@ -233,6 +233,39 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
   }
   return Object.freeze({
     channel,
+    consumeInbound: (botId, options) => {
+      if (typeof coreController.consumeInbound !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.consumeInbound(botId, options);
+    },
+    historyChecked: (botId, route, query, options) => {
+      if (typeof coreController.historyChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.historyChecked(botId, route, query, options);
+    },
+    externalFileChecked: (botId, route, value, options) => {
+      if (typeof coreController.externalFileChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.externalFileChecked(botId, route, value, options);
+    },
+    qualifyReplyChecked: (botId, route, options) => {
+      if (typeof coreController.qualifyReplyChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.qualifyReplyChecked(botId, route, options);
+    },
+    replyChecked: (botId, route, text, options) => {
+      if (typeof coreController.replyChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.replyChecked(botId, route, text, options);
+    },
+    describeAccount: (botId) => {
+      if (typeof coreController.describeDeliveryAccount !== 'function') {
+        const error = new Error('Verified account capability unavailable');
+        error.code = 'capability-unavailable';
+        throw error;
+      }
+      return coreController.describeDeliveryAccount(botId);
+    },
     ownsBot: (botId) => workspaces.has(botId),
     listBots: () => workspaces.listBotIds(),
     async listTargets(botId) {
@@ -278,8 +311,8 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
       if (typeof coreController.sendProactiveText !== 'function') {
         throw new TypeError('delivery controller cannot send proactive text');
       }
-      await coreController.sendProactiveText(botId, normalized, text, options);
-      return { sent: true };
+      const result = await coreController.sendProactiveText(botId, normalized, text, options);
+      return options.receipt === true ? result : { sent: true };
     },
     async setSessionSync(botId, targetId, enabled) {
       if (typeof workspaces.setDeliveryTargetSessionSync !== 'function') {

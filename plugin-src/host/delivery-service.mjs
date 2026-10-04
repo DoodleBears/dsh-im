@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { normalizeDeliveryTarget } from './delivery-adapter.mjs';
 
 const BOT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -18,6 +19,10 @@ const ADAPTER_METHODS = Object.freeze([
 
 const DELIVERY_ERROR_CODES = new Set([
   'bad-request',
+  'account-unverified',
+  'account-changed',
+  'target-changed',
+  'capability-unavailable',
   'unknown-bot',
   'unknown-target',
   'target-conflict',
@@ -27,6 +32,25 @@ const DELIVERY_ERROR_CODES = new Set([
   'delivery-failed',
   'session-sync-unavailable',
   'cancelled',
+  'provider-unavailable',
+  'consumer-unavailable',
+  'consumer-conflict',
+  'ingress-not-accepted',
+  'invalid-inbound',
+  'stale-route',
+  'source-not-found',
+  'source-unavailable',
+  'reply-permission-denied',
+  'history-permission-denied',
+  'history-unavailable',
+  'thread-unavailable',
+  'untrusted-source',
+  'reply-result-unknown',
+  'send-result-unknown',
+  'file-upload-failed',
+  'file-provider-rejected',
+  'resource-unavailable',
+  'artifact-too-large',
 ]);
 
 const SESSION_SYNC_METHODS = Object.freeze([
@@ -126,11 +150,13 @@ export class DeliveryService {
 
   registerAdapter(value) {
     const adapter = validateAdapter(value);
-    const registration = Object.freeze({ adapter });
+    this.#adapters.get(adapter.channel)?.controller.abort(deliveryError('provider-unavailable'));
+    const registration = Object.freeze({ adapter, controller: new AbortController() });
     this.#adapters.set(adapter.channel, registration);
     return () => {
       if (this.#adapters.get(adapter.channel) !== registration) return false;
       this.#adapters.delete(adapter.channel);
+      registration.controller.abort(deliveryError('provider-unavailable'));
       return true;
     };
   }
@@ -290,6 +316,163 @@ export class DeliveryService {
     }
   }
 
+  #assertRegistered(registration) {
+    if (this.#adapters.get(registration.adapter.channel) !== registration) {
+      throw deliveryError('capability-unavailable');
+    }
+  }
+
+  async describeBot(botId) {
+    const id = botIdOf(botId);
+    const registration = await this.#checkedRegistrationFor(id);
+    const { adapter } = registration;
+    if (typeof adapter.describeAccount !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    try {
+      const account = await adapter.describeAccount(id);
+      this.#assertRegistered(registration);
+      return account;
+    } catch (error) { throw publicOperationError(error); }
+  }
+
+  async consumeInbound(botId, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '') || typeof options.onEvent !== 'function')
+      throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (typeof registration.adapter.consumeInbound !== 'function' || typeof options.onEvent !== 'function')
+      throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    const dispose = await registration.adapter.consumeInbound(id, {
+      ...options,
+      signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal,
+      ...(options.onEcho === undefined ? {} : { onEcho: async (evidence, context) => {
+        this.#assertRegistered(registration);
+        const result = await options.onEcho(evidence, context);
+        this.#assertRegistered(registration);
+        return result;
+      } }),
+      onEvent: async (evidence, context) => {
+        this.#assertRegistered(registration);
+        const result = await options.onEvent(evidence, context);
+        this.#assertRegistered(registration);
+        return result;
+      },
+    });
+    try { this.#assertRegistered(registration); } catch (error) { dispose(); throw error; }
+    return dispose;
+  }
+
+  async historyChecked(botId, route, query, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')) throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (typeof registration.adapter.historyChecked !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    const signal = options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal;
+    try {
+      const result = await registration.adapter.historyChecked(id, structuredClone(route), structuredClone(query), { ...options, signal });
+      this.#assertRegistered(registration);
+      cancellation(options.signal);
+      return result;
+    } catch (error) {
+      this.#assertRegistered(registration);
+      if (signal.aborted || error?.name === 'AbortError') throw deliveryError('cancelled');
+      throw publicOperationError(error, 'history-unavailable');
+    }
+  }
+
+  async qualifyReplyChecked(botId, route, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')) throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (typeof registration.adapter.qualifyReplyChecked !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    const signal = options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal;
+    try {
+      const result = await registration.adapter.qualifyReplyChecked(id, structuredClone(route), { ...options, signal });
+      this.#assertRegistered(registration);
+      cancellation(signal);
+      return result;
+    }
+    catch (error) { const safe = publicOperationError(error); throw deliveryError(safe.code, safe.code); }
+  }
+
+  async replyChecked(botId, route, text, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')
+      || typeof text !== 'string' || !text.trim() || text.length > 4000)
+      throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (typeof registration.adapter.replyChecked !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    try { return await registration.adapter.replyChecked(id, structuredClone(route), text, {
+      ...options, signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal,
+    }); }
+    catch (error) { throw publicOperationError(error); }
+  }
+
+  async externalFileChecked(botId, route, value, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')) throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (typeof registration.adapter.externalFileChecked !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    try {
+      return await registration.adapter.externalFileChecked(id, structuredClone(route), structuredClone(value), {
+        ...options, signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal,
+      });
+    } catch (error) { throw publicOperationError(error); }
+  }
+
+  async sendChecked(botId, targetId, text, { expectedFingerprint, expectedTargetDigest, signal, format = 'plain', receipt = false } = {}) {
+    const id = botIdOf(botId);
+    const key = targetIdOf(targetId);
+    if (typeof text !== 'string' || !text.trim() || !['plain', 'markdown'].includes(format) || typeof receipt !== 'boolean'
+      || !/^[a-f0-9]{64}$/.test(expectedFingerprint ?? '') || !/^[a-f0-9]{64}$/.test(expectedTargetDigest ?? '')) {
+      throw deliveryError('bad-request');
+    }
+    cancellation(signal);
+    const registration = await this.#checkedRegistrationFor(id);
+    const { adapter } = registration;
+    if (typeof adapter.describeAccount !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    try {
+      const candidates = await adapter.listTargets(id);
+      const saved = candidates.find((target) => target?.targetId === key);
+      if (!saved) throw deliveryError('unknown-target');
+      const target = normalizeDeliveryTarget(adapter.channel, {
+        targetId: saved.targetId, kind: saved.kind, route: structuredClone(saved.route),
+      });
+      const digest = createHash('sha256').update(JSON.stringify({ kind: target.kind,
+        route: Object.fromEntries(Object.entries(target.route).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) })).digest('hex');
+      if (digest !== expectedTargetDigest) throw deliveryError('target-changed');
+      const account = await adapter.describeAccount(id);
+      if (account?.version !== 1 || !account.capabilities?.includes('proactive-text-checked')) {
+        throw deliveryError('capability-unavailable');
+      }
+      if (account.account?.fingerprint !== expectedFingerprint) throw deliveryError('account-changed');
+      if (receipt && (!account.capabilities?.includes('proactive-receipt-checked') || target.kind !== 'group'))
+        throw deliveryError('capability-unavailable');
+      cancellation(signal);
+      this.#assertRegistered(registration);
+      const result = await adapter.sendText(id, target, text, { signal, expectedFingerprint,
+        ...(receipt ? { receipt: true } : {}),
+        ...(format === 'markdown' ? { format } : {}) });
+      if (!receipt) return { sent: true };
+      if (result?.sent !== true || result.receipt?.version !== 1
+        || typeof result.receipt.messageId !== 'string' || !result.receipt.messageId || result.receipt.messageId.length > 512
+        || result.receipt.conversationId !== target.route.chatId)
+        throw deliveryError('send-result-unknown');
+      return { sent: true, receipt: { version: 1, messageId: result.receipt.messageId, conversationId: result.receipt.conversationId } };
+    } catch (error) { throw publicOperationError(error); }
+  }
+
   async send(botId, targetIdOrDraft, text, { signal, format = 'plain' } = {}) {
     const id = botIdOf(botId);
     const targetKey = typeof targetIdOrDraft === 'string'
@@ -326,6 +509,19 @@ export class DeliveryService {
       }
       throw publicOperationError(error);
     }
+  }
+
+  async #checkedRegistrationFor(botId) {
+    for (const registration of this.#adapters.values()) {
+      let ownsBot;
+      try { ownsBot = await registration.adapter.ownsBot(botId); }
+      catch (error) { throw publicOperationError(error); }
+      if (ownsBot) {
+        this.#assertRegistered(registration);
+        return registration;
+      }
+    }
+    throw deliveryError('unknown-bot', 'Unknown bot');
   }
 
   async #adapterFor(botId) {

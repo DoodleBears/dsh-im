@@ -1,0 +1,9 @@
+# Checked proactive receipts (opt-in)
+
+The Host Service advertises `receiptVersion: 1`. A verified Feishu/Lark account additionally advertises `proactive-receipt-checked`. Consumers may call `sendChecked(botId, savedTargetId, text, { expectedFingerprint, expectedTargetDigest, receipt: true, signal, format: 'plain' })` for a saved **group** target.
+
+The success value is `{ sent: true, receipt: { version: 1, messageId, conversationId } }`. The receipt preserves only the native create response's `message_id` and `chat_id`; the conversation must match the frozen checked target. Legacy calls without `receipt: true` keep exactly `{ sent: true }`. Unsupported capability or a user target is refused before dispatch. A missing or mismatched receipt after dispatch is `send-result-unknown`: there is no retry or fallback, and it does not prove the recipient read the message.
+
+The optional `echoVersion: 1` and account capability `own-text-echo` allow an existing exclusive consumer to register `onEcho`. Only text events authenticated as this application's own Bot identity reach that callback. They are never passed to `onEvent` as Human messages. The consumer must associate an echo by account fingerprint, conversation and native message ID with existing outbound evidence; a text match alone is insufficient. Unmatched echoes must not create incoming messages or attention. This interface does not promise that Lark emits a Bot's own messages to its subscription. A receipt and a real Human reply can be qualified independently of echo delivery.
+
+Credential ownership, exclusive consumption, registration fencing, and existing checked target/account validation remain unchanged. Receipt negotiation neither selects an arbitrary recipient nor requests broader permissions. BotHarness issue [#639](https://github.com/BotHarness/BotHarness/issues/639) is the consumer tracer; real-platform evidence belongs there.

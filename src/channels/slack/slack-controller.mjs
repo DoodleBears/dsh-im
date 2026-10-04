@@ -3,7 +3,9 @@ import { connectionTestMessage } from '../shared/connection-test.mjs';
 import { publicMessageFailure } from '../shared/message-failure.mjs';
 import { t } from '../shared/i18n.mjs';
 import { deriveSlackBotIdentity, maskSlackBotId } from './config-store.mjs';
-import { inspectSlackCredentials } from './slack-api.mjs';
+import { inspectSlackCredentials, SlackApi } from './slack-api.mjs';
+import { ExclusiveInboundConsumers } from '../shared/exclusive-inbound-consumers.mjs';
+import { verifiedSlackAccount, slackRefusal } from './external-consumer.mjs';
 import { SLACK_DESCRIPTOR } from './slack-bridge.mjs';
 
 function cleanString(value) {
@@ -27,11 +29,14 @@ export class SlackController {
   #transitions = new Map();
   #revision = 0;
   #closed = false;
+  #inboundConsumers = new ExclusiveInboundConsumers();
+  #createApi;
 
   constructor({
     credentials,
     configStore,
     inspectCredentials = inspectSlackCredentials,
+    createApi = options => new SlackApi(options),
     createRuntime,
     deleteState = async () => {},
     logger = console,
@@ -50,6 +55,7 @@ export class SlackController {
     this.#credentials = credentials;
     this.#configStore = configStore;
     this.#inspectCredentials = inspectCredentials;
+    this.#createApi = createApi;
     this.#createRuntime = createRuntime;
     this.#deleteState = deleteState;
     this.#logger = logger;
@@ -121,6 +127,7 @@ export class SlackController {
         username: cleanString(inspected.username),
         teamId: cleanString(inspected.teamId),
         teamName: cleanString(inspected.teamName),
+        consumerMode: previousConfig?.consumerMode ?? 'standalone-session',
         createdAt: previousConfig?.createdAt ?? new Date().toISOString(),
         connectedAt: new Date().toISOString(),
       };
@@ -207,11 +214,83 @@ export class SlackController {
     });
   }
 
+  async #deliveryAccount(config, signal) {
+    if (this.#closed) throw slackRefusal('provider-unavailable');
+    const resolved = await this.#resolveCredentials(config);
+    if (!resolved) throw slackRefusal('account-unverified');
+    const api = this.#createApi(resolved);
+    const identity = await api.authTest({ signal });
+    if (`${identity?.team_id}:${identity?.user_id}` !== config.platformId)
+      throw slackRefusal('account-changed');
+    const bot = await api.botInfo({ botId: identity.bot_id, signal });
+    const account = verifiedSlackAccount(identity, bot);
+    if (this.#closed) throw slackRefusal('provider-unavailable');
+    signal?.throwIfAborted();
+    return account;
+  }
+
+  async describeDeliveryAccount(botId) {
+    return this.#withBotTransition(botId, async () => {
+      const config = this.#configStore.get(botId);
+      if (!config) throw slackRefusal('unknown-bot');
+      const account = await this.#deliveryAccount(config);
+      return { version: 1, botId, channel: 'slack', account,
+        connected: this.#runtimes.get(botId)?.status?.ready === true,
+        capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'reply-text-checked',
+          'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked'] };
+    });
+  }
+
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal } = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const config = this.#configStore.get(botId);
+      if (!config) throw slackRefusal('unknown-bot');
+      const account = await this.#deliveryAccount(config, signal);
+      if (account.fingerprint !== expectedFingerprint) throw slackRefusal('account-changed');
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal });
+      try {
+        const saved = await this.#configStore.save({ ...config, consumerMode: 'external-consumer' });
+        const resolved = await this.#resolveCredentials(saved);
+        if (!resolved) throw slackRefusal('account-unverified');
+        await this.#startRuntime(saved, resolved);
+        signal?.throwIfAborted();
+        return dispose;
+      } catch (error) { dispose(); throw error; }
+    });
+  }
+
+  async #checkedRuntime(botId, expectedFingerprint, signal) {
+    const config = this.#configStore.get(botId);
+    if (!config) throw slackRefusal('unknown-bot');
+    const account = await this.#deliveryAccount(config, signal);
+    if (account.fingerprint !== expectedFingerprint) throw slackRefusal('account-changed');
+    const runtime = this.#runtimes.get(botId);
+    if (config.consumerMode !== 'external-consumer' || !runtime?.status?.ready)
+      throw slackRefusal('capability-unavailable');
+    const lease = this.#inboundConsumers.signalFor(botId, expectedFingerprint);
+    return { runtime, signal: signal ? AbortSignal.any([signal, lease]) : lease };
+  }
+
+  async qualifyReplyChecked(botId, route, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      return checked.runtime.qualifyReplyChecked(route, { signal: checked.signal });
+    });
+  }
+
+  async replyChecked(botId, route, text, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      return checked.runtime.replyChecked(route, text, { ...options, signal: checked.signal });
+    });
+  }
+
   async deleteBot(botId) {
     const warnings = [];
     const config = this.#configStore.get(botId);
     if (!config) throw new Error('Unknown Slack bot');
     await this.#withBotTransition(botId, async () => {
+      this.#inboundConsumers.remove(botId);
       const previousBotToken = await atConnectionStage('credential.read', () => this.#credentials.resolve(config.botTokenRef), 'credential-store');
       const previousAppToken = await atConnectionStage('credential.read', () => this.#credentials.resolve(config.appTokenRef), 'credential-store');
       await this.#stopRuntime(botId);
@@ -296,6 +375,7 @@ export class SlackController {
   async close() {
     if (this.#closed) return;
     this.#closed = true;
+    this.#inboundConsumers.close();
     await Promise.allSettled([...this.#transitions.values()]);
     await Promise.allSettled([...this.#runtimes.keys()].map((botId) => this.#stopRuntime(botId)));
   }
@@ -309,6 +389,7 @@ export class SlackController {
       config,
       botToken,
       appToken,
+      externalConsumer: (evidence, signal) => this.#inboundConsumers.accept(config.botId, evidence, signal),
     }));
     if (!runtime || typeof runtime.start !== 'function' || typeof runtime.stop !== 'function') {
       throw new TypeError('createRuntime returned an invalid Slack runtime');
