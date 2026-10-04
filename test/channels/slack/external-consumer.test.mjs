@@ -59,7 +59,7 @@ class Socket {
   close() { this.readyState = 3; }
   packet(value) { this.listeners.get('message')?.({ data: JSON.stringify(value) }); }
 }
-async function fixture(onEvent, overrides = {}) {
+async function fixture(onEvent, overrides = {}, sourceFiles = false) {
   let socket;
   const sends = [];
   let sessionWrites = 0;
@@ -77,7 +77,7 @@ async function fixture(onEvent, overrides = {}) {
   const runtime = new SlackRuntime({ config: { botId, platformId: `${identity.team_id}:${identity.user_id}`, consumerMode: 'external-consumer' },
     botToken: 'xoxb-test-1234567890123456', appToken: 'xapp-test-1234567890123456',
     harness: { ensureRunning: async () => true }, state: { setSession: () => { sessionWrites++; } },
-    externalConsumer: onEvent, createApi: () => api, createWebSocket: () => {
+    externalConsumer: onEvent, externalSourceFiles: () => sourceFiles, createApi: () => api, createWebSocket: () => {
       socket = new Socket(); queueMicrotask(() => socket.packet({ type: 'hello', connection_info: { app_id: bot.app_id } }));
       return socket;
     }, logger: { warn() {}, error() {}, info() {}, debug() {} }, connectTimeoutMs: 100,
@@ -247,4 +247,46 @@ test('stopping the Slack runtime discards a result returned after its read began
   const read = f.runtime.historyChecked(route, { scope: 'group', limit: 1 });
   const rejected = assert.rejects(read, { code: 'capability-unavailable' });
   await started; await f.runtime.stop(); release(); await rejected;
+});
+
+
+test('file opt-in persists only current source metadata and waits for canonical acceptance', async () => {
+  let received;
+  let accept;
+  const f = await fixture(async event => { received = event; return new Promise(resolve => { accept = resolve; }); }, {}, true);
+  try {
+    f.source.files = [{ id: 'F12345678', name: 'source.zip', mode: 'hosted', size: 3, url_private: 'https://files.slack.com/files-pri/private' }];
+    const packet = payload({ files: f.source.files, subtype: 'file_share' });
+    assert.equal(normalizeSlackExternalText(packet, { botId, account }), null);
+    f.socket.packet({ type: 'events_api', envelope_id: 'env-file', payload: packet });
+    for (let i = 0; i < 10 && !received; i++) await flush();
+    assert.deepEqual(Object.keys(received.attachments[0]).sort(), ['id', 'messageId', 'name', 'resourceKey', 'sizeBytes']);
+    assert.equal(received.attachments[0].messageId, f.source.ts);
+    assert.equal(received.attachments[0].resourceKey, 'F12345678');
+    assert.match(received.attachments[0].id, /^[a-f0-9]{64}$/);
+    assert.equal(JSON.stringify(received).includes('url_private'), false);
+    assert.equal(f.socket.sent.length, 0);
+    accept({ accepted: true }); await flush();
+    assert.deepEqual(f.socket.sent, [{ envelope_id: 'env-file' }]);
+    assert.equal(f.sessionWrites(), 0);
+  } finally { await f.runtime.stop(); }
+});
+
+test('checked file read rejects a replaced source and stops streaming after runtime disposal', async () => {
+  let received;
+  const f = await fixture(async event => { received = event; return { accepted: true }; }, {
+    fileInfo: async () => ({ id: 'F12345678', name: 'source.zip', mode: 'hosted', size: 3, url_private: 'https://files.slack.com/files-pri/private' }),
+    downloadFileStream: async () => ({ stream: (async function* () { yield Buffer.from('abc'); })() }),
+  }, true);
+  try {
+    f.source.files = [{ id: 'F12345678', name: 'source.zip', size: 3 }];
+    f.socket.packet({ type: 'events_api', envelope_id: 'env-file', payload: payload() });
+    for (let i = 0; i < 10 && !received; i++) await flush();
+    const file = received.attachments[0];
+    await assert.rejects(f.runtime.externalFileChecked(received.reply, { ...file, resourceKey: 'F87654321' }), { code: 'stale-route' });
+    const stream = await f.runtime.externalFileChecked(received.reply, file);
+    await f.runtime.stop();
+    await assert.rejects(async () => { for await (const _ of stream) {} });
+    assert.equal(f.sessionWrites(), 0);
+  } finally { await f.runtime.stop(); }
 });

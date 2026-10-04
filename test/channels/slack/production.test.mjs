@@ -49,7 +49,11 @@ test('Slack production has no per-bot result-file Gate', async (t) => {
   };
 
   const production = await createProductionController(ctx, { dataDir }, internals);
+  const acceptsFiles = () => true;
+  const consumer = async () => ({ accepted: true });
   await controllerOptions.createRuntime({
+    externalSourceFiles: acceptsFiles,
+    externalConsumer: consumer,
     botId: 'slack_enabled',
     config: { botId: 'slack_enabled' },
     botToken: 'host-only-bot-token',
@@ -62,6 +66,9 @@ test('Slack production has no per-bot result-file Gate', async (t) => {
     appToken: 'host-only-app-token',
   });
 
+  assert.equal(runtimes[0].externalSourceFiles, acceptsFiles);
+  assert.equal(runtimes[0].externalConsumer, consumer);
+  assert.equal(runtimes[0].externalSourceFiles(), true);
   assert.equal(Object.hasOwn(runtimes[0], 'outboundArtifactsEnabled'), false);
   assert.equal(Object.hasOwn(runtimes[1], 'outboundArtifactsEnabled'), false);
   await production.close();

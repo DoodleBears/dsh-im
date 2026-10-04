@@ -26,12 +26,12 @@ export function verifiedSlackAccount(identity, bot) {
 }
 
 /** Native channel and timestamp identities stay separate from event delivery IDs. */
-export function normalizeSlackExternalText(payload, { botId, account }) {
+export function normalizeSlackExternalText(payload, { botId, account, sourceFiles = false }) {
   if (payload?.api_app_id !== account.appId || payload?.team_id !== account.teamId)
     throw slackRefusal('account-changed');
   const event = payload.event;
-  if (event?.type !== 'app_mention' || event.bot_id || event.app_id || event.subtype
-    || (Array.isArray(event.files) && event.files.length > 0)
+  if (event?.type !== 'app_mention' || event.bot_id || event.app_id || (event.subtype && !(sourceFiles && event.subtype === 'file_share'))
+    || (!sourceFiles && Array.isArray(event.files) && event.files.length > 0)
     || event.user === account.userId) return null;
   if (!slackId(event.channel, 'C') || !slackId(event.user, 'UW')
     || !slackTimestamp(event.ts) || (event.thread_ts !== undefined && !slackTimestamp(event.thread_ts))
