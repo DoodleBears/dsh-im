@@ -26,18 +26,23 @@ export function verifiedSlackAccount(identity, bot) {
 }
 
 /** Native channel and timestamp identities stay separate from event delivery IDs. */
-export function normalizeSlackExternalText(payload, { botId, account, sourceFiles = false }) {
+export function normalizeSlackExternalText(payload, { botId, account, sourceFiles = false, ordinaryText = false }) {
   if (payload?.api_app_id !== account.appId || payload?.team_id !== account.teamId)
     throw slackRefusal('account-changed');
   const event = payload.event;
-  if (event?.type !== 'app_mention' || event.bot_id || event.app_id || (event.subtype && !(sourceFiles && event.subtype === 'file_share'))
+  const mention = event?.type === 'app_mention';
+  const ordinary = ordinaryText && event?.type === 'message' && event.channel_type === 'channel';
+  if ((!mention && !ordinary) || event.bot_id || event.app_id || (event.subtype && !(mention && sourceFiles && event.subtype === 'file_share'))
+    || (ordinary && Array.isArray(event.files) && event.files.length > 0)
     || (!sourceFiles && Array.isArray(event.files) && event.files.length > 0)
     || event.user === account.userId) return null;
   if (!slackId(event.channel, 'C') || !slackId(event.user, 'UW')
     || !slackTimestamp(event.ts) || (event.thread_ts !== undefined && !slackTimestamp(event.thread_ts))
     || typeof payload.event_id !== 'string' || !/^Ev[A-Za-z0-9]{4,126}$/.test(payload.event_id)
     || typeof event.text !== 'string' || !event.text.trim() || event.text.length > 16000) throw slackRefusal('invalid-inbound');
-  return normalizeText(event, { botId, account, eventId: payload.event_id, requireMention: true });
+  const normalized = normalizeText(event, { botId, account, eventId: payload.event_id, requireMention: mention });
+  // app_mention is the sole own-mention delivery path when both subscriptions overlap.
+  return ordinary && normalized?.mentionedAccount ? null : normalized;
 }
 
 function normalizeText(event, { botId, account, eventId, requireMention }) {

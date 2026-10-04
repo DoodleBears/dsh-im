@@ -53,6 +53,7 @@ test('Slack production has no per-bot result-file Gate', async (t) => {
   const consumer = async () => ({ accepted: true });
   await controllerOptions.createRuntime({
     externalSourceFiles: acceptsFiles,
+    externalOrdinaryText: acceptsFiles,
     externalConsumer: consumer,
     botId: 'slack_enabled',
     config: { botId: 'slack_enabled' },
@@ -69,6 +70,8 @@ test('Slack production has no per-bot result-file Gate', async (t) => {
   assert.equal(runtimes[0].externalSourceFiles, acceptsFiles);
   assert.equal(runtimes[0].externalConsumer, consumer);
   assert.equal(runtimes[0].externalSourceFiles(), true);
+  assert.equal(runtimes[0].externalOrdinaryText, acceptsFiles);
+  assert.equal(runtimes[0].externalOrdinaryText(), true);
   assert.equal(Object.hasOwn(runtimes[0], 'outboundArtifactsEnabled'), false);
   assert.equal(Object.hasOwn(runtimes[1], 'outboundArtifactsEnabled'), false);
   await production.close();

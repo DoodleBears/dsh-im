@@ -432,6 +432,7 @@ export class SlackRuntime {
   #starting = null;
   #externalConsumer;
   #externalSourceFiles;
+  #externalOrdinaryText;
   #account;
 
   constructor({
@@ -444,6 +445,7 @@ export class SlackRuntime {
     accessPolicy,
     externalConsumer,
     externalSourceFiles = () => false,
+    externalOrdinaryText = () => false,
     logger = console,
     replyTimeoutMs = 600_000,
     connectTimeoutMs = 20_000,
@@ -463,6 +465,7 @@ export class SlackRuntime {
     this.#accessPolicy = accessPolicy;
     this.#externalConsumer = externalConsumer;
     this.#externalSourceFiles = externalSourceFiles;
+    this.#externalOrdinaryText = externalOrdinaryText;
     this.#logger = logger; this.#diagnostics = createConnectionDiagnostics({ channel: 'slack', logger });
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#connectTimeoutMs = connectTimeoutMs;
@@ -817,7 +820,7 @@ export class SlackRuntime {
 
   async #acceptExternal(payload, generation) {
     if (!this.#account || typeof this.#externalConsumer !== 'function') throw slackRefusal('consumer-unavailable');
-    const evidence = normalizeSlackExternalText(payload, { botId: this.#config.botId, account: this.#account, sourceFiles: this.#externalSourceFiles() });
+    const evidence = normalizeSlackExternalText(payload, { botId: this.#config.botId, account: this.#account, sourceFiles: this.#externalSourceFiles(), ordinaryText: this.#externalOrdinaryText() });
     if (!evidence) return;
     const signal = this.#abortController.signal;
     await this.#verifyChannel(evidence.conversation.id, signal);

@@ -59,7 +59,7 @@ class Socket {
   close() { this.readyState = 3; }
   packet(value) { this.listeners.get('message')?.({ data: JSON.stringify(value) }); }
 }
-async function fixture(onEvent, overrides = {}, sourceFiles = false) {
+async function fixture(onEvent, overrides = {}, sourceFiles = false, ordinaryText = false) {
   let socket;
   const sends = [];
   let sessionWrites = 0;
@@ -77,7 +77,7 @@ async function fixture(onEvent, overrides = {}, sourceFiles = false) {
   const runtime = new SlackRuntime({ config: { botId, platformId: `${identity.team_id}:${identity.user_id}`, consumerMode: 'external-consumer' },
     botToken: 'xoxb-test-1234567890123456', appToken: 'xapp-test-1234567890123456',
     harness: { ensureRunning: async () => true }, state: { setSession: () => { sessionWrites++; } },
-    externalConsumer: onEvent, externalSourceFiles: () => sourceFiles, createApi: () => api, createWebSocket: () => {
+    externalConsumer: onEvent, externalSourceFiles: () => sourceFiles, externalOrdinaryText: () => ordinaryText, createApi: () => api, createWebSocket: () => {
       socket = new Socket(); queueMicrotask(() => socket.packet({ type: 'hello', connection_info: { app_id: bot.app_id } }));
       return socket;
     }, logger: { warn() {}, error() {}, info() {}, debug() {} }, connectTimeoutMs: 100,
@@ -289,4 +289,51 @@ test('checked file read rejects a replaced source and stops streaming after runt
     await assert.rejects(async () => { for await (const _ of stream) {} });
     assert.equal(f.sessionWrites(), 0);
   } finally { await f.runtime.stop(); }
+});
+
+
+test('ordinary public Human text is explicit opt-in and does not duplicate own mentions', () => {
+  const ordinary = payload({ type: 'message', channel_type: 'channel', text: 'ordinary QA' });
+  assert.equal(normalizeSlackExternalText(ordinary, { botId, account }), null);
+  const result = normalizeSlackExternalText(ordinary, { botId, account, ordinaryText: true });
+  assert.equal(result.mentionedAccount, false);
+  assert.equal(result.messageId, ordinary.event.ts);
+  assert.equal(result.reply.threadId, ordinary.event.ts);
+  assert.equal(result.actor.id, ordinary.event.user);
+  assert.equal(normalizeSlackExternalText(payload({ type: 'message', channel_type: 'channel' }), { botId, account, ordinaryText: true }), null);
+  assert.equal(normalizeSlackExternalText(payload(), { botId, account, ordinaryText: true }).mentionedAccount, true);
+  for (const patch of [
+    { channel_type: 'im' }, { channel_type: 'group' }, { bot_id: bot.id },
+    { user: account.userId }, { subtype: 'message_changed' },
+    { files: [{ id: 'F12345678' }] }, { subtype: 'file_share', files: [{ id: 'F12345678' }] },
+  ]) assert.equal(normalizeSlackExternalText({ ...ordinary, event: { ...ordinary.event, ...patch } },
+    { botId, account, ordinaryText: true, sourceFiles: true }), null);
+});
+
+test('ordinary Socket delivery waits for canonical acceptance and overlapping mention delivers once', async () => {
+  const received = [];
+  let accept;
+  const f = await fixture(async event => { received.push(event); return new Promise(resolve => { accept = resolve; }); }, {}, false, true);
+  try {
+    f.socket.packet({ type: 'events_api', envelope_id: 'ordinary-1', payload: payload({ type: 'message', channel_type: 'channel', text: 'ordinary QA' }) });
+    await flush();
+    assert.equal(received.length, 1);
+    assert.equal(received[0].mentionedAccount, false);
+    assert.equal(f.socket.sent.length, 0);
+    accept({ accepted: true }); await flush();
+    f.socket.packet({ type: 'events_api', envelope_id: 'mention-overlap', payload: payload({ type: 'message', channel_type: 'channel' }) });
+    await flush();
+    assert.equal(received.length, 1);
+    assert.equal(f.socket.sent.length, 2);
+    assert.equal(f.sessionWrites(), 0);
+  } finally { await f.runtime.stop(); }
+});
+
+test('ordinary Consumer option is validated and disappears when its lease is disposed', () => {
+  const consumers = new ExclusiveInboundConsumers();
+  assert.equal(consumers.acceptsOrdinary(botId), false);
+  assert.throws(() => consumers.register(botId, { fingerprint: account.fingerprint, onEvent: async () => ({ accepted: true }), ordinaryText: 'yes' }), { code: 'bad-request' });
+  const dispose = consumers.register(botId, { fingerprint: account.fingerprint, onEvent: async () => ({ accepted: true }), ordinaryText: true });
+  assert.equal(consumers.acceptsOrdinary(botId), true);
+  dispose(); assert.equal(consumers.acceptsOrdinary(botId), false);
 });

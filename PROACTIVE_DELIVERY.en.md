@@ -450,3 +450,26 @@ Slack 独占 Consumer 通过 `sourceFiles: true` 明确接收一个 hosted 附�
 读取与发送复查自身账号、lease、群成员资格、发送人、原生话题和文件关联。下载最多 25 MiB，
 校验实际大小，拒绝跳转；连接停止或授权撤销取消下载。文件完成上传可见前再次验证来源，
 不盲目重试结果不明的完成请求。文件权限须单独授权后重新安装，普通／私聊／私有频道收件不变。
+
+## Ordinary Slack channel text (BotHarness #837)
+
+The checked Slack account advertises `ordinary-text-consumer`. An exclusive Consumer
+can opt in with `ordinaryText: true`; the default remains false. Fresh Human
+`message` events with `channel_type: channel` use the same account, App, joined-public-
+channel and current-lease checks as mentions. Consumer acceptance still precedes ACK.
+This requires the App's `message.channels` Bot event subscription under the existing
+`channels:history` scope. BotHarness separately controls each explicitly authorized
+channel's collection and existing count/time or immediate wake policy.
+
+Own mentions observed through `message.channels` are discarded here and delivered only
+through `app_mention`, avoiding duplicate canonical intake. Bot/self messages, private/DM
+events, edits/deletions, other subtypes and ordinary file shares are excluded. No new
+Session, message store, scheduler, historical backfill or automatic reply is introduced.
+Stopping/disposal removes the opt-in; standalone consumers retain their previous path.
+
+Slack 账号提供 `ordinary-text-consumer`，独占 Consumer 通过 `ordinaryText: true`
+明确启用普通文字投递，默认关闭。仅接收已加入公开频道的实时 Human 文字，复用账号、App、
+lease 与收件确认检查；应用需订阅 `message.channels`，使用已有 `channels:history` 权限。
+BotHarness 仍按明确授权的频道分别控制收件与现有数量／时间汇总或逐条唤醒。自己的 @
+只走 `app_mention`，不因两种订阅重叠而重复收件；不接收私聊、私有频道、Bot 回显、
+编辑／撤回或普通文件分享。无新 Session、队列、历史补收或强制回复，lease 释放撤销 opt-in。
