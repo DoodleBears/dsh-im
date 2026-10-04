@@ -75,6 +75,7 @@ import {
 } from './qq-menu.mjs';
 import { withSessionBindingLock } from '../shared/session-binding-lock.mjs';
 import { t } from '../shared/i18n.mjs';
+import { isQqMessageAddressed, normalizeQqMentions } from './qq-mention.mjs';
 
 function interactionResolvedText() {
   return t('这个问题已在其他客户端处理，无需再次回答。');
@@ -408,7 +409,7 @@ async function sendQqFile(
 function canClaimInteractionReply(message, pending) {
   return pending.questions[pending.index]
     && nonEmptyString(message?.senderId) === pending.actor
-    && (message.kind !== 'group' || message.rawEventType === 'GROUP_AT_MESSAGE_CREATE')
+    && isQqMessageAddressed(message)
     && !hasQqImageAttachments(message)
     && !hasQqFileAttachments(message)
     && nonEmptyString(safeText(message));
@@ -506,9 +507,9 @@ export class QqHarnessBridge {
       || !['c2c', 'group'].includes(message?.kind)
       || this.#state.hasSeen(messageId)
       || this.#acceptedMessageIds.has(messageId)) return Promise.resolve();
+    message = normalizeQqMentions(message, new Set([this.#bot.appId]));
     const key = conversationKey(message);
-    const addressed = message.kind !== 'group'
-      || message.rawEventType === 'GROUP_AT_MESSAGE_CREATE';
+    const addressed = isQqMessageAddressed(message);
     const commandText = safeText(message);
     const menuTextOnly = !hasQqImageAttachments(message) && !hasQqFileAttachments(message)
       && !qqReplyReference(message);
@@ -634,7 +635,7 @@ export class QqHarnessBridge {
       actor: sender,
       messageId,
       text: hasQqImageAttachments(message) || hasQqFileAttachments(message) ? '' : safeText(message),
-      addressed: message.kind !== 'group' || message.rawEventType === 'GROUP_AT_MESSAGE_CREATE',
+      addressed,
       hasPendingQuestion: Boolean(pending),
       questionCompletion: pending?.submitting || pending?.claimedReplyMessageId
         ? pending.queue
@@ -689,8 +690,7 @@ export class QqHarnessBridge {
     alreadyRecorded = false,
     batchSubmission = null,
   } = {}) {
-    const addressed = message.kind !== 'group'
-      || message.rawEventType === 'GROUP_AT_MESSAGE_CREATE';
+    const addressed = isQqMessageAddressed(message);
     const preparedMessage = addressed
       ? prefetchInboundFiles(
           qqInboundMessage(message, { fetchImpl: this.#fetchImpl }),
@@ -984,7 +984,7 @@ export class QqHarnessBridge {
       await this.#state.markSeen(messageId);
       messageRecorded = true;
     };
-    if (message.kind === 'group' && message.rawEventType !== 'GROUP_AT_MESSAGE_CREATE') return;
+    if (!isQqMessageAddressed(message)) return;
 
     const target = message.replyTarget;
     const promptMessage = preparedMessage
@@ -1245,7 +1245,7 @@ export class QqHarnessBridge {
     this.#status.messagesReceived += 1;
     this.#status.lastMessageAt = new Date().toISOString();
 
-    if (message.kind === 'group' && message.rawEventType !== 'GROUP_AT_MESSAGE_CREATE') return;
+    if (!isQqMessageAddressed(message)) return;
     const text = nonEmptyString(safeText(message));
     if (!text || hasQqImageAttachments(message) || hasQqFileAttachments(message)) {
       await this.#bot.sendText(message.replyTarget, t('请用文字回答当前问题。'));

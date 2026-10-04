@@ -8,6 +8,7 @@ import {
 import { t } from '../shared/i18n.mjs';
 import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
 import { createQqBridgeStatus, QqHarnessBridge } from './qq-bridge.mjs';
+import { isQqMessageAddressed, normalizeQqMentions } from './qq-mention.mjs';
 
 function timeoutError() {
   const error = new Error('QQ WebSocket did not become ready in time');
@@ -178,6 +179,11 @@ export class QqRuntime {
       replyTimeoutMs: this.#replyTimeoutMs,
       signal: controller.signal,
     });
+    const botMentionIds = new Set([this.#config.appId]);
+    bot.use(async (ctx, next) => {
+      ctx.message = normalizeQqMentions(ctx.message, botMentionIds);
+      await next();
+    });
     // QQ delivers emoji/face messages as opaque `<faceType=..,faceId="..",ext="..">`
     // tags. Parse them into readable text so the Harness sees what the sender
     // actually meant instead of an unusable markup fragment.
@@ -186,8 +192,7 @@ export class QqRuntime {
       keepAlive: true,
       predicate: (ctx) => {
         const message = ctx?.message;
-        if (!message || (message.kind === 'group'
-          && message.rawEventType !== 'GROUP_AT_MESSAGE_CREATE')) return false;
+        if (!isQqMessageAddressed(message)) return false;
         if (!this.#accessPolicy) {
           return message.kind === 'group'
             || this.#config.ownerUserOpenid === '*'
@@ -207,7 +212,10 @@ export class QqRuntime {
       readyResolve = resolve;
       readyReject = reject;
     });
-    const onReady = () => {
+    const onReady = (data) => {
+      if (typeof data?.user?.id === 'string' && data.user.id.trim()) {
+        botMentionIds.add(data.user.id.trim());
+      }
       const now = Date.now();
       this.#status.ready = true;
       this.#status.qqConnectionState = 'connected';

@@ -71,6 +71,49 @@ function message(overrides = {}) {
   };
 }
 
+test('QQ accepts an explicit self mention delivered as GROUP_MESSAGE_CREATE', async () => {
+  const fixture = stateFixture();
+  const sent = [];
+  const bridge = new QqHarnessBridge({
+    bot: { sendText: async (_target, text) => sent.push(text) },
+    ownerUserOpenid: '*',
+    harness: { ensureRunning: async () => true },
+    state: fixture.state,
+  });
+  await bridge.accept(message({
+    kind: 'group', rawEventType: 'GROUP_MESSAGE_CREATE',
+    groupOpenid: 'group-311', mentions: [{ is_you: true, id: 'bot-openid' }],
+    content: '/status', messageId: 'issue311-self-mention',
+    replyTarget: { scope: 'group', targetId: 'group-311', msgId: 'issue311-self-mention' },
+  }));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /连接正常/);
+});
+
+test('QQ full group mentions still enforce access before commands and attachment downloads', async () => {
+  const fixture = stateFixture();
+  const sent = [];
+  const policy = configuredAccessPolicy({ channel: 'qq', config: { ownerUserOpenid: '*' } });
+  policy.getSettings().group.allowlist.users = [{ id: 'member', canExecuteCommands: false }];
+  const bridge = new QqHarnessBridge({
+    bot: { sendText: async (_target, text) => sent.push(text) },
+    ownerUserOpenid: '*', state: fixture.state, accessPolicy: policy,
+    harness: { ensureRunning: async () => assert.fail('denied command reached Harness') },
+    fetchImpl: async () => assert.fail('denied attachment was downloaded'),
+  });
+  const fullGroup = (overrides) => message({
+    kind: 'group', rawEventType: 'GROUP_MESSAGE_CREATE', groupOpenid: 'group-311',
+    mentions: [{ is_you: true, member_openid: 'self-openid' }],
+    replyTarget: { scope: 'group', targetId: 'group-311' }, ...overrides,
+  });
+  await bridge.accept(fullGroup({ senderId: 'member', messageId: 'denied-command', content: '<@self-openid> /status' }));
+  assert.deepEqual(sent, [COMMAND_PERMISSION_DENIED_MESSAGE]);
+  await bridge.accept(fullGroup({ senderId: 'blocked', messageId: 'denied-image', content: '<@self-openid>',
+    attachments: [{ content_type: 'image/png', url: 'https://multimedia.nt.qq.com.cn/blocked.png' }],
+  }));
+  assert.deepEqual(sent, [COMMAND_PERMISSION_DENIED_MESSAGE]);
+});
+
 test('QQ maps msgElements quote snapshots and prefers voice ASR text', () => {
   const inbound = qqInboundMessage(message({
     refMsgIdx: 'quoted-index-7',
@@ -1324,7 +1367,8 @@ test('QQ credential-bound bots accept senders within the platform visibility sco
   assert.equal(bridge.status.messagesRejected, 0);
 });
 
-test('QQ group questions require the initiating actor to mention the bot and preserve multi-question answers', async () => {
+for (const event of ['GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE']) {
+test(`QQ group questions require the initiating actor and preserve multi-question answers (${event})`, async () => {
   const fixture = stateFixture([['group:group-1', 'session-group']]);
   const sent = [];
   const asked = [];
@@ -1384,7 +1428,8 @@ test('QQ group questions require the initiating actor to mention the bot and pre
 
   const first = bridge.accept(message({
     kind: 'group',
-    rawEventType: 'GROUP_AT_MESSAGE_CREATE',
+    rawEventType: event,
+    mentions: [{ is_you: true, member_openid: 'self-openid' }],
     senderId: 'initiator',
     groupOpenid: 'group-1',
     content: '启动群聊交互',
@@ -1399,7 +1444,8 @@ test('QQ group questions require the initiating actor to mention the bot and pre
   submitted.promise.then((result) => { submittedResult = result; });
   const bystander = bridge.accept(message({
     kind: 'group',
-    rawEventType: 'GROUP_AT_MESSAGE_CREATE',
+    rawEventType: event,
+    mentions: [{ is_you: true, member_openid: 'self-openid' }],
     senderId: 'bystander',
     groupOpenid: 'group-1',
     content: '旁观者的普通问题',
@@ -1419,7 +1465,8 @@ test('QQ group questions require the initiating actor to mention the bot and pre
 
   const firstAnswer = bridge.accept(message({
     kind: 'group',
-    rawEventType: 'GROUP_AT_MESSAGE_CREATE',
+    rawEventType: event,
+    mentions: [{ is_you: true, member_openid: 'self-openid' }],
     senderId: 'initiator',
     groupOpenid: 'group-1',
     content: '2',
@@ -1429,7 +1476,8 @@ test('QQ group questions require the initiating actor to mention the bot and pre
   await secondQuestionDelivered.promise;
   const secondAnswer = bridge.accept(message({
     kind: 'group',
-    rawEventType: 'GROUP_AT_MESSAGE_CREATE',
+    rawEventType: event,
+    mentions: [{ is_you: true, member_openid: 'self-openid' }],
     senderId: 'initiator',
     groupOpenid: 'group-1',
     content: '1，文档，发布说明',
@@ -1463,6 +1511,7 @@ test('QQ group questions require the initiating actor to mention the bot and pre
   ].includes(text)), false);
   assert.deepEqual(sent.slice(-2).map(({ text }) => text), ['发起者交互完成', '旁观者问题已回答']);
 });
+}
 
 test('QQ pending questions stay isolated between private conversations', async () => {
   const fixture = stateFixture([
@@ -1538,8 +1587,13 @@ test('QQ pending questions stay isolated between private conversations', async (
   ]);
 });
 
-test('QQ presents concurrent approvals in FIFO order without a code and consumes exact decisions', async () => {
-  const fixture = stateFixture([['c2c:owner-openid', 'session-approval']]);
+for (const group of [false, true]) {
+test(`QQ presents FIFO approvals and consumes exact decisions (${group ? 'all group messages' : 'private'})`, async () => {
+  const approvalMessage = (fields) => message({
+    ...(group ? { kind: 'group', rawEventType: 'GROUP_MESSAGE_CREATE', groupOpenid: 'approval-group',
+      mentions: [{ is_you: true, id: 'self-openid' }] } : {}), ...fields,
+  });
+  const fixture = stateFixture([[group ? 'group:approval-group' : 'c2c:owner-openid', 'session-approval']]);
   const sent = [];
   const asked = [];
   const completed = deferred();
@@ -1588,7 +1642,7 @@ test('QQ presents concurrent approvals in FIFO order without a code and consumes
     state: fixture.state,
   });
 
-  const prompt = bridge.accept(message({
+  const prompt = bridge.accept(approvalMessage({
     messageId: 'approval-start',
     content: '启动两个审批',
   }));
@@ -1598,7 +1652,12 @@ test('QQ presents concurrent approvals in FIFO order without a code and consumes
   assert.match(sent.find(({ text }) => text.includes('允许执行第一步')).text, /批准.*拒绝/s);
   assert.doesNotMatch(sent.find(({ text }) => text.includes('允许执行第一步')).text, /qq-approval-one/);
 
-  await bridge.accept(message({
+  if (group) {
+    await bridge.accept(approvalMessage({ messageId: 'approval-unmentioned', content: '批准', mentions: [] }));
+    assert.equal(responses.length, 0, 'unmentioned decisions cannot approve');
+  }
+
+  await bridge.accept(approvalMessage({
     messageId: 'approval-allow',
     content: '批准',
     replyTarget: { scope: 'c2c', targetId: 'owner-openid', msgId: 'approval-allow' },
@@ -1607,7 +1666,7 @@ test('QQ presents concurrent approvals in FIFO order without a code and consumes
   assert.doesNotMatch(sent.find(({ text }) => text.includes('允许执行第二步')).text, /qq-approval-two/);
 
   await Promise.all([
-    bridge.accept(message({
+    bridge.accept(approvalMessage({
       messageId: 'approval-reject',
       content: '拒绝',
       replyTarget: { scope: 'c2c', targetId: 'owner-openid', msgId: 'approval-reject' },
@@ -1636,6 +1695,7 @@ test('QQ presents concurrent approvals in FIFO order without a code and consumes
   assert.deepEqual(asked, ['启动两个审批']);
   assert.equal(sent.at(-1).text, '审批完成');
 });
+}
 
 test('QQ deduplicates question replays, cancels orphan questions, and keeps approvals fail-closed', async () => {
   const fixture = stateFixture();

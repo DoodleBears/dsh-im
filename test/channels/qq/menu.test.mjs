@@ -111,6 +111,17 @@ test('QQ main menu contains the agreed twelve actions without watches or reasoni
   assert.equal(f.calls.length, 0);
 });
 
+test('QQ all-message events retain menu commands and numeric selection after self mention cleanup', async (t) => {
+  const f = await fixture(t, { group: true });
+  const mentioned = { rawEventType: 'GROUP_MESSAGE_CREATE', mentions: [{ is_you: true, id: 'self-openid' }] };
+  await f.send('<@self-openid> /m sessions', mentioned);
+  assert.ok(f.latestMenu());
+  await f.send('1', { rawEventType: 'GROUP_MESSAGE_CREATE' });
+  assert.equal(f.calls.length, 0, 'an unmentioned selection stays silent');
+  await f.send('<@!self-openid> 1', mentioned);
+  assert.deepEqual(f.calls, [['bind', f.route, 'session-0']]);
+});
+
 test('QQ numbered session pages select the displayed ID even after the catalog is reordered', async (t) => {
   const f = await fixture(t);
   await f.send('/m sessions');
