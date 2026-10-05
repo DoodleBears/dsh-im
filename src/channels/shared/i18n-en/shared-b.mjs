@@ -244,6 +244,30 @@ export default {
   '当前 Harness 未注册 /compact 命令，请确认上下文压缩组件已启用。':
     'The current Harness has not registered the /compact command; please make sure the context compaction component is enabled.',
 
+  // clear-command.mjs
+  '/clear  清空当前会话上下文（保留 Session 绑定和历史记录）':
+    '/clear  Clear the current session context (keep the Session binding and history)',
+  '用法：/clear（不带参数且不可附带图片或文件）':
+    'Usage: /clear (no arguments, images or files)',
+  '当前聊天绑定的会话已不存在，未清空上下文；请先发送新消息开启会话。':
+    'The Session bound to this chat no longer exists; the context was not cleared. Send a new message to start a Session first.',
+  '当前会话正在生成回复或等待交互，请先完成交互或发送 /stop，再执行 /clear。':
+    'The current Session is generating a reply or waiting for an interaction. Finish it or send /stop before running /clear.',
+  '上下文清理已取消，当前会话未修改。':
+    'Context clearing was cancelled; the current Session was not changed.',
+  '工作区或机器人状态已发生变化，未清空当前会话，请重试。':
+    'The workspace or bot state changed, so the current Session was not cleared. Please try again.',
+  '当前 Host 不支持 /clear，当前会话未修改。':
+    'The current Host does not support /clear; the current Session was not changed.',
+  '清空当前会话上下文失败，当前会话未修改，请稍后重试。':
+    'Failed to clear the current Session context; the Session was not changed. Please try again later.',
+  '当前机器人没有可用的会话状态，未清空当前会话。':
+    'This bot has no available Session state; the current Session was not cleared.',
+  '当前聊天还没有可清空的会话，请先发送一条消息。':
+    'This chat has no Session to clear yet; please send a message first.',
+  '当前会话上下文已清空；Session 绑定和历史记录仍保留。':
+    'The current Session context was cleared; its binding and history were retained.',
+
   // control-command.mjs
   '用法：/stop（不带参数）': 'Usage: /stop (no arguments)',
   '用法：/version（不带参数）': 'Usage: /version (no arguments)',

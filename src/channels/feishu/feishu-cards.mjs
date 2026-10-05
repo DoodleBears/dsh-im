@@ -353,6 +353,7 @@ export function menuCard(ctx) {
   // ── 任务控制（对运行中任务的操作）────────────────────────
   elements.push({ tag: 'div', text: markdown(t('**任务控制**')) });
   elements.push(buttonPair(t('⏹ 停止'), 'stop', t('📐 压缩'), 'compact'));
+  elements.push(button(t('🧹 清空上下文'), 'clear'));
   elements.push({ tag: 'hr' });
 
   // ── 补充指令 + 归档切换（并列）────────────────────────────
@@ -573,6 +574,7 @@ export function menuHelpText() {
     '/status  连接状态',
     '/version  查看插件版本',
     '/compact  压缩当前会话上下文',
+    '/clear  清空当前会话上下文（保留 Session 绑定和历史记录）',
     '/history [数量]  查看最近历史消息（默认 3 条，最多 5 条）',
     '/archived on/off  会话列表显示/隐藏归档',
     '',
@@ -620,10 +622,11 @@ const HELP_CARD_FEATURES = [
   '6. 📋 会话/关注 — 查看/绑定会话，管理关注',
   '7. ⏹ 停止 — 停止当前任务',
   '8. 📐 压缩 — 压缩当前会话上下文',
-  '9. 补充指令 — 给 Agent 发送指令',
-  '10. 🗄 归档切换 — 显示/隐藏归档会话',
-  '11. 📊 状态 — 查看系统连接状态',
-  '12. 📖 帮助 — 查看本帮助',
+  '9. 🧹 清空上下文 — 清空上下文并保留绑定和历史记录',
+  '10. 补充指令 — 给 Agent 发送指令',
+  '11. 🗄 归档切换 — 显示/隐藏归档会话',
+  '12. 📊 状态 — 查看系统连接状态',
+  '13. 📖 帮助 — 查看本帮助',
 ].join('\n');
 
 const HELP_TEXT_COMMANDS = [
@@ -638,6 +641,7 @@ const HELP_TEXT_COMMANDS = [
   '`/workspacelist` — 列出工作区',
   '`/status` — 查看连接状态',
   '`/compact` — 压缩上下文',
+  '`/clear` — 清空上下文并保留 Session 绑定和历史记录',
   '`/stop` — 停止当前任务',
   '`/steer 指令` — 补充指令',
   '`/watch ID` — 关注会话',

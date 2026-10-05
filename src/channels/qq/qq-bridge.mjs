@@ -2,6 +2,7 @@ import { isPermissionCommand, runPermissionCommand } from '../shared/permission-
 import { createDeferredDeliveryCoordinator, deferredOutcomeText } from '../shared/deferred-delivery-coordinator.mjs';
 import { runWorkspaceCommand } from '../shared/workspace-command.mjs';
 import { runCompactCommand } from '../shared/compact-command.mjs';
+import { isClearCommand, runClearCommand } from '../shared/clear-command.mjs';
 import { isHistoryCommand, runHistoryCommand } from '../shared/history-command.mjs';
 import {
   isControlCommand,
@@ -101,6 +102,7 @@ function helpText() {
     t('/menu 或 /m  打开可点击的功能菜单'),
     t('/new  开启一个全新会话'),
     t('/compact  压缩当前会话的较早上下文'),
+    t('/clear  清空当前会话上下文（保留 Session 绑定和历史记录）'),
     t('/history [数量]  查看最近历史消息（默认 3 条，最多 5 条）'),
     t('/workspace 工作区序号或绝对路径  切换工作区'),
     t('/workspacelist  列出工作区绝对路径'),
@@ -765,7 +767,7 @@ export class QqHarnessBridge {
     const pendingInteraction = this.#pendingInteractions.has(key) || this.#approvals.hasPending(key);
     const isBusy = () => this.#queues.has(key) || this.#pendingInteractions.has(key)
       || this.#approvals.hasPending(key) || this.#batchInputs.status(key).phase !== 'idle';
-    const needsIdle = /^\/(?:new|session|workspace|compact)(?:\s|$)/u.test(command);
+    const needsIdle = /^\/(?:new|session|workspace|compact|clear)(?:\s|$)/u.test(command);
     if (isBusy() && needsIdle) {
       return { message: t('当前任务仍在运行，请先停止任务或等待任务完成后再执行此操作。') };
     }
@@ -806,6 +808,7 @@ export class QqHarnessBridge {
         await this.#state.clearSession(key);
         return { message: t('已开启新会话。请发送你的问题。') };
       });
+      if (isClearCommand(command)) return runClearCommand(command, this.#harness, this.#state, key, options);
       if (command === '/compact') return runCompactCommand(command, this.#harness, this.#state, key, options);
       return runWorkspaceCommand(command, this.#harness, key);
     };
@@ -1017,6 +1020,18 @@ export class QqHarnessBridge {
       if (!hasImages && !hasFiles && command === '/new') {
         await this.#state.clearSession(key);
         await this.#bot.sendText(target, t('已开启新会话。请发送你的问题。'));
+        await markMessageSeen();
+        return;
+      }
+      const clearCommand = await runClearCommand(text, this.#harness, this.#state, key, {
+        signal: this.#signal,
+        hasImages,
+        hasFiles,
+        pendingInteraction: this.#pendingInteractions.has(key) || this.#approvals.hasPending(key),
+        busy: this.#queues.has(key),
+      });
+      if (clearCommand) {
+        await this.#bot.sendText(target, clearCommand.message);
         await markMessageSeen();
         return;
       }

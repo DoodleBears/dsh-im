@@ -14,6 +14,7 @@ import {
 } from './context-enhancement.mjs';
 import { runWorkspaceCommand } from './workspace-command.mjs';
 import { runCompactCommand } from './compact-command.mjs';
+import { isClearCommand, runClearCommand } from './clear-command.mjs';
 import { isHistoryCommand, runHistoryCommand } from './history-command.mjs';
 import {
   isControlCommand,
@@ -319,6 +320,18 @@ export class TextHarnessBridge {
     const key = `${normalized.kind}:${normalized.conversationId}`;
     const pending = this.#pendingInteractions.get(key);
     const text = controlTextOf(normalized);
+    if (isClearCommand(text) && (
+      this.#queues.has(key)
+      || pending
+      || this.#approvals.hasPending(key)
+      || this.#batches.status(key).phase !== 'idle'
+    )) {
+      return this.#finishLocalMessage(
+        normalized,
+        messageId,
+        t('当前会话正在生成回复或等待交互，请先完成交互或发送 /stop，再执行 /clear。'),
+      );
+    }
     const batchCommand = isBatchInputCommand(text);
     if (batchCommand && normalized.kind === 'group' && normalized.addressed === true) {
       return this.#finishLocalMessage(
@@ -373,7 +386,8 @@ export class TextHarnessBridge {
     }
     const collectingBatch = normalized.kind === 'direct'
       && this.#batches.status(key).phase === 'collecting';
-    const commandRunner = collectingBatch ? null : isHistoryCommand(text) ? runHistoryCommand
+    const commandRunner = collectingBatch ? null : isClearCommand(text) ? runClearCommand
+      : isHistoryCommand(text) ? runHistoryCommand
       : hasInboundFiles(normalized) ? null : isControlCommand(text)
       ? runControlCommand
       : (isModelCommand(text)

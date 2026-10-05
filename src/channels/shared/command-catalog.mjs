@@ -29,6 +29,9 @@ export const SHARED_COMMAND_CATALOG = Object.freeze([
   defineCatalogCommand('compact', '压缩当前会话的较早上下文', [
     '/compact  压缩当前会话的较早上下文',
   ]),
+  defineCatalogCommand('clear', '清空当前会话上下文并保留会话绑定', [
+    '/clear  清空当前会话上下文（保留 Session 绑定和历史记录）',
+  ]),
   defineCatalogCommand('history', '查看最近历史消息（仅私聊）', [
     '/history [数量]  查看最近历史消息（默认 3 条，最多 5 条）',
   ], { privateOnly: true }),

@@ -15,6 +15,7 @@ import {
 } from '../shared/harness-question.mjs';
 import { HarnessApprovalQueue } from '../shared/harness-approval.mjs';
 import { runCompactCommand } from '../shared/compact-command.mjs';
+import { isClearCommand, runClearCommand } from '../shared/clear-command.mjs';
 import { isHistoryCommand, runHistoryCommand } from '../shared/history-command.mjs';
 import {
   isControlCommand,
@@ -87,6 +88,7 @@ const HELP_TEXT_LINES = [
   '/m 或 /menu  打开下拉操作菜单',
   '/new  开启一个全新会话',
   '/compact  压缩当前会话的较早上下文',
+  '/clear  清空当前会话上下文（保留 Session 绑定和历史记录）',
   '/history [数量]  查看最近历史消息（默认 3 条，最多 5 条）',
   '/workspace 工作区序号或绝对路径  切换工作区',
   '/workspacelist  列出工作区绝对路径',
@@ -716,6 +718,7 @@ export class DingtalkHarnessBridge {
     const commandRunner = isDingtalkMenuCommand(commandText)
       && !hasInboundFiles(promptMessage) && !hasInboundImages(promptMessage)
       ? async () => { await this.#showMenu(message, key); }
+      : isClearCommand(commandText) ? runClearCommand
       : isHistoryCommand(commandText) ? runHistoryCommand
       : hasInboundFiles(promptMessage) ? null : isControlCommand(commandText)
       ? runControlCommand
@@ -933,6 +936,7 @@ export class DingtalkHarnessBridge {
       result = { message: helpText() };
     } else {
       result = await runWorkspaceCommand(command, this.#harness, key)
+        ?? await runClearCommand(command, this.#harness, this.#state, key, options)
         ?? await runCompactCommand(command, this.#harness, this.#state, key, options)
         ?? await runControlCommand(command, this.#harness, this.#state, key, options)
         ?? await runHistoryCommand(command, this.#harness, this.#state, key, options)
@@ -1162,6 +1166,7 @@ export class DingtalkHarnessBridge {
         hasFiles: hasInboundFiles(prompt),
         pendingInteraction: this.#pendingInteractions.has(key)
           || this.#approvals.hasPending(key),
+        busy: this.#queues.has(key) || this.#batchInputs.status(key).phase !== 'idle',
         control: { owner: this, key },
         deferredDelivery: this.#deferred,
         enhancement: captureContextEnhancementSource(

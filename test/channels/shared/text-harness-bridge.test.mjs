@@ -533,6 +533,74 @@ test('all four shared text channels execute /compact outside the model prompt pa
   }
 });
 
+test('all shared text channels execute /clear outside the model prompt path and retain the binding', async () => {
+  for (const [name, Bridge] of [
+    ['slack', SlackHarnessBridge],
+    ['telegram', TelegramHarnessBridge],
+    ['discord', DiscordHarnessBridge],
+    ['whatsapp', WhatsappHarnessBridge],
+  ]) {
+    const fixture = stateFixture({ 'direct:chat-a': `session-${name}` });
+    const sent = [];
+    const executed = [];
+    const bridge = new Bridge({
+      bot: { sendText: async (_target, text) => sent.push(text) },
+      state: fixture.state,
+      harness: {
+        executeCommand: async (sessionId, line) => {
+          executed.push({ sessionId, line });
+          return { commandId: `command-${name}`, result: { kind: 'success', text: 'Cleared.' } };
+        },
+        ask: async () => assert.fail('/clear must not be submitted to the model'),
+      },
+    });
+
+    await bridge.accept(message(`clear-${name}`, '/clear'));
+
+    assert.deepEqual(executed, [{ sessionId: `session-${name}`, line: '/clear' }]);
+    assert.deepEqual(sent, ['当前会话上下文已清空；Session 绑定和历史记录仍保留。']);
+    assert.equal(fixture.state.sessionFor('direct:chat-a'), `session-${name}`);
+  }
+});
+
+test('shared text /clear reports busy interactions and attachment usage without touching the Host', async () => {
+  const fixture = stateFixture({ 'direct:chat-a': 'session-clear' });
+  const sent = [];
+  let executed = 0;
+  const bridge = new TextHarnessBridge({
+    descriptor: { key: 'test', label: 'Test' },
+    bot: { sendText: async (_target, text) => sent.push(text) },
+    state: fixture.state,
+    harness: {
+      sessionExists: async () => true,
+      executeCommand: async () => { executed += 1; },
+      ask: async (_sessionId, _text, options) => {
+        await options.onInteraction(questionInteraction({
+          id: 'question-clear',
+          sessionId: 'session-clear',
+        }));
+        await new Promise(() => {});
+      },
+    },
+  });
+
+  const processing = bridge.accept(message('clear-start', 'start'));
+  await eventually(() => sent.some((text) => text.includes('请回答')));
+  await bridge.accept(message('clear-busy', '/clear'));
+  await bridge.accept(message('clear-file', '/clear', {
+    conversationId: 'chat-b',
+    files: [{ path: '/tmp/file.txt', name: 'file.txt' }],
+  }));
+
+  assert.equal(executed, 0);
+  assert.ok(sent.some((text) => text.includes('等待交互')));
+  assert.ok(sent.some((text) => text.includes('不可附带')));
+  await bridge.close?.();
+  // The never-settling question is intentionally left to the bridge teardown in
+  // production; keep the test process from waiting on it.
+  processing.catch(() => undefined);
+});
+
 test('all four shared text channels expose structured model rate limits without changing connection state', async () => {
   for (const [name, Bridge] of [
     ['slack', SlackHarnessBridge],
