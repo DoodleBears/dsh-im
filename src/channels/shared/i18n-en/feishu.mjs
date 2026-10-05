@@ -247,8 +247,6 @@ export default {
   '/status  连接状态': '/status  Connection status',
   '`/version` — 查看插件版本': '`/version` — show the plugin version',
   '/compact  压缩当前会话上下文': '/compact  Compact the current session context',
-  '/clear  清空当前会话上下文（保留 Session 绑定和历史记录）':
-    '/clear  Clear the current session context (keep the Session binding and history)',
   '/archived on/off  会话列表显示/隐藏归档': '/archived on/off  Show/hide archived sessions',
   '👁 关注': '👁 Watches',
   '/watch ID  关注会话（完成后推送）': '/watch ID  Watch a session (push on completion)',

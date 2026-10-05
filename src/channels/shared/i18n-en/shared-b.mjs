@@ -247,6 +247,8 @@ export default {
   // clear-command.mjs
   '/clear  清空当前会话上下文（保留 Session 绑定和历史记录）':
     '/clear  Clear the current session context (keep the Session binding and history)',
+  '清空当前会话上下文并保留会话绑定':
+    'Clear the current session context and keep the Session binding',
   '用法：/clear（不带参数且不可附带图片或文件）':
     'Usage: /clear (no arguments, images or files)',
   '当前聊天绑定的会话已不存在，未清空上下文；请先发送新消息开启会话。':

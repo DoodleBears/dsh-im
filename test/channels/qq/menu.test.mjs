@@ -93,12 +93,12 @@ async function fixture(t, { rejection, policy, group = false } = {}) {
   return { dir, other, route, state, calls, sent, harness, bridge, bot, send, message, pick, latestMenu, sessions };
 }
 
-test('QQ main menu contains the agreed twelve actions without watches or reasoning selection', async (t) => {
+test('QQ main menu contains the agreed thirteen actions without watches or reasoning selection', async (t) => {
   const f = await fixture(t);
   await f.send('/m');
   const menu = f.latestMenu();
   const buttons = menu.keyboard.content.rows.flatMap((r) => r.buttons);
-  assert.equal(buttons.length, 12);
+  assert.equal(buttons.length, 13);
   assert.ok(menu.keyboard.content.rows.length <= 5);
   assert.ok(menu.keyboard.content.rows.every((r) => r.buttons.length <= 5));
   assert.doesNotMatch(menu.text, /关注|推理等级/);
@@ -170,7 +170,7 @@ test('QQ workspace, new session, compact, stop, quick steer and custom steer wor
 
 test('QQ archive visibility survives reload and never archives a session', async (t) => {
   const f = await fixture(t);
-  await f.send('/m'); await f.pick(10);
+  await f.send('/m'); await f.pick(11);
   assert.equal(f.state.includesArchivedSessions(), true);
   const restored = await new QqStateStore(join(f.dir, 'state.json')).load();
   assert.equal(restored.includesArchivedSessions(), true);
@@ -178,7 +178,7 @@ test('QQ archive visibility survives reload and never archives a session', async
   await f.send('/m sessions'); await f.pick(7);
   assert.match(f.latestMenu().text, /已归档/);
   assert.equal(f.calls.length, 0);
-  await f.send('/m'); await f.pick(10);
+  await f.send('/m'); await f.pick(11);
   assert.equal(f.state.includesArchivedSessions(), false);
 });
 
@@ -337,7 +337,7 @@ test('QQ status, help and partial catalogs retain usable navigation and escape M
   f.harness.listModels = async () => { throw new Error('catalog down'); };
   f.harness.workspaceSession = () => ({ models: f.harness.listModels });
   await f.send('/m');
-  assert.equal(f.latestMenu().keyboard.content.rows.flatMap((r) => r.buttons).length, 12);
+  assert.equal(f.latestMenu().keyboard.content.rows.flatMap((r) => r.buttons).length, 13);
   assert.match(f.latestMenu().text, /部分设置暂未加载/);
   const view = { title: '菜单', entries: [{ label: '[标题](https://example.invalid)', action: { kind: 'command', text: '/new' } }] };
   assert.ok(qqMenuText(view).includes('[标题]'));

@@ -62,7 +62,7 @@ test('menu filters unsupported, disabled and hidden commands and aliases in stab
 test('real catalog preserves existing aliases and excludes channel-specific commands', () => {
   const names = telegramCommandMenu().map((item) => item.command);
   assert.deepEqual(names, [
-    'new', 'compact', 'history', 'workspace', 'ws',
+    'new', 'compact', 'clear', 'history', 'workspace', 'ws',
     'conv', 'conversation', 'thread', 'workspacelist', 'workspaces', 'wsl',
     'sessionlist', 'sessions', 'session', 'models', 'reasoninglist', 'reasonings',
     'reasoning', 'model', 'presetlist', 'presets', 'preset', 'stop', 'steer',
@@ -83,6 +83,7 @@ test('all real menu descriptions localize on repeated host language changes', (t
   const previous = getImHostLanguage();
   t.after(() => setImHostLanguage(previous));
   const translated = {
+    clear: 'Clear the current session context and keep the Session binding',
     history: 'Show recent history (private chats only)',
     reasoninglist: 'List reasoning efforts for the current model by index',
     reasonings: 'List reasoning efforts for the current model by index',
