@@ -204,6 +204,10 @@ export class SlackController {
     const config = this.#configStore.get(botId);
     if (!config) throw new Error('Unknown Slack bot');
     return this.#withBotTransition(botId, async () => {
+      if (config.consumerMode === 'external-consumer') {
+        const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+        return checked.runtime.sendProactiveText(target, text, { ...options, signal: checked.signal });
+      }
       const runtime = this.#runtimes.get(botId);
       if (!runtime?.status?.ready || typeof runtime.sendProactiveText !== 'function') {
         const error = new Error(t('Slack机器人尚未连接'));
@@ -236,7 +240,7 @@ export class SlackController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'slack', account,
         connected: this.#runtimes.get(botId)?.status?.ready === true,
-        capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked',
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked',
           'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked',
           'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
     });
