@@ -6,10 +6,16 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+## [4.36.0] - 2026-10-05
+
 ### Added / 新增
 
-- Checked Lark nearby context traverses all supported visible Human text in the five-minute window, then fills sparse sides to configurable message minima (default 10 before / 5 after). Fresh sources terminate without querying a future range; every call remains bounded and rechecks the authenticated anchor.
-  经过校验的 Lark 附近上下文先遍历五分钟窗口内可见、受支持的用户文本，再按可配置的前后消息保底条数补齐稀疏侧（默认前 10／后 5）。新消息不会查询未来区间；每次调用仍有界并重新校验原消息身份。
+- Web 与 11 类 IM 渠道共享同一次审批，最先提交的「批准一次」或「拒绝」生效，另一端随即失效；机器人发起的审批沿用原聊天，Web/Host 发起的审批可投递到该 Session 唯一绑定且开启双向同步的私聊。发送和提交时重新校验绑定与访问权限，同一私聊的目标别名合并计算；多个私聊仅发送 Web 处理提醒，不提供永久批准。
+  Web and 11 IM channel types can handle the same approval: the first allow-once or reject decision wins and retires the other presentation. IM-originated approvals stay in their original chat; Web/Host approvals may reach the Session's single bound private chat with bidirectional sync enabled. Binding and access checks run before presentation and submission, aliases for the same private chat are deduplicated, multiple private chats receive only a Web reminder, and permanent approval is not offered.
+- 同 Host 的 `dshIm` Service 新增 `inboundVersion: 1`、`consumeInbound`、`replyChecked` 和 `historyChecked`。已注册的飞书/Lark 独占消费者可按已认证原消息读取群、附近或原生话题中的有限文本历史；每次重新核验作者、会话及话题路由，显式分页，单次最多检查 20 条平台记录，不支持的记录计入 `omitted`。
+  The same-Host `dshIm` Service adds `inboundVersion: 1`, `consumeInbound`, `replyChecked`, and `historyChecked`. Registered exclusive Feishu/Lark consumers can read bounded group, nearby, or native-thread text history anchored to an authenticated source. Every call revalidates author, conversation, and topic routing, explicitly paginates at most 20 provider records, and counts unsupported records as `omitted`.
+- 经过校验的 Lark 附近上下文先遍历原消息前后各五分钟内可见、受支持的用户文本，再按可配置的前后消息保底条数补齐稀疏侧（默认前 10／后 5）。新消息不会查询未来区间；每次调用仍有界并重新校验原消息身份。
+  Checked Lark nearby context traverses all supported visible human text within five minutes before and after the source, then fills sparse sides to configurable message minima (default 10 before / 5 after). Fresh sources terminate without querying a future range; every call remains bounded and rechecks the authenticated anchor.
 
 - 飞书/Lark 可由同 Host 应用独占接收文本消息，等待应用确认持久化后返回，并按校验过的原消息/话题回复；外部消费模式在释放或重启后不回退到独立 Session。
   Same-Host applications can opt into exclusive Feishu/Lark text intake, acknowledge after durable acceptance, and reply through a checked original-message/topic route. Releasing or restarting an external consumer never falls back to a standalone Session.
@@ -22,6 +28,19 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 独占收件接管与凭据重绑共用配置事务队列；展示设置更新不再被误判为账号变更。应用回调不占用机器人操作队列，断开可取消待处理回调，回调也可读取或回复原消息。
   Exclusive takeover shares configuration serialization with credential rebinding; presentation changes no longer look like account changes. Application callbacks release the bot operation queue so disconnect can cancel them and callbacks can await checked reads or replies.
 
+### Changed / 变更
+
+- DSH 支持基线调整为 `0.2.0-rc.2`，同 Host 连接统一使用现代 Typert Gateway、Session 与 Workspace Controller，不再依赖旧 `apiProxy` 注入入口。
+  The declared DSH baseline is now `0.2.0-rc.2`. Same-Host connections use the modern Typert Gateway, Session Controller, and Workspace Controller instead of the legacy injected `apiProxy` entry point.
+
+### Notes / 使用说明
+
+- 共享审批支持微信、飞书、钉钉、企业微信机器人／应用、QQ、Telegram、Slack、Discord、WhatsApp、Matrix；iMessage、邮箱与 AI Office 暂不参与。Slack 接收 Web 审批需 `im:read` 权限，缺少权限时保留 Web 入口；本次发布不会自动修改应用权限。
+  Shared approvals support WeChat, Feishu, DingTalk, WeCom bot/app, QQ, Telegram, Slack, Discord, WhatsApp, and Matrix; iMessage, email, and AI Office do not participate. Slack needs `im:read` for Web-originated approvals and retains Web fallback when unavailable; this release does not automatically change application permissions.
+- 独占收件由应用显式启用，应用负责授权、去重及持久化；释放或重启不会自动恢复独立 Session。历史读取仅覆盖平台可见的用户文本，群历史可能不包含话题回复，应单独使用 `thread`；读历史不会自动收件、唤醒 Agent 或回复。回复结果未知时应核对外部会话，不要盲目重试。
+  Exclusive intake is application opt-in, with authorization, deduplication, and persistence owned by the application; release or restart never silently restores standalone Sessions. History covers provider-visible human text only; chat history may omit topic replies, so use `thread` separately. Reads do not automatically ingest messages, wake an agent, or reply. Reconcile unknown reply outcomes externally rather than blindly retrying.
+- 依赖声明保持不变。旧版 DSH 请使用对应历史插件版本；升级后重启 Host 并刷新管理页面。感谢 [@DoodleBears](https://github.com/DoodleBears) 的飞书/Lark 接口贡献（[#313](https://github.com/xmanrui/dsh-im/pull/313)、[#315](https://github.com/xmanrui/dsh-im/pull/315)、[#317](https://github.com/xmanrui/dsh-im/pull/317)）。
+  Dependency declarations remain unchanged. Use a corresponding historical plugin release with older DSH versions; restart the Host and refresh the management page after upgrading. Thanks to [@DoodleBears](https://github.com/DoodleBears) for the Feishu/Lark contracts ([#313](https://github.com/xmanrui/dsh-im/pull/313), [#315](https://github.com/xmanrui/dsh-im/pull/315), [#317](https://github.com/xmanrui/dsh-im/pull/317)).
 
 ## [4.35.1] - 2026-10-05
 
@@ -1578,7 +1597,8 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 改进 npm 发布包结构，保留 CLI 入口并避免安装脚本拦截。
   Improved npm package contents to preserve the CLI entry point and avoid install-script blocking.
 
-[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.35.1...HEAD
+[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.36.0...HEAD
+[4.36.0]: https://github.com/xmanrui/dsh-im/compare/v4.35.1...v4.36.0
 [4.35.1]: https://github.com/xmanrui/dsh-im/compare/v4.35.0...v4.35.1
 [4.35.0]: https://github.com/xmanrui/dsh-im/compare/v4.34.2...v4.35.0
 [4.34.2]: https://github.com/xmanrui/dsh-im/compare/v4.34.1...v4.34.2
