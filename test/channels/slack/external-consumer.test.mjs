@@ -166,6 +166,7 @@ test('controller persists exclusive mode across lease disposal and rejects a sec
   let acceptsOrdinary;
   let starts = 0;
   let receives = 0;
+  let posts = 0;
   const controller = new SlackController({
     configStore: store,
     credentials: { resolve: async () => ({ value: 'private-local-token' }), set() {}, unset() {} },
@@ -173,7 +174,7 @@ test('controller persists exclusive mode across lease disposal and rejects a sec
     createRuntime: async input => {
       externalConsumer = input.externalConsumer;
       acceptsOrdinary = input.externalOrdinaryText;
-      return { status: { ready: true }, start: async () => { starts++; }, stop: async () => {} };
+      return { status: { ready: true }, start: async () => { starts++; }, stop: async () => {}, sendProactiveText: async (_target, _text, options) => { options.signal.throwIfAborted(); posts++; return { sent: true }; } };
     }, logger: { info() {}, warn() {}, error() {}, debug() {} },
   });
   try {
@@ -193,7 +194,11 @@ test('controller persists exclusive mode across lease disposal and rejects a sec
       expectedFingerprint: account.fingerprint, onEvent: async () => ({ accepted: true }),
     }), { code: 'consumer-conflict' });
     assert.equal(starts, 2);
+    await controller.sendProactiveText(refs.botId, {kind: 'conversation', route: {channelId: 'C12345678'}}, 'Report', {expectedFingerprint: account.fingerprint});
+    assert.equal(posts, 1);
     dispose();
+    await assert.rejects(controller.sendProactiveText(refs.botId, {kind: 'conversation', route: {channelId: 'C12345678'}}, 'Report', {expectedFingerprint: account.fingerprint}), {code: 'consumer-unavailable'});
+    assert.equal(posts, 1);
     assert.equal(acceptsOrdinary(), false);
     await assert.rejects(externalConsumer(evidence), { code: 'consumer-unavailable' });
     assert.equal((await new SlackConfigStore(configPath).load()).get(refs.botId).consumerMode, 'external-consumer');
@@ -342,4 +347,54 @@ test('ordinary Consumer option is validated and disappears when its lease is dis
   const dispose = consumers.register(botId, { fingerprint: account.fingerprint, onEvent: async () => ({ accepted: true }), ordinaryText: true });
   assert.equal(consumers.acceptsOrdinary(botId), true);
   dispose(); assert.equal(consumers.acceptsOrdinary(botId), false);
+});
+
+
+test('external-only Slack report returns native receipt without thread, retry or Session writes', async () => {
+  const f = await fixture(async () => ({accepted: true}));
+  const target = {kind: 'conversation', route: {channelId: 'C12345678'}};
+  try {
+    const options = {expectedFingerprint: account.fingerprint, receipt: true};
+    assert.deepEqual(await f.runtime.sendProactiveText(target, 'Morning report', options), {
+      sent: true, receipt: {version: 1, messageId: '1791127737.000001', conversationId: 'C12345678'}
+    });
+    assert.equal(f.sends.length, 1);
+    assert.equal(f.sends[0].threadTs, undefined);
+    assert.equal(f.sends[0].retry, false);
+    assert.equal(f.sessionWrites(), 0);
+    await assert.rejects(f.runtime.sendProactiveText(target, 'Wrong identity', {...options, expectedFingerprint: 'b'.repeat(64)}), {code: 'account-changed'});
+    await assert.rejects(f.runtime.sendProactiveText({...target, kind: 'thread'}, 'Unsupported', options), {code: 'invalid-target'});
+    assert.equal(f.sends.length, 1);
+  } finally { await f.runtime.stop(); }
+});
+
+test('Slack report cannot dispatch after stop or cancellation during membership preflight', async () => {
+  for (const mode of ['stop', 'cancel']) {
+    let entered; let resume;
+    const started = new Promise(resolve => {entered = resolve;});
+    const pending = new Promise(resolve => {resume = resolve;});
+    const f = await fixture(async () => ({accepted: true}), {conversationInfo: async () => {
+      entered(); await pending; return {id: 'C12345678', is_member: true};
+    }});
+    const abort = new AbortController();
+    const result = f.runtime.sendProactiveText({kind: 'conversation', route: {channelId: 'C12345678'}}, 'Report', {expectedFingerprint: account.fingerprint, receipt: true, signal: abort.signal});
+    await started;
+    if (mode === 'stop') await f.runtime.stop(); else abort.abort();
+    resume(); await assert.rejects(result);
+    assert.equal(f.sends.length, 0); await f.runtime.stop();
+  }
+});
+
+test('Slack report rejects private membership and treats ambiguous receipt as unknown without retry', async () => {
+  for (const overrides of [
+    {conversationInfo: async () => ({id: 'C12345678', is_member: true, is_private: true})},
+    {postMessage: async () => ({channel: 'C87654321', ts: '1791127737.000001'})},
+    {postMessage: async () => {throw new Error('lost after dispatch');}},
+  ]) {
+    const f = await fixture(async () => ({accepted: true}), overrides);
+    try {
+      await assert.rejects(f.runtime.sendProactiveText({kind: 'conversation', route: {channelId: 'C12345678'}}, 'Report', {expectedFingerprint: account.fingerprint, receipt: true}));
+      assert.equal(f.sessionWrites(), 0);
+    } finally {await f.runtime.stop();}
+  }
 });

@@ -488,13 +488,21 @@ export class SlackRuntime {
 
   async sendProactiveText(target, text, options = {}) {
     if (this.#config.consumerMode === 'external-consumer') {
+      const generation = this.#generation;
       if (!this.#status.ready || !this.#account) throw slackRefusal('bot-not-connected');
       if (options.expectedFingerprint !== this.#account.fingerprint) throw slackRefusal('account-changed');
       const channelId = target?.route?.channelId;
-      if (target?.kind !== 'conversation' || typeof channelId !== 'string') throw slackRefusal('invalid-target');
+      if (target?.kind !== 'conversation' || typeof channelId !== 'string' || target.route.threadTs !== undefined)
+        throw slackRefusal('invalid-target');
+      if (options.receipt !== undefined && typeof options.receipt !== 'boolean') throw slackRefusal('bad-request');
+      if (options.format !== undefined && options.format !== 'plain') throw slackRefusal('capability-unavailable');
       await this.#verifyChannel(channelId, options.signal);
-      await this.#postChecked({ channelId, text, signal: options.signal });
-      return { sent: true };
+      options.signal?.throwIfAborted();
+      if (generation !== this.#generation || this.#stopped || !this.#status.ready)
+        throw slackRefusal('capability-unavailable');
+      const sent = await this.#postChecked({ channelId, text, signal: options.signal });
+      return { sent: true, ...(options.receipt
+        ? { receipt: { version: 1, messageId: sent.ts, conversationId: sent.channel } } : {}) };
     }
     if (!this.#status.ready || !this.#bridge) {
       const error = new Error('Slack bot is not connected');
