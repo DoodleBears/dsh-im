@@ -100,6 +100,7 @@ function normalizeState(value) {
   return {
     version: 1,
     sessions,
+    externalReplySources: Object.fromEntries(Object.entries(value.externalReplySources ?? {}).filter(([key, entry]) => /^\d+$/.test(key) && entry?.messageId === key && entry.expiresAt > Date.now()).slice(-1000)),
     ...(value.deferred ? { deferred: normalizeDeferredState(value.deferred) } : {}),
     seenMessageIds: Array.isArray(value.seenMessageIds)
       ? value.seenMessageIds.filter((id) => typeof id === 'string').slice(-1_000)
@@ -163,6 +164,18 @@ export class WeixinStateStore {
     users[userId] = next;
     const keys = Object.keys(users);
     if (keys.length > CONTEXT_TOKEN_LIMIT) delete users[keys[0]];
+    await this.#persist();
+  }
+
+  externalReplySource(messageId) {
+    return structuredClone(this.#state.externalReplySources?.[messageId]);
+  }
+
+  async rememberExternalReplySource(source) {
+    const entries = Object.entries(this.#state.externalReplySources ?? {})
+      .filter(([key, value]) => key !== source.messageId && value.expiresAt > Date.now()).slice(-999);
+    entries.push([source.messageId, structuredClone(source)]);
+    this.#state.externalReplySources = Object.fromEntries(entries);
     await this.#persist();
   }
 
@@ -264,7 +277,7 @@ export class WeixinStateStore {
   }
 
   snapshot() {
-    const { contextTokens, ...state } = this.#state;
+    const { contextTokens, externalReplySources, ...state } = this.#state;
     return structuredClone(state);
   }
 

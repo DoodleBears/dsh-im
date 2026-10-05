@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- 微信增加可选的独占扫码绑定者文本私聊 consumer，提交接收后才推进同步游标；回复仅使用该账号私有的原消息 continuation，回执明确区分客户端确认编号与服务端消息 ID。此扩展仍未发布。
+  WeChat adds an optional exclusive paired-owner text-DM consumer whose sync cursor advances after committed intake; replies use the account-private original-message continuation and distinguish acknowledged client identifiers from server message IDs. This extension remains unreleased.
+
 - Feishu/Lark 增加可选的独占外部文本 consumer 与经原消息校验的回复：保留工作群的提及和话题身份，等待 consumer 提交后确认接收；被接管账号在 consumer 消失或重启时不会回退到独立 Session。此扩展仍未发布。
   Feishu/Lark adds an optional exclusive external text consumer and replies checked against the original message. Work-group mentions and topic identities are retained, acknowledgement waits for the consumer to commit, and a claimed account never falls back to an independent Session after consumer loss or restart. This extension remains unreleased.
 - 同 Host 的公开 `dshIm` Service 新增版本化账号描述和条件纯文本发送：Feishu/Lark 账号由平台认证身份确定，目标以固定内容摘要校验，旧 `send` 行为保持兼容；未支持的渠道返回明确错误。

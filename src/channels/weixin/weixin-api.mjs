@@ -475,7 +475,18 @@ async function requestJson(fetchImpl, {
       );
     }
     try {
-      return await response.json();
+      // Native IDs may exceed Number.MAX_SAFE_INTEGER. Read their original JSON
+      // lexemes before numeric precision is lost; other protocol values keep
+      // their original types (ret/errcode and timestamps are not message IDs).
+      return JSON.parse(await response.text(), (key, value, context) => {
+        if ((key === 'message_id' || key === 'msg_id') && typeof value === 'number') {
+          if (!context?.source || !/^\d+$/.test(context.source)) {
+            throw new TypeError('Invalid native Weixin message ID');
+          }
+          return context.source;
+        }
+        return value;
+      });
     } catch (error) {
       throw new WeixinApiError('invalid-response', '微信服务返回了无法解析的响应。', { cause: error });
     }
@@ -929,6 +940,9 @@ export function weixinMessageTimestampMs(messageId, { now = Date.now() } = {}) {
 
 export function weixinMessageId(message) {
   if (message?.message_id !== undefined && message.message_id !== null) {
+    if (typeof message.message_id === 'number' && !Number.isSafeInteger(message.message_id)) {
+      return null;
+    }
     return String(message.message_id);
   }
   return nonEmptyString(message?.client_id);

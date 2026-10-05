@@ -14,6 +14,7 @@ import {
   splitWeixinText,
   weixinImageDownloadUrl,
   weixinMessageTimestampMs,
+  weixinMessageId,
   WeixinApiError,
 } from '../../../src/channels/weixin/weixin-api.mjs';
 
@@ -991,4 +992,27 @@ test('Weixin decodes the timestamp carried by a real 64-bit iLink message id', (
   assert.equal(weixinMessageTimestampMs('99999999999999999999', {
     now: 1_788_278_900_000,
   }), null);
+});
+
+
+test('native message and quoted IDs retain exact integer lexemes without changing protocol values', async () => {
+  const body = '{"ret":0,"get_updates_buf":"next","msgs":[{"message_id":9007199254740993,"create_time_ms":1780000000000,"item_list":[{"type":1,"text_item":{"text":"literal 9007199254740993","quoted_message":{"msg_id":9007199254740995}}}]}]}';
+  const api = createWeixinApi({ fetchImpl: async () => new Response(body, { status: 200 }) });
+  const value = await api.getUpdates({ baseUrl: 'https://ilinkai.weixin.qq.com/', token: 'synthetic-token' });
+  assert.equal(value.msgs[0].message_id, '9007199254740993');
+  assert.equal(value.msgs[0].item_list[0].text_item.quoted_message.msg_id, '9007199254740995');
+  assert.equal(value.msgs[0].item_list[0].text_item.text, 'literal 9007199254740993');
+  assert.equal(value.ret, 0);
+  assert.equal(value.msgs[0].create_time_ms, 1780000000000);
+  assert.equal(weixinMessageId(value.msgs[0]), '9007199254740993');
+  assert.equal(weixinMessageId({ message_id: Number('9007199254740993') }), null,
+    'already rounded IDs must not identify a different source');
+});
+
+test('invalid numeric message ID formats are refused before source routing', async () => {
+  for (const nativeId of ['-1', '1.5', '1e20']) {
+    const api = createWeixinApi({ fetchImpl: async () => new Response(`{"msgs":[{"message_id":${nativeId}}]}`, { status: 200 }) });
+    await assert.rejects(() => api.getUpdates({ baseUrl: 'https://ilinkai.weixin.qq.com/', token: 'synthetic-token' }),
+      error => error.code === 'invalid-response');
+  }
 });

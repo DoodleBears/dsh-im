@@ -1,3 +1,5 @@
+import { ExclusiveInboundConsumers } from '../shared/exclusive-inbound-consumers.mjs';
+import { pairedWeixinAccount, normalizeWeixinExternalText, weixinRefusal } from './external-consumer.mjs';
 import { randomUUID } from 'node:crypto';
 import { createWeixinDiagnostics, knownWeixinErrorCode, weixinStageError } from './connection-error.mjs';
 
@@ -61,6 +63,7 @@ function preserveActivationError(error, fallbackCode) {
 }
 
 export class WeixinController {
+  #inboundConsumers = new ExclusiveInboundConsumers();
   #api;
   #credentials;
   #configStore;
@@ -143,6 +146,66 @@ export class WeixinController {
       }).publicError);
     }
     this.#touch();
+  }
+
+  async #deliveryAccount(config, signal) {
+    signal?.throwIfAborted();
+    if (this.#closed) throw weixinRefusal('provider-unavailable');
+    return pairedWeixinAccount(config, await this.#resolveToken(config.tokenRef));
+  }
+
+  async describeDeliveryAccount(botId) {
+    return this.#withBotTransition(botId, async () => {
+      const config = this.#configStore.get(botId);
+      if (!config) throw weixinRefusal('unknown-bot');
+      const account = await this.#deliveryAccount(config);
+      return { version: 1, botId, channel: 'weixin', account,
+        connected: this.#runtimes.get(botId)?.status?.ready === true,
+        capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'reply-text-checked',
+          'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked'] };
+    });
+  }
+
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false } = {}) {
+    return this.#withBotTransition(botId, async () => {
+      if (sourceFiles) throw weixinRefusal('capability-unavailable');
+      const config = this.#configStore.get(botId);
+      if (!config) throw weixinRefusal('unknown-bot');
+      const account = await this.#deliveryAccount(config, signal);
+      if (account.fingerprint !== expectedFingerprint) throw weixinRefusal('account-changed');
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal });
+      try {
+        const saved = await this.#configStore.save({ ...config, consumerMode: 'external-consumer' });
+        await this.#startRuntime(saved, await this.#resolveToken(saved.tokenRef));
+        signal?.throwIfAborted();
+        return dispose;
+      } catch (error) { dispose(); throw error; }
+    });
+  }
+
+  async #checkedRuntime(botId, expectedFingerprint, signal) {
+    const config = this.#configStore.get(botId);
+    if (!config) throw weixinRefusal('unknown-bot');
+    const account = await this.#deliveryAccount(config, signal);
+    if (account.fingerprint !== expectedFingerprint) throw weixinRefusal('account-changed');
+    const runtime = this.#runtimes.get(botId);
+    if (config.consumerMode !== 'external-consumer' || !runtime?.status?.ready) throw weixinRefusal('capability-unavailable');
+    const lease = this.#inboundConsumers.signalFor(botId, expectedFingerprint);
+    return { runtime, account, signal: signal ? AbortSignal.any([signal, lease]) : lease };
+  }
+
+  async qualifyReplyChecked(botId, route, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      return checked.runtime.qualifyReplyChecked(route, checked);
+    });
+  }
+
+  async replyChecked(botId, route, text, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      return checked.runtime.replyChecked(route, text, { ...options, ...checked });
+    });
   }
 
   async startProvisioning() {
@@ -285,11 +348,17 @@ export class WeixinController {
         error.code = 'bot-not-connected';
         throw error;
       }
+      if (options.expectedFingerprint !== undefined) {
+        const account = await this.#deliveryAccount(config, options.signal);
+        if (account.fingerprint !== options.expectedFingerprint) throw weixinRefusal('account-changed');
+        if (target?.kind !== 'user' || target.route?.toUserId !== account.ownerUserId) throw weixinRefusal('invalid-target');
+      }
       return runtime.sendProactiveText(target, text, options);
     });
   }
 
   async deleteBot(botId) {
+    this.#inboundConsumers.remove(botId);
     const config = this.#configStore.get(botId);
     if (!config) throw weixinStageError('workspace-bot-not-found', undefined, 'account.remove');
     const warnings = [];
@@ -405,6 +474,7 @@ export class WeixinController {
   }
 
   async close() {
+    this.#inboundConsumers.close();
     if (this.#closed) return;
     this.#closed = true;
     if (this.#activeAttemptId) await this.cancelProvisioning(this.#activeAttemptId);
@@ -523,6 +593,7 @@ export class WeixinController {
       baseUrl,
       createdAt: previousConfig?.createdAt ?? new Date().toISOString(),
       connectedAt: new Date().toISOString(),
+      ...(previousConfig?.consumerMode ? { consumerMode: previousConfig.consumerMode } : {}),
     };
     let previousToken;
     try {
@@ -589,7 +660,19 @@ export class WeixinController {
     await this.#stopRuntime(config.botId);
     let runtime;
     try {
-      runtime = await this.#createRuntime({ botId: config.botId, config, token });
+      const account = config.consumerMode === 'external-consumer' ? pairedWeixinAccount(config, token) : undefined;
+      runtime = await this.#createRuntime({ botId: config.botId, config, token,
+        externalConsumer: async (message, state, signal) => {
+          const current = await this.#deliveryAccount(this.#configStore.get(config.botId), signal);
+          if (current.fingerprint !== account.fingerprint) throw weixinRefusal('account-changed');
+          this.#inboundConsumers.signalFor(config.botId, account.fingerprint).throwIfAborted();
+          const event = normalizeWeixinExternalText(message, { botId: config.botId, account });
+          if (!event) return { accepted: true, ignored: true };
+          await state.rememberExternalReplySource({ messageId: event.messageId, actorId: event.actor.id,
+            fingerprint: account.fingerprint, contextToken: message.context_token,
+            expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 });
+          return this.#inboundConsumers.accept(config.botId, event, signal);
+        } });
     } catch (error) {
       throw preserveActivationError(error, 'runtime-prepare-failed');
     }
