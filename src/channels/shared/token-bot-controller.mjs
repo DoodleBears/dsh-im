@@ -2,6 +2,7 @@ import { extractConnectionEvidence, atConnectionStage, createConnectionDiagnosti
 import { connectionTestMessage } from './connection-test.mjs';
 import { t } from './i18n.mjs';
 import { publicMessageFailure } from './message-failure.mjs';
+import { ExclusiveInboundConsumers } from './exclusive-inbound-consumers.mjs';
 
 function cleanString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -27,6 +28,8 @@ export class TokenBotController {
   #transitions = new Map();
   #revision = 0;
   #closed = false;
+  #checkedDelivery;
+  #inboundConsumers = new ExclusiveInboundConsumers();
 
   constructor({
     descriptor,
@@ -38,6 +41,7 @@ export class TokenBotController {
     createRuntime,
     deleteState = async () => {},
     logger = console,
+    checkedDelivery,
   }) {
     if (!descriptor?.key || !descriptor?.label || !descriptor?.connectionLabel) {
       throw new TypeError('TokenBotController requires a channel descriptor');
@@ -55,6 +59,7 @@ export class TokenBotController {
       throw new TypeError(`${descriptor.label} controller dependencies are incomplete`);
     }
     this.#descriptor = descriptor;
+    this.#checkedDelivery = checkedDelivery;
     this.#credentials = credentials;
     this.#configStore = configStore;
     this.#inspectToken = inspectToken;
@@ -120,7 +125,7 @@ export class TokenBotController {
       if (this.#closed) throw new Error(`${this.#descriptor.label} controller is closed`);
       const previousConfig = this.#configStore.getByPlatformId(platformId);
       const previousToken = await atConnectionStage('credential.read', () => this.#credentials.resolve(identity.tokenRef), 'credential-store');
-      const config = {
+      let config = {
         botId: identity.botId,
         platformId,
         tokenRef: identity.tokenRef,
@@ -128,10 +133,11 @@ export class TokenBotController {
         username: cleanString(inspected.username),
         createdAt: previousConfig?.createdAt ?? new Date().toISOString(),
         connectedAt: new Date().toISOString(),
+        ...(previousConfig?.consumerMode === 'external-consumer' ? { consumerMode: 'external-consumer' } : {}),
       };
       await atConnectionStage('credential.save', () => this.#credentials.set(identity.tokenRef, normalizedToken), 'credential-store');
       try {
-        await atConnectionStage('account.save', () => this.#configStore.save(config), 'account-config');
+        config = await atConnectionStage('account.save', () => this.#configStore.save(config), 'account-config');
       } catch (error) {
         await this.#restoreCredential(identity.tokenRef, previousToken);
         throw error;
@@ -154,9 +160,9 @@ export class TokenBotController {
   }
 
   async reconnectBot(botId) {
-    const config = this.#configStore.get(botId);
-    if (!config) throw new Error(`Unknown ${this.#descriptor.label} bot`);
     await this.#withBotTransition(botId, async () => {
+      const config = this.#configStore.get(botId);
+      if (!config) throw new Error(`Unknown ${this.#descriptor.label} bot`);
       const token = await this.#resolveToken(config.tokenRef);
       if (!token) throw new Error(`${this.#descriptor.label} bot token is missing`);
       try {
@@ -235,6 +241,10 @@ export class TokenBotController {
     const config = this.#configStore.get(botId);
     if (!config) throw new Error(`Unknown ${this.#descriptor.label} bot`);
     return this.#withBotTransition(botId, async () => {
+      if (this.#checkedDelivery && this.#configStore.get(botId)?.consumerMode === 'external-consumer') {
+        const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+        return checked.runtime.sendProactiveText(target, text, { ...options, signal: checked.signal });
+      }
       const runtime = this.#runtimes.get(botId);
       if (!runtime?.status?.ready || typeof runtime.sendProactiveText !== 'function') {
         const error = new Error(t('{label}机器人尚未连接', {
@@ -247,12 +257,84 @@ export class TokenBotController {
     });
   }
 
+  async #checkedAccount(config, signal) {
+    if (this.#closed) throw Object.assign(new Error('provider-unavailable'), { code: 'provider-unavailable' });
+    if (typeof this.#checkedDelivery?.inspectAccount !== 'function')
+      throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+    const token = await this.#resolveToken(config.tokenRef);
+    if (!token) throw Object.assign(new Error('account-unverified'), { code: 'account-unverified' });
+    const account = await this.#checkedDelivery.inspectAccount(token, config, { signal });
+    if (this.#closed) throw Object.assign(new Error('provider-unavailable'), { code: 'provider-unavailable' });
+    signal?.throwIfAborted();
+    return account;
+  }
+
+  async describeDeliveryAccount(botId) {
+    return this.#withBotTransition(botId, async () => {
+      const config = this.#configStore.get(botId);
+      if (!config) throw Object.assign(new Error('unknown-bot'), { code: 'unknown-bot' });
+      const account = await this.#checkedAccount(config);
+      return { version: 1, botId, channel: this.#descriptor.key, account,
+        connected: this.#runtimes.get(botId)?.status?.ready === true,
+        capabilities: [...this.#checkedDelivery.capabilities] };
+    });
+  }
+
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal } = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const config = this.#configStore.get(botId);
+      if (!config) throw Object.assign(new Error('unknown-bot'), { code: 'unknown-bot' });
+      const account = await this.#checkedAccount(config, signal);
+      if (account.fingerprint !== expectedFingerprint) throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal });
+      try {
+        const saved = await this.#configStore.save({ ...config, consumerMode: 'external-consumer' });
+        if (saved.consumerMode !== 'external-consumer') throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+        const token = await this.#resolveToken(saved.tokenRef);
+        if (!token) throw Object.assign(new Error('account-unverified'), { code: 'account-unverified' });
+        await this.#startRuntime(saved, token);
+        signal?.throwIfAborted();
+        this.#inboundConsumers.signalFor(botId, expectedFingerprint).throwIfAborted();
+        return dispose;
+      } catch (error) { dispose(); throw error; }
+    });
+  }
+
+  async #checkedRuntime(botId, fingerprint, signal) {
+    const config = this.#configStore.get(botId);
+    if (!config) throw Object.assign(new Error('unknown-bot'), { code: 'unknown-bot' });
+    const account = await this.#checkedAccount(config, signal);
+    if (account.fingerprint !== fingerprint) throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+    const runtime = this.#runtimes.get(botId);
+    if (config.consumerMode !== 'external-consumer' || !runtime?.status?.ready)
+      throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+    const lease = this.#inboundConsumers.signalFor(botId, fingerprint);
+    return { runtime, signal: signal ? AbortSignal.any([signal, lease]) : lease };
+  }
+
+  async qualifyReplyChecked(botId, route, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      if (typeof checked.runtime.qualifyReplyChecked !== 'function') throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return checked.runtime.qualifyReplyChecked(route, { signal: checked.signal });
+    });
+  }
+
+  async replyChecked(botId, route, text, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      if (typeof checked.runtime.replyChecked !== 'function') throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return checked.runtime.replyChecked(route, text, { ...options, signal: checked.signal });
+    });
+  }
+
   async deleteBot(botId) {
     const warnings = [];
     const config = this.#configStore.get(botId);
     if (!config) throw new Error(`Unknown ${this.#descriptor.label} bot`);
     await this.#withBotTransition(botId, async () => {
       const previous = await atConnectionStage('credential.read', () => this.#credentials.resolve(config.tokenRef), 'credential-store');
+      this.#inboundConsumers.remove(botId);
       await this.#stopRuntime(botId);
       try {
         await atConnectionStage('credential.remove', () => this.#credentials.unset(config.tokenRef), 'credential-store');
@@ -358,6 +440,7 @@ export class TokenBotController {
   async close() {
     if (this.#closed) return;
     this.#closed = true;
+    this.#inboundConsumers.close();
     await Promise.allSettled([...this.#transitions.values()]);
     await Promise.allSettled([...this.#runtimes.keys()].map((botId) => this.#stopRuntime(botId)));
   }
@@ -366,7 +449,8 @@ export class TokenBotController {
     if (this.#closed) throw new Error(`${this.#descriptor.label} controller is closed`);
     await this.#stopRuntime(config.botId);
     if (this.#closed) throw new Error(`${this.#descriptor.label} controller is closed`);
-    const runtime = await atConnectionStage('runtime.prepare', () => this.#createRuntime({ botId: config.botId, config, token }));
+    const runtime = await atConnectionStage('runtime.prepare', () => this.#createRuntime({ botId: config.botId, config, token,
+      ...(this.#checkedDelivery ? { externalConsumer: (event, signal) => this.#inboundConsumers.accept(config.botId, event, signal) } : {}) }));
     if (!runtime || typeof runtime.start !== 'function' || typeof runtime.stop !== 'function') {
       throw new TypeError(`createRuntime returned an invalid ${this.#descriptor.label} runtime`);
     }

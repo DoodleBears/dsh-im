@@ -66,7 +66,8 @@ export async function createTokenProductionController(ctx, config, internals, de
     ? ctx.logger(`dsh-im:${channel}`) : (ctx.logger ?? console);
   const agentPresetCatalog = () => listAgentPresetCatalog(ctx);
   const paths = pluginPaths(config, channel);
-  const configStore = await new ResolvedConfigStore(paths.config).load();
+  const configStore = await new ResolvedConfigStore(paths.config,
+    typeof definitions.configStoreOptions === 'function' ? definitions.configStoreOptions(config) : undefined).load();
   const { defaultWorkspace, ungroupedWorkspace } = await prepareBotWorkspace(config);
   const WorkspaceStore = internals.WorkspaceStore ?? BotWorkspaceStore;
   const workspaces = internals.workspaces
@@ -157,7 +158,7 @@ export async function createTokenProductionController(ctx, config, internals, de
       botWorkspaceFor: (botId) => workspaces.workspaceFor(botId),
       defaultWorkspace,
     } : {}),
-    createRuntime: async ({ botId, config: botConfig, token, credential, createTransport }) => {
+    createRuntime: async ({ botId, config: botConfig, token, credential, createTransport, externalConsumer }) => {
       const state = await stateFor(botId);
       await ensureWorkspace(botId, botConfig);
       const workspaceScope = createBotWorkspaceScope(harness, {
@@ -172,6 +173,7 @@ export async function createTokenProductionController(ctx, config, internals, de
         ...channelRuntimeOptions,
         config: botConfig,
         token,
+        ...(externalConsumer ? { externalConsumer } : {}),
         // The mailbox may authenticate with an OAuth pair instead of a password.
         ...(credential ? { credential } : {}),
         // A transport that rotates its tokens needs them written back.

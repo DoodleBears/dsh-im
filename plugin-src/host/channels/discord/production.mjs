@@ -13,5 +13,6 @@ export function createProductionController(ctx, config = {}, internals = {}) {
     HarnessClient: DiscordHarnessClient,
     Controller: DiscordController,
     Runtime: DiscordRuntime,
+    configStoreOptions: config => ({ consumerMode: config.consumerMode }),
   });
 }

@@ -123,6 +123,18 @@ export class DiscordApi {
     return this.#request('users/@me', { ...options, method: 'GET' });
   }
 
+  getCurrentApplication(options = {}) {
+    return this.#request('applications/@me', { ...options, method: 'GET' });
+  }
+
+  getGuild({ guildId, signal } = {}) {
+    return this.#request(`guilds/${snowflake(guildId, 'guild id')}`, { method: 'GET', signal });
+  }
+
+  getGuildMember({ guildId, userId, signal } = {}) {
+    return this.#request(`guilds/${snowflake(guildId, 'guild id')}/members/${snowflake(userId, 'user id')}`, { method: 'GET', signal });
+  }
+
   getGatewayBot(options = {}) {
     return this.#request('gateway/bot', { ...options, method: 'GET' });
   }
@@ -157,10 +169,11 @@ export class DiscordApi {
     );
   }
 
-  createMessage({ channelId, content, replyToMessageId, signal }) {
+  createMessage({ channelId, content, replyToMessageId, signal, retry = true, failIfNotExists = false }) {
     return this.#request(`channels/${snowflake(channelId, 'channel id')}/messages`, {
       method: 'POST',
       signal,
+      retry,
       body: {
         content,
         allowed_mentions: { parse: [], replied_user: false },
@@ -168,7 +181,7 @@ export class DiscordApi {
           message_reference: {
             message_id: snowflake(replyToMessageId, 'message id'),
             channel_id: snowflake(channelId, 'channel id'),
-            fail_if_not_exists: false,
+            fail_if_not_exists: failIfNotExists,
           },
         } : {}),
       },
