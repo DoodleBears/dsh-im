@@ -6,6 +6,22 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+## [4.36.1] - 2026-10-06
+
+### Fixed / 修复
+
+- Harness RPC 失败时保留实际调用方法、进程内 Host API 或 HTTP 调用方式、请求耗时及超时阈值；诊断信息经过健康检查包装、消息错误分类和公开错误转换后仍可用于定位问题。
+  Failed Harness RPCs retain the actual method, in-process Host API or HTTP transport, elapsed request time, and timeout threshold. This evidence survives health-check wrapping, message-failure classification, and public error projection for troubleshooting.
+- 管理页面的连接错误与消息错误详情补齐 RPC 方法和调用方式，中英文标签、复制诊断内容及日志同步保留这些信息；方法与调用方式使用白名单校验，不透出请求正文、认证信息或未经允许的底层字段。
+  Management-page connection and message error details now show RPC method and transport, with Chinese and English labels and matching copied diagnostics and logs. Method and transport values are allowlisted without exposing request payloads, credentials, or unapproved underlying fields.
+- 保持现有错误码及调用方取消行为；调用方主动取消时不改写原始错误，也不会因新增诊断而重试请求或切换传输方式。
+  Existing error codes and caller cancellation behavior are preserved. Explicit cancellation leaves the original error untouched, and the added diagnostics do not retry requests or switch transports.
+
+### Notes / 使用说明
+
+- 依赖声明与 DSH `0.2.0-rc.2` 兼容声明保持不变；升级后重启 Host 并刷新管理页面，以加载同版 Host 和客户端诊断逻辑。
+  Dependency declarations and declared DSH `0.2.0-rc.2` compatibility remain unchanged. Restart the Host and refresh the management page after upgrading so Host and client diagnostics use the same version.
+
 ## [4.36.0] - 2026-10-05
 
 ### Added / 新增
@@ -1597,7 +1613,8 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 改进 npm 发布包结构，保留 CLI 入口并避免安装脚本拦截。
   Improved npm package contents to preserve the CLI entry point and avoid install-script blocking.
 
-[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.36.0...HEAD
+[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.36.1...HEAD
+[4.36.1]: https://github.com/xmanrui/dsh-im/compare/v4.36.0...v4.36.1
 [4.36.0]: https://github.com/xmanrui/dsh-im/compare/v4.35.1...v4.36.0
 [4.35.1]: https://github.com/xmanrui/dsh-im/compare/v4.35.0...v4.35.1
 [4.35.0]: https://github.com/xmanrui/dsh-im/compare/v4.34.2...v4.35.0
