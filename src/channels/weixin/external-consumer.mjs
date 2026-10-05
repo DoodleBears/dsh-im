@@ -19,19 +19,21 @@ export function pairedWeixinAccount(config, token) {
     fingerprint: createHash('sha256').update(JSON.stringify(identity)).digest('hex') });
 }
 
-/** Paired-owner text and opt-in native files. No group, mention, or thread is invented. */
-export function normalizeWeixinExternalText(message, { botId, account, sourceFiles = false }) {
-  if (message?.message_type !== 1 || message.from_user_id !== account.ownerUserId) return null;
+/** Paired-owner text and opt-in native files/images. No group, mention, or thread is invented. */
+export function normalizeWeixinExternalText(message, { botId, account, sourceFiles = false, sourceImages = false }) {
+  if (message?.message_type !== 1 || message.from_user_id !== account.ownerUserId || message.group_id) return null;
   if (message.to_user_id !== account.accountId) throw weixinRefusal('account-changed');
   if (!Array.isArray(message.item_list) || !message.item_list.length
-    || message.item_list.some(item => item?.type !== 1 && !(sourceFiles && item?.type === 4))) return null;
+    || message.item_list.some(item => item?.type !== 1 && !(sourceFiles && item?.type === 4) && !(sourceImages && item?.type === 2))) return null;
   const messageId = weixinMessageId(message);
-  const files = message.item_list.filter(item => item?.type === 4);
+  const files = message.item_list.filter(item => item?.type === 4 || item?.type === 2);
+  const image = files[0]?.type === 2 ? files[0].image_item : undefined;
+  if (files[0]?.type === 2 && (!image || typeof image !== 'object')) throw weixinRefusal('resource-unavailable');
   if (files.length > 1) throw weixinRefusal('resource-unavailable');
-  const nativeFile = files[0]?.file_item;
+  const nativeFile = image ? { file_name: 'image', image: true } : files[0]?.file_item;
   if (files.length && (!nativeFile || !id(nativeFile.file_name)
     || /[\x00-\x1f\x7f/\\]/.test(nativeFile.file_name))) throw weixinRefusal('resource-unavailable');
-  const text = extractWeixinText(message) || (nativeFile ? `[File: ${nativeFile.file_name}]` : '');
+  const text = extractWeixinText(message) || (nativeFile ? (image ? '[Image]' : `[File: ${nativeFile.file_name}]`) : '');
   const time = typeof message.create_time_ms === 'string' ? Number(message.create_time_ms) : message.create_time_ms;
   if (!messageId || !/^\d+$/.test(messageId) || !text?.trim() || text.length > 16000
     || !Number.isSafeInteger(time) || time <= 0 || !continuation(message.context_token)) throw weixinRefusal('invalid-inbound');
@@ -39,7 +41,7 @@ export function normalizeWeixinExternalText(message, { botId, account, sourceFil
   if (!Number.isFinite(at.getTime())) throw weixinRefusal('invalid-inbound');
   const conversationId = account.ownerUserId;
   const resourceKey = nativeFile ? createHash('sha256').update(JSON.stringify([
-    account.fingerprint, conversationId, messageId, nativeFile.file_name, nativeFile.len ?? null,
+    account.fingerprint, conversationId, messageId, nativeFile.file_name, nativeFile.len ?? null, ...(image ? ['image'] : []),
   ])).digest('hex') : undefined;
   const size = nativeFile?.len === undefined ? undefined : Number(nativeFile.len);
   if (nativeFile?.len !== undefined && (!/^\d+$/.test(String(nativeFile.len))
@@ -47,7 +49,7 @@ export function normalizeWeixinExternalText(message, { botId, account, sourceFil
   const attachments = nativeFile ? Object.freeze([Object.freeze({
     id: createHash('sha256').update(JSON.stringify([account.fingerprint, conversationId, messageId, resourceKey])).digest('hex'),
     messageId, resourceKey, name: nativeFile.file_name,
-    ...(size > 0 ? { sizeBytes: size } : {}), mediaType: 'application/octet-stream',
+    ...(size > 0 ? { sizeBytes: size } : {}), mediaType: image ? 'image/unknown' : 'application/octet-stream',
   })]) : undefined;
   return Object.freeze({ version: 1, channel: 'weixin', botId, fingerprint: account.fingerprint,
     eventId: messageId, messageId, actor: Object.freeze({ kind: 'user', id: account.ownerUserId }),

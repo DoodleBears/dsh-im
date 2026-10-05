@@ -6,15 +6,16 @@ export class ExclusiveInboundConsumers {
   #entries = new Map();
 
   acceptsFiles(botId) { return this.#entries.get(botId)?.sourceFiles === true; }
+  acceptsImages(botId) { return this.#entries.get(botId)?.sourceImages === true; }
   acceptsOrdinary(botId) { return this.#entries.get(botId)?.ordinaryText === true; }
 
-  register(botId, { fingerprint, onEvent, signal, sourceFiles = false, ordinaryText = false, onEcho }) {
+  register(botId, { fingerprint, onEvent, signal, sourceFiles = false, sourceImages = false, ordinaryText = false, onEcho }) {
     if (this.#entries.has(botId)) throw refusal('consumer-conflict');
-    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function' || typeof sourceFiles !== 'boolean' || typeof ordinaryText !== 'boolean' || (onEcho !== undefined && typeof onEcho !== 'function'))
+    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function' || typeof sourceFiles !== 'boolean' || typeof sourceImages !== 'boolean' || typeof ordinaryText !== 'boolean' || (onEcho !== undefined && typeof onEcho !== 'function'))
       throw refusal('bad-request');
     signal?.throwIfAborted();
     const controller = new AbortController();
-    const entry = { fingerprint, onEvent, onEcho, sourceFiles, ordinaryText, controller, dispose: undefined };
+    const entry = { fingerprint, onEvent, onEcho, sourceFiles, sourceImages, ordinaryText, controller, dispose: undefined };
     const dispose = () => {
       if (this.#entries.get(botId) === entry) this.#entries.delete(botId);
       controller.abort(refusal('consumer-unavailable'));
