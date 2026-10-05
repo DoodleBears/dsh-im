@@ -457,17 +457,21 @@ export class DeliveryService {
         throw deliveryError('capability-unavailable');
       }
       if (account.account?.fingerprint !== expectedFingerprint) throw deliveryError('account-changed');
-      if (receipt && (!account.capabilities?.includes('proactive-receipt-checked') || target.kind !== 'group'))
+      const receiptConversation = adapter.channel === 'feishu' && target.kind === 'group'
+        ? target.route.chatId : adapter.channel === 'slack' && target.kind === 'conversation'
+          ? target.route.channelId : undefined;
+      if (receipt && (!account.capabilities?.includes('proactive-receipt-checked') || !receiptConversation))
         throw deliveryError('capability-unavailable');
       cancellation(signal);
       this.#assertRegistered(registration);
-      const result = await adapter.sendText(id, target, text, { signal, expectedFingerprint,
+      const deliverySignal = signal ? AbortSignal.any([signal, registration.controller.signal]) : registration.controller.signal;
+      const result = await adapter.sendText(id, target, text, { signal: deliverySignal, expectedFingerprint,
         ...(receipt ? { receipt: true } : {}),
         ...(format === 'markdown' ? { format } : {}) });
       if (!receipt) return { sent: true };
       if (result?.sent !== true || result.receipt?.version !== 1
         || typeof result.receipt.messageId !== 'string' || !result.receipt.messageId || result.receipt.messageId.length > 512
-        || result.receipt.conversationId !== target.route.chatId)
+        || result.receipt.conversationId !== receiptConversation)
         throw deliveryError('send-result-unknown');
       return { sent: true, receipt: { version: 1, messageId: result.receipt.messageId, conversationId: result.receipt.conversationId } };
     } catch (error) { throw publicOperationError(error); }

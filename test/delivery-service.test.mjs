@@ -469,3 +469,38 @@ test('checked history discards an in-flight result after provider replacement or
   release();await assert.rejects(pending,{code:cancel?'cancelled':'capability-unavailable'});
  }
 });
+
+
+test('Slack checked report maps channelId explicitly and sanitizes receipt', async () => {
+  const fx = checkedFixture(); fx.adapter.channel = 'slack';
+  fx.adapter.describeAccount = async () => ({version: 1, capabilities: ['proactive-text-checked', 'proactive-receipt-checked'], account: {fingerprint: fx.fingerprint}});
+  fx.service.registerAdapter(fx.adapter);
+  const target = {targetId: 'report', kind: 'conversation', route: {channelId: 'C12345678'}};
+  await fx.service.createTarget('bot_one', target);
+  const {createHash} = await import('node:crypto');
+  const expectedTargetDigest = createHash('sha256').update(JSON.stringify({kind: target.kind, route: target.route})).digest('hex');
+  const options = {expectedFingerprint: fx.fingerprint, expectedTargetDigest, receipt: true};
+  let calls = 0;
+  fx.adapter.sendText = async (_id, saved, _text, opts) => {
+    calls++; assert.equal(saved.route.channelId, 'C12345678'); assert.equal(saved.route.chatId, undefined);
+    assert.equal(opts.receipt, true);
+    return {sent: true, receipt: {version: 1, messageId: '1791127737.000001', conversationId: 'C12345678', secret: 'discard'}};
+  };
+  assert.deepEqual(await fx.service.sendChecked('bot_one', 'report', 'Morning', options), {sent: true, receipt: {version: 1, messageId: '1791127737.000001', conversationId: 'C12345678'}});
+  fx.adapter.sendText = async () => {calls++; return {sent: true, receipt: {version: 1, messageId: '1791127737.000002', conversationId: 'C87654321'}};};
+  await assert.rejects(fx.service.sendChecked('bot_one', 'report', 'Morning', options), {code: 'send-result-unknown'});
+  assert.equal(calls, 2);
+});
+
+test('checked report preflight is cancelled when its Registration disappears', async () => {
+  const fx = checkedFixture(); const dispose = fx.service.registerAdapter(fx.adapter);
+  const expectedTargetDigest = await checkedTarget(fx);
+  let entered; let resume; let sends = 0;
+  const started = new Promise(resolve => {entered = resolve;});
+  const pending = new Promise(resolve => {resume = resolve;});
+  fx.adapter.sendText = async (_id, _target, _text, options) => {entered(); await pending; options.signal.throwIfAborted(); sends++; return {sent: true};};
+  const result = fx.service.sendChecked('bot_one', 'self', 'Report', {expectedFingerprint: fx.fingerprint, expectedTargetDigest});
+  await started; dispose(); resume();
+  await assert.rejects(result, {code: 'provider-unavailable'});
+  assert.equal(sends, 0);
+});
