@@ -269,9 +269,10 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
     ownsBot: (botId) => workspaces.has(botId),
     listBots: () => workspaces.listBotIds(),
     async listTargets(botId) {
-      const targets = [...workspaces.listDeliveryTargets(botId)];
+      let targets = [...workspaces.listDeliveryTargets(botId)];
       if (channel === 'weixin' && typeof coreController.describeDeliveryAccount === 'function') {
         const paired = await coreController.describeDeliveryAccount(botId);
+        targets = targets.filter(target => target.kind === 'user' && target.route?.toUserId === paired?.account?.ownerUserId);
         if (paired?.account?.ownerUserId && !targets.some(target => target.kind === 'user' && target.route?.toUserId === paired.account.ownerUserId))
           targets.push({ targetId: 'paired-owner', name: '扫码绑定者私聊', kind: 'user', route: { toUserId: paired.account.ownerUserId } });
       }

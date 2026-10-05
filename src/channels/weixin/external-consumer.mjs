@@ -3,6 +3,7 @@ import { deriveWeixinBotIdentity, maskWeixinAccountId } from './config-store.mjs
 import { extractWeixinText, weixinMessageId } from './weixin-api.mjs';
 
 export function weixinRefusal(code) { return Object.assign(new Error(code), { code }); }
+const continuation = value => typeof value === 'string' && value.length > 0 && value.length <= 16384;
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 512 && value.trim() === value;
 
 /** Identity comes from the stored server-confirmed QR pairing, not a fabricated auth.test API.
@@ -28,7 +29,7 @@ export function normalizeWeixinExternalText(message, { botId, account }) {
   const text = extractWeixinText(message);
   const time = typeof message.create_time_ms === 'string' ? Number(message.create_time_ms) : message.create_time_ms;
   if (!messageId || !/^\d+$/.test(messageId) || !text?.trim() || text.length > 16000
-    || !Number.isSafeInteger(time) || time <= 0 || !id(message.context_token)) throw weixinRefusal('invalid-inbound');
+    || !Number.isSafeInteger(time) || time <= 0 || !continuation(message.context_token)) throw weixinRefusal('invalid-inbound');
   const at = new Date(time);
   if (!Number.isFinite(at.getTime())) throw weixinRefusal('invalid-inbound');
   const conversationId = account.ownerUserId;
@@ -45,6 +46,6 @@ export function checkedWeixinRoute(route, account, source) {
     || route.conversationId !== account.ownerUserId || route.actorId !== account.ownerUserId
     || !id(route.messageId) || !source || source.fingerprint !== account.fingerprint
     || source.actorId !== route.actorId || source.messageId !== route.messageId
-    || source.expiresAt <= Date.now() || !id(source.contextToken)) throw weixinRefusal('stale-route');
+    || source.expiresAt <= Date.now() || !continuation(source.contextToken)) throw weixinRefusal('stale-route');
   return { messageId: route.messageId, conversationId: route.conversationId, actorId: route.actorId };
 }
