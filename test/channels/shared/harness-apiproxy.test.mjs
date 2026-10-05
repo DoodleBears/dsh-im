@@ -257,10 +257,17 @@ test('in-process RPC bounds waits without retrying accepted calls or falling bac
       },
     },
   });
-  await assert.rejects(client.rpc('session.prompt', {}, 2), { code: 'harness-timeout' });
+  await assert.rejects(client.rpc('session.prompt', {}, 2), error => {
+    assert.equal(error.code, 'harness-timeout');
+    assert.equal(error.method, 'session.prompt');
+    assert.equal(error.transport, 'host-api');
+    assert.equal(error.timeoutMs, 2);
+    assert.ok(Number.isInteger(error.durationMs) && error.durationMs >= 0);
+    return true;
+  });
   assert.equal(calls, 1);
   const controller = new AbortController();
-  const reason = new Error('caller cancelled');
+  const reason = Object.freeze(new Error('caller cancelled'));
   const pending = client.rpc('session.prompt', {}, 1000, { signal: controller.signal });
   await eventually(() => calls === 2);
   controller.abort(reason);

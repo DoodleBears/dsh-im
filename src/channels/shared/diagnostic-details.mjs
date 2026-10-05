@@ -20,6 +20,12 @@ const REASONS = new Set([
   'unknown', 'multiple-causes', 'timeout', 'http-error', 'provider-rejected', 'invalid-response', 'ERR_PROXY_CONNECTION_FAILED', 'ERR_TLS_HANDSHAKE_TIMEOUT', 'ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR', 'ERR_NETWORK_ACCESS_DENIED', 'AUTHENTICATIONFAILED', 'EAUTH', 'invalid-json', 'invalid-config', 'read-only',
 ]);
 const RESOURCES = new Set(['credential-store', 'account-config', 'account-state', 'workspace-config', 'workspace-directory']);
+const RPC_METHODS = new Set([
+  'host.describe', 'workspace.list', 'workspace.create', 'session.list', 'session.create',
+  'session.history', 'session.prompt', 'session.rename', 'session.cancel', 'session.models',
+  'session.permissions', 'session.selectModel', 'llm.models',
+]);
+const TRANSPORTS = new Set(['host-api', 'http']);
 const CONFIG_FILES = new Set(['config.json', 'workspaces.json']);
 export const CONFIG_ISSUE_LABELS = Object.freeze({
   'expected-object': '应为 JSON 对象。',
@@ -44,7 +50,7 @@ const CONFIG_FIELD = /^(?:\$|version|accounts(?:\[\d{1,10}\](?:\.(?:accountId|ow
 export function normalizeDiagnosticDetails(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   const result = {};
-  for (const [field, allowed] of [['operation', OPERATIONS], ['stage', STAGES], ['reason', REASONS], ['resource', RESOURCES]]) {
+  for (const [field, allowed] of [['operation', OPERATIONS], ['stage', STAGES], ['reason', REASONS], ['resource', RESOURCES], ['method', RPC_METHODS], ['transport', TRANSPORTS]]) {
     if (allowed.has(value[field])) result[field] = value[field];
   }
   if (DIAGNOSTIC_CHANNELS.includes(value.channel)) result.channel = value.channel;
