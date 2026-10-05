@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- Discord 增加可选 external-only Profile 与受校验的 App/Bot 身份、独占 @ 收件和原频道／已有公开 Thread 回复；缺失 consumer 不回退到独立 Session，发送前复查原消息及权限，不确定结果不自动重发。真实 BotHarness App/E2E 资格仍待验证（BotHarness/BotHarness#855）。
+  Discord adds an optional external-only Profile with checked App/Bot identity, exclusive mention intake and replies in the original channel or existing public thread. Consumer loss never restores standalone Sessions; source and permissions are checked before dispatch and ambiguous results are not automatically retried. Real BotHarness App/E2E qualification remains pending (BotHarness/BotHarness#855).
+
 - Feishu/Lark 增加可选的独占外部文本 consumer 与经原消息校验的回复：保留工作群的提及和话题身份，等待 consumer 提交后确认接收；被接管账号在 consumer 消失或重启时不会回退到独立 Session。此扩展仍未发布。
   Feishu/Lark adds an optional exclusive external text consumer and replies checked against the original message. Work-group mentions and topic identities are retained, acknowledgement waits for the consumer to commit, and a claimed account never falls back to an independent Session after consumer loss or restart. This extension remains unreleased.
 - 同 Host 的公开 `dshIm` Service 新增版本化账号描述和条件纯文本发送：Feishu/Lark 账号由平台认证身份确定，目标以固定内容摘要校验，旧 `send` 行为保持兼容；未支持的渠道返回明确错误。
