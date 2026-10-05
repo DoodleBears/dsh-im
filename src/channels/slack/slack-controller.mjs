@@ -236,19 +236,19 @@ export class SlackController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'slack', account,
         connected: this.#runtimes.get(botId)?.status?.ready === true,
-        capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'reply-text-checked',
+        capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked',
           'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked',
           'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
     });
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, ordinaryText = false } = {}) {
     return this.#withBotTransition(botId, async () => {
       const config = this.#configStore.get(botId);
       if (!config) throw slackRefusal('unknown-bot');
       const account = await this.#deliveryAccount(config, signal);
       if (account.fingerprint !== expectedFingerprint) throw slackRefusal('account-changed');
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, ordinaryText });
       try {
         const saved = await this.#configStore.save({ ...config, consumerMode: 'external-consumer' });
         const resolved = await this.#resolveCredentials(saved);
@@ -410,6 +410,7 @@ export class SlackController {
       appToken,
       externalConsumer: (evidence, signal) => this.#inboundConsumers.accept(config.botId, evidence, signal),
       externalSourceFiles: () => this.#inboundConsumers.acceptsFiles(config.botId),
+      externalOrdinaryText: () => this.#inboundConsumers.acceptsOrdinary(config.botId),
     }));
     if (!runtime || typeof runtime.start !== 'function' || typeof runtime.stop !== 'function') {
       throw new TypeError('createRuntime returned an invalid Slack runtime');
