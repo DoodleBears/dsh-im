@@ -153,6 +153,13 @@ export class DiscordApi {
     );
   }
 
+  getMessages({ channelId, before, limit, signal } = {}) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new TypeError('Invalid Discord history limit');
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (before !== undefined) query.set('before', snowflake(before, 'history boundary'));
+    return this.#request(`channels/${snowflake(channelId, 'channel id')}/messages?${query}`, { method: 'GET', signal });
+  }
+
   startThreadFromMessage({ channelId, messageId, name, signal } = {}) {
     const threadName = cleanString(name);
     if (!threadName || [...threadName].length > 100) {

@@ -320,6 +320,16 @@ export class TokenBotController {
     });
   }
 
+  async historyChecked(botId, route, query, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      if (typeof checked.runtime.historyChecked !== 'function') throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      const result = await checked.runtime.historyChecked(route, query, { signal: checked.signal });
+      checked.signal.throwIfAborted();
+      return result;
+    });
+  }
+
   async replyChecked(botId, route, text, options = {}) {
     return this.#withBotTransition(botId, async () => {
       const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
