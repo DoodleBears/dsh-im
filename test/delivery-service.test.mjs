@@ -430,6 +430,28 @@ test('a reply waiting for provider preflight cannot send after its Registration 
   assert.equal(sends, 0);
 });
 
+test('optional checked history refuses legacy adapters and preserves public read refusals', async () => {
+ const fx=checkedFixture();fx.service.registerAdapter(fx.adapter);
+ await assert.rejects(fx.service.historyChecked('bot_one',{}, {}, {expectedFingerprint:fx.fingerprint}),{code:'capability-unavailable'});
+ for(const code of ['history-permission-denied','stale-route','thread-unavailable','untrusted-source']) {
+  fx.adapter.historyChecked=async()=>{throw Object.assign(new Error('refused'),{code});};
+  await assert.rejects(fx.service.historyChecked('bot_one',{}, {}, {expectedFingerprint:fx.fingerprint}),{code});
+ }
+});
+
+test('checked history discards an in-flight result after provider replacement or caller cancellation', async () => {
+ for(const cancel of [false,true]) {
+  const fx=checkedFixture();fx.service.registerAdapter(fx.adapter);let entered,release;
+  const started=new Promise(resolve=>{entered=resolve;});const gate=new Promise(resolve=>{release=resolve;});
+  fx.adapter.historyChecked=async()=>{entered();await gate;return {events:['must not escape']};};
+  const abort=new AbortController();
+  const pending=fx.service.historyChecked('bot_one',{}, {}, {expectedFingerprint:fx.fingerprint,signal:abort.signal});
+  await started;
+  if(cancel)abort.abort();else fx.service.registerAdapter(fx.adapter);
+  release();await assert.rejects(pending,{code:cancel?'cancelled':'capability-unavailable'});
+ }
+});
+
 function approvalAdapter(channel, keys, { present = async () => true } = {}) {
   const botId = `bot_${channel.replaceAll('-', '_')}`;
   const adapter = memoryAdapter({ channel, botId });

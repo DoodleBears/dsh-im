@@ -1392,7 +1392,7 @@ test('external account consumption persists exclusive mode and never restores st
 });
 
 
-for (const operation of ['consumeInbound', 'replyChecked']) {
+for (const operation of ['consumeInbound', 'replyChecked', 'historyChecked']) {
   test(`${operation} refuses a Host close during account verification before changing mode or sending`, async () => {
     const existing = bot('bot_closing_checked', 'closing_checked');
     let entered;
@@ -1412,7 +1412,8 @@ for (const operation of ['consumeInbound', 'replyChecked']) {
       onEvent: async () => ({ accepted: true }) };
     const pending = operation === 'consumeInbound'
       ? fx.controller.consumeInbound(existing.id, options)
-      : fx.controller.replyChecked(existing.id, {}, 'hello', options);
+      : operation === 'replyChecked' ? fx.controller.replyChecked(existing.id, {}, 'hello', options)
+      : fx.controller.historyChecked(existing.id, {}, {}, options);
     const refused = assert.rejects(pending, { code: 'capability-unavailable' });
     await verifying;
     const closing = fx.controller.close();
@@ -1424,6 +1425,69 @@ for (const operation of ['consumeInbound', 'replyChecked']) {
     assert.equal(fx.controller.status().totals.connected, 0);
   });
 }
+
+test('history requires current verified account and live exclusive consumer lease', async () => {
+ const existing=bot('bot_history');
+ const fx=fixture({bots:[existing],secrets:{[existing.secretRef]:'local-secret'},verifyApp:async()=>({openId:existing.botOpenId})});
+ await fx.controller.initialize();
+ const account=await fx.controller.describeDeliveryAccount(existing.id);
+ assert.ok(account.capabilities.includes('history-text-checked'));
+ const options={expectedFingerprint:account.account.fingerprint};
+ await assert.rejects(fx.controller.historyChecked(existing.id,{}, {},options),{code:'capability-unavailable'});
+ const dispose=await fx.controller.consumeInbound(existing.id,{...options,onEvent:async()=>({accepted:true})});
+ const runtime=fx.runtimes.get(existing.id).at(-1);let calls=0;
+ runtime.historyChecked=async(identity,route,query,context)=>{calls++;assert.equal(identity.fingerprint,options.expectedFingerprint);context.signal.throwIfAborted();return {events:[]};};
+ assert.deepEqual(await fx.controller.historyChecked(existing.id,{}, {},options),{events:[]});
+ await assert.rejects(fx.controller.historyChecked(existing.id,{}, {},{expectedFingerprint:'b'.repeat(64)}),{code:'account-changed'});
+ dispose();await assert.rejects(fx.controller.historyChecked(existing.id,{}, {},options),{code:'consumer-unavailable'});
+ assert.equal(calls,1);await fx.controller.close();
+});
+
+test('releasing the exclusive consumer cancels a pending history read', async () => {
+ const existing=bot('bot_history_release');
+ const fx=fixture({bots:[existing],secrets:{[existing.secretRef]:'local-secret'},verifyApp:async()=>({openId:existing.botOpenId})});
+ await fx.controller.initialize();const account=await fx.controller.describeDeliveryAccount(existing.id);
+ const options={expectedFingerprint:account.account.fingerprint};
+ const dispose=await fx.controller.consumeInbound(existing.id,{...options,onEvent:async()=>({accepted:true})});
+ let entered,release;const started=new Promise(resolve=>{entered=resolve;});const gate=new Promise(resolve=>{release=resolve;});
+ fx.runtimes.get(existing.id).at(-1).historyChecked=async()=>{entered();await gate;return {events:['must not escape']};};
+ const pending=fx.controller.historyChecked(existing.id,{}, {},options);await started;dispose();release();
+ await assert.rejects(pending,{code:'consumer-unavailable'});await fx.controller.close();
+});
+
+
+test('external callback awaits checked history without deadlocking acknowledgement or later operations', async () => {
+  const existing = bot('bot_nested_history', 'nested_history');
+  const fx = fixture({ bots: [existing], secrets: { [existing.secretRef]: 'fixture-secret' },
+    verifyApp: async () => ({ openId: existing.botOpenId }) });
+  await fx.controller.initialize();
+  const account = await fx.controller.describeDeliveryAccount(existing.id);
+  let reads = 0;
+  const dispose = await fx.controller.consumeInbound(existing.id, { expectedFingerprint: account.account.fingerprint,
+    onEvent: async (event, { signal }) => {
+      const page = await fx.controller.historyChecked(existing.id, event.reply, { scope: 'thread', limit: 1 },
+        { expectedFingerprint: account.account.fingerprint, signal });
+      assert.equal(page.events[0].text, 'context'); return { accepted: true };
+    } });
+  const runtime = fx.runtimes.get(existing.id).at(-1);
+  runtime.historyChecked = async (_, route, __, { signal }) => {
+    signal.throwIfAborted(); reads++; assert.equal(route.threadId, 'topic');
+    return { events: [{ text: 'context' }] };
+  };
+  const incoming = runtime.acceptExternal({ event_id: 'event', app_id: existing.appId,
+    sender: { sender_type: 'user', sender_id: { open_id: 'human' } },
+    message: { message_id: 'source', chat_id: 'group', chat_type: 'group', message_type: 'text', thread_id: 'topic',
+      create_time: '1790787600000', content: JSON.stringify({ text: 'read context' }) } });
+  let timer;
+  try {
+    await Promise.race([incoming, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('callback history deadlocked')), 300); })]);
+    assert.equal(reads, 1);
+    await fx.controller.disconnectBot(existing.id);
+    assert.equal(fx.controller.status().totals.connected, 0);
+  } finally {
+    clearTimeout(timer); dispose(); await incoming.catch(() => {}); await fx.controller.close();
+  }
+});
 
 
 function externalInput(existing) {

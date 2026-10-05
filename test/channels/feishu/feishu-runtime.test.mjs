@@ -1022,3 +1022,19 @@ test('checked replies validate the original source before sending and retain unk
   assert.equal(sends, 2);
   await runtime.stop();
 });
+
+test('checked history refuses a result after the runtime stops during SDK listing', async () => {
+ const runtime=new FeishuRuntime({lark:fakeLark(),appId:'app',appSecret:'secret',ownerOpenIds:['*'],
+ consumerMode:'external-consumer',harness:{async ensureRunning(){}},state:{}});
+ const starting=runtime.start();await waitFor(()=>FakeWSClient.instances.length===1);
+ FakeWSClient.instances[0].becomeReady();await starting;
+ const client=FakeClient.instances[0];
+ const source={message_id:'anchor',chat_id:'chat',create_time:'1790830000000',
+ sender:{sender_type:'user',id_type:'open_id',id:'human'}};
+ client.im.v1.message.get=async()=>({code:0,data:{items:[source]}});
+ let entered,release;const started=new Promise(resolve=>{entered=resolve;});const gate=new Promise(resolve=>{release=resolve;});
+ client.im.v1.message.list=async()=>{entered();await gate;return {code:0,data:{items:[],has_more:false}};};
+ const pending=runtime.historyChecked({botId:'bot',appId:'app',botOpenId:'bot',fingerprint:'a'.repeat(64)},
+ {messageId:'anchor',conversationId:'chat',actorId:'human'},{scope:'group',limit:1});
+ await started;await runtime.stop();release();await assert.rejects(pending,{code:'bot-not-connected'});
+});

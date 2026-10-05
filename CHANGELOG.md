@@ -13,6 +13,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- 群与话题历史读取现在同时识别 SDK 成功响应和 HTTP 拒绝中的权限错误；取消优先于错误映射，不向应用暴露带认证信息的底层 HTTP 错误。
+  Checked history reads recognize permission errors in both resolved responses and rejected SDK HTTP responses; cancellation takes precedence and raw authenticated HTTP errors never escape to application callers.
+
 - 独占收件接管与凭据重绑共用配置事务队列；展示设置更新不再被误判为账号变更。应用回调不占用机器人操作队列，断开可取消待处理回调，回调也可读取或回复原消息。
   Exclusive takeover shares configuration serialization with credential rebinding; presentation changes no longer look like account changes. Application callbacks release the bot operation queue so disconnect can cancel them and callbacks can await checked reads or replies.
 
