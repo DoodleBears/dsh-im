@@ -19,24 +19,40 @@ export function pairedWeixinAccount(config, token) {
     fingerprint: createHash('sha256').update(JSON.stringify(identity)).digest('hex') });
 }
 
-/** First tracer is paired-owner plain text only. No group, mention, or thread is invented. */
-export function normalizeWeixinExternalText(message, { botId, account }) {
+/** Paired-owner text and opt-in native files. No group, mention, or thread is invented. */
+export function normalizeWeixinExternalText(message, { botId, account, sourceFiles = false }) {
   if (message?.message_type !== 1 || message.from_user_id !== account.ownerUserId) return null;
   if (message.to_user_id !== account.accountId) throw weixinRefusal('account-changed');
   if (!Array.isArray(message.item_list) || !message.item_list.length
-    || message.item_list.some(item => item?.type !== 1)) return null;
+    || message.item_list.some(item => item?.type !== 1 && !(sourceFiles && item?.type === 4))) return null;
   const messageId = weixinMessageId(message);
-  const text = extractWeixinText(message);
+  const files = message.item_list.filter(item => item?.type === 4);
+  if (files.length > 1) throw weixinRefusal('resource-unavailable');
+  const nativeFile = files[0]?.file_item;
+  if (files.length && (!nativeFile || !id(nativeFile.file_name)
+    || /[\x00-\x1f\x7f/\\]/.test(nativeFile.file_name))) throw weixinRefusal('resource-unavailable');
+  const text = extractWeixinText(message) || (nativeFile ? `[File: ${nativeFile.file_name}]` : '');
   const time = typeof message.create_time_ms === 'string' ? Number(message.create_time_ms) : message.create_time_ms;
   if (!messageId || !/^\d+$/.test(messageId) || !text?.trim() || text.length > 16000
     || !Number.isSafeInteger(time) || time <= 0 || !continuation(message.context_token)) throw weixinRefusal('invalid-inbound');
   const at = new Date(time);
   if (!Number.isFinite(at.getTime())) throw weixinRefusal('invalid-inbound');
   const conversationId = account.ownerUserId;
+  const resourceKey = nativeFile ? createHash('sha256').update(JSON.stringify([
+    account.fingerprint, conversationId, messageId, nativeFile.file_name, nativeFile.len ?? null,
+  ])).digest('hex') : undefined;
+  const size = nativeFile?.len === undefined ? undefined : Number(nativeFile.len);
+  if (nativeFile?.len !== undefined && (!/^\d+$/.test(String(nativeFile.len))
+    || !Number.isSafeInteger(size) || size < 0)) throw weixinRefusal('resource-unavailable');
+  const attachments = nativeFile ? Object.freeze([Object.freeze({
+    id: createHash('sha256').update(JSON.stringify([account.fingerprint, conversationId, messageId, resourceKey])).digest('hex'),
+    messageId, resourceKey, name: nativeFile.file_name,
+    ...(size > 0 ? { sizeBytes: size } : {}), mediaType: 'application/octet-stream',
+  })]) : undefined;
   return Object.freeze({ version: 1, channel: 'weixin', botId, fingerprint: account.fingerprint,
     eventId: messageId, messageId, actor: Object.freeze({ kind: 'user', id: account.ownerUserId }),
     conversation: Object.freeze({ kind: 'dm', id: conversationId }), mentions: Object.freeze([]),
-    mentionedAccount: false, at: at.toISOString(), text,
+    mentionedAccount: false, at: at.toISOString(), text, ...(attachments ? { attachments } : {}),
     reply: Object.freeze({ messageId, conversationId, actorId: account.ownerUserId }),
     replay: Object.freeze({ kind: 'provider-redelivery', resumeCursor: false, gapPossible: true }) });
 }

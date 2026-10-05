@@ -1,4 +1,5 @@
 import { checkedWeixinRoute, weixinRefusal } from './external-consumer.mjs';
+import { readWeixinExternalFile, replyWeixinExternalFile } from './external-files.mjs';
 import { createWeixinDiagnostics } from './connection-error.mjs';
 import { DEFAULT_WEIXIN_MAX_MESSAGE_CHARS, WeixinApiError, rejectedProviderResponse } from './weixin-api.mjs';
 import {
@@ -329,6 +330,21 @@ export class WeixinRuntime {
       throw weixinRefusal('provider-result-unknown');
     return { sent: true, ...(receipt ? { receipt: { version: 1, messageId: clientId,
       conversationId: checked.conversationId, identityKind: 'client-acknowledgement' } } : {}) };
+  }
+
+  async externalFileChecked(route, file, { account, signal, reply = false, beforeSend } = {}) {
+    const source = this.#state.externalReplySource(route?.messageId);
+    checkedWeixinRoute(route, account, source);
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      checkedWeixinRoute(route, account, this.#state.externalReplySource(route.messageId));
+      if (reply && (!beforeSend || beforeSend() !== true)) throw weixinRefusal('stale-route');
+    };
+    return reply ? replyWeixinExternalFile(this.#api, {
+      baseUrl: this.#config.baseUrl, token: this.#token, toUserId: route.actorId,
+      contextToken: source.contextToken,
+    }, file, { signal, assertCurrent })
+      : readWeixinExternalFile(this.#api, source, file, { signal, assertCurrent });
   }
 
   async stop() {

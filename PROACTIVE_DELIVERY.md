@@ -375,6 +375,12 @@ options 必须包含 `expectedFingerprint`、`expectedTargetDigest`，可选 `si
 
 File metadata is opt-in through `consumeInbound(..., {sourceFiles: true})`; legacy consumers receive their unchanged version 1 text envelope. / 文件元信息通过 `sourceFiles: true` 明确协商，旧 consumer 的文本 envelope 保持原样。
 
+### 个人微信扫码者文件
+
+微信 external-consumer 模式通过 `sourceFiles: true` 接收扫码绑定者的一份原生 type-4 文件，可同时带文字；原生十进制消息 ID 不丢精度。公开元数据仅含来源绑定的不可解释资源键、文件名、可选声明大小和通用 MIME。CDN 票据、AES 密钥及回复续接信息保留在私有来源状态（1,000 条／30 天），不出现在公开快照。下载通过受信任的微信 CDN 惰性解密，按实际字节限制 25 MiB 明文，考虑密文填充及错误或缺失的大小头。声明超限文件仍可查看元数据，但不能下载。这是保留来源校验，不是远端历史或重读 API。
+
+账号还声明 `reply-file-fence-checked`；调用 `replyFileChecked` 时必须提供同步的 `beforeSend: () => boolean`。运行时在准备前和加密 CDN 上传后、原生最终发送前都要求其返回 true。撤销授权、账号替换、Consumer 释放或续接信息失效会拒绝最终发送。选中的结果以原生文件使用 Bot 自己的身份回复同一扫码者私聊。平台接受仍只表示客户端确认，不是原生服务端 ID、送达或已读证明；最终发送结果不确定时不自动重试。图片、语音、视频、其他联系人、群和主动发送独立资格验证。
+
 ## 完整 fork 的上下文读取生命周期
 
 有界群／话题读取必须持有当前账号的独占 Consumer。释放 Consumer、Host 关闭或 Provider Registration 被替换后，不返回正在读取的结果。每次请求最多检查 20 条平台记录；无效或不支持的文字计入 omitted，跨群／话题记录拒绝。保留已有附件、发送回执、自身回显和独立回复身份契约。此 fork 的可用性不依赖上游 PR 合并。

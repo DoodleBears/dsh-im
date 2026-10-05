@@ -375,6 +375,12 @@ A result file is an explicitly selected `{id,name,bytes}` with at most 25 MiB. C
 
 File metadata is opt-in through `consumeInbound(..., {sourceFiles: true})`; legacy consumers receive their unchanged version 1 text envelope. / 文件元信息通过 `sourceFiles: true` 明确协商，旧 consumer 的文本 envelope 保持原样。
 
+### Personal WeChat paired-owner files
+
+WeChat external-consumer mode accepts an opt-in single native type-4 file, with optional text, only from the QR-paired owner. It retains native decimal message IDs without precision loss. Canonical metadata includes a source-bound opaque resource key, filename, optional declared size and generic MIME type; CDN tickets, AES keys and continuation tokens remain in private source state (1,000 sources / 30 days) and are excluded from public snapshots. Files download lazily through the trusted WeChat CDN with an actual 25 MiB plaintext limit, including ciphertext padding and misleading or missing size headers. A declared oversized file remains inspectable but cannot be downloaded. This is retained source qualification, not a remote history or source reread API.
+
+The account additionally advertises `reply-file-fence-checked`. The caller must pass a synchronous `beforeSend: () => boolean` on `replyFileChecked`; the runtime requires it to return true before preparation and again immediately after encrypted CDN upload, before the final native send. Revocation, account replacement, consumer disposal or missing/expired continuation refuses the final effect. The selected result is sent as a native file in the same paired-owner DM, using that Bot's own identity. An accepted result is a client acknowledgement, not a native server ID, delivery or read proof. An uncertain final send is not retried. Images, voice, video, other contacts, groups and proactive sending are separate qualifications.
+
 ## Bounded Feishu/Lark context reads (same Host)
 
 An active exclusive consumer may call the optional `dshIm.historyChecked(botId, source.reply, query, {expectedFingerprint, signal})`. Check `history-text-checked`, and also `thread-history-text-checked` for a thread. Query is `{scope: 'group' | 'nearby' | 'thread', limit: 1..20, cursor?: string}`. There is no browser/HTTP history endpoint. The verified account and live consumer lease are required; standalone accounts cannot read through this contract.

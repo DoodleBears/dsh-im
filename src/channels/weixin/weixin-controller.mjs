@@ -1,5 +1,6 @@
 import { ExclusiveInboundConsumers } from '../shared/exclusive-inbound-consumers.mjs';
 import { pairedWeixinAccount, normalizeWeixinExternalText, weixinRefusal } from './external-consumer.mjs';
+import { privateWeixinFile } from './external-files.mjs';
 import { randomUUID } from 'node:crypto';
 import { createWeixinDiagnostics, knownWeixinErrorCode, weixinStageError } from './connection-error.mjs';
 
@@ -162,18 +163,18 @@ export class WeixinController {
       return { version: 1, botId, channel: 'weixin', account,
         connected: this.#runtimes.get(botId)?.status?.ready === true,
         capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'reply-text-checked',
-          'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked'] };
+          'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked',
+          'source-file-checked', 'reply-file-checked', 'reply-file-fence-checked'] };
     });
   }
 
   async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false } = {}) {
     return this.#withBotTransition(botId, async () => {
-      if (sourceFiles) throw weixinRefusal('capability-unavailable');
       const config = this.#configStore.get(botId);
       if (!config) throw weixinRefusal('unknown-bot');
       const account = await this.#deliveryAccount(config, signal);
       if (account.fingerprint !== expectedFingerprint) throw weixinRefusal('account-changed');
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles });
       try {
         const saved = await this.#configStore.save({ ...config, consumerMode: 'external-consumer' });
         await this.#startRuntime(saved, await this.#resolveToken(saved.tokenRef));
@@ -205,6 +206,13 @@ export class WeixinController {
     return this.#withBotTransition(botId, async () => {
       const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
       return checked.runtime.replyChecked(route, text, { ...options, ...checked });
+    });
+  }
+
+  async externalFileChecked(botId, route, file, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      return checked.runtime.externalFileChecked(route, file, { ...options, ...checked });
     });
   }
 
@@ -666,11 +674,13 @@ export class WeixinController {
           const current = await this.#deliveryAccount(this.#configStore.get(config.botId), signal);
           if (current.fingerprint !== account.fingerprint) throw weixinRefusal('account-changed');
           this.#inboundConsumers.signalFor(config.botId, account.fingerprint).throwIfAborted();
-          const event = normalizeWeixinExternalText(message, { botId: config.botId, account });
+          const event = normalizeWeixinExternalText(message, { botId: config.botId, account,
+            sourceFiles: this.#inboundConsumers.acceptsFiles(config.botId) });
           if (!event) return { accepted: true, ignored: true };
           await state.rememberExternalReplySource({ messageId: event.messageId, actorId: event.actor.id,
             fingerprint: account.fingerprint, contextToken: message.context_token,
-            expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 });
+            expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+            ...(event.attachments?.length ? { file: privateWeixinFile(message, event) } : {}) });
           return this.#inboundConsumers.accept(config.botId, event, signal);
         } });
     } catch (error) {

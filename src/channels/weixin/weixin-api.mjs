@@ -205,7 +205,7 @@ export function extractWeixinImages(message, { fetchImpl = fetch } = {}) {
   return images;
 }
 
-async function fetchWeixinFileCiphertext(url, { fetchImpl, signal }) {
+async function fetchWeixinFileCiphertext(url, { fetchImpl, signal, maxBytes }) {
   const response = await fetchImpl(new URL(url), {
     method: 'GET',
     signal,
@@ -219,7 +219,25 @@ async function fetchWeixinFileCiphertext(url, { fetchImpl, signal }) {
       { status: response?.status },
     );
   }
-  return Buffer.from(await response.arrayBuffer());
+  const tooLarge = () => Object.assign(new Error('artifact-too-large'), { code: 'artifact-too-large' });
+  const declared = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel?.().catch(() => undefined);
+    throw tooLarge();
+  }
+  if (!response.body?.[Symbol.asyncIterator]) throw Object.assign(new Error('resource-unavailable'), { code: 'resource-unavailable' });
+  const chunks = [];
+  let size = 0;
+  try {
+    for await (const chunk of response.body) {
+      signal?.throwIfAborted();
+      size += chunk.byteLength;
+      if (size > maxBytes) throw tooLarge();
+      chunks.push(Buffer.from(chunk));
+    }
+    signal?.throwIfAborted();
+    return Buffer.concat(chunks, size);
+  } finally { await response.body.cancel?.().catch(() => undefined); }
 }
 
 /** Convert native iLink file items into lazily downloaded, decrypted file references. */
@@ -233,13 +251,17 @@ export function extractWeixinFiles(message, { fetchImpl = fetch } = {}) {
     files.push({
       name: nonEmptyString(fileItem.file_name) ?? (files.length === 0 ? 'file' : `file-${files.length + 1}`),
       ...(Number.isFinite(declaredSize) && declaredSize >= 0 ? { size: declaredSize } : {}),
-      load: async ({ signal } = {}) => {
+      load: async ({ signal, maxBytes = 25 * 1024 * 1024 } = {}) => {
         signal?.throwIfAborted();
+        if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > 25 * 1024 * 1024) throw new TypeError('Invalid file byte limit');
+        if (Number.isFinite(declaredSize) && declaredSize > maxBytes) throw Object.assign(new Error('artifact-too-large'), { code: 'artifact-too-large' });
         const key = parseWeixinImageAesKey(fileItem);
         const url = weixinImageDownloadUrl(fileItem.media);
-        const ciphertext = await fetchWeixinFileCiphertext(url, { fetchImpl, signal });
+        const ciphertext = await fetchWeixinFileCiphertext(url, { fetchImpl, signal, maxBytes: maxBytes + 16 });
         signal?.throwIfAborted();
-        return decryptWeixinImage(ciphertext, key);
+        const plaintext = decryptWeixinImage(ciphertext, key);
+        if (plaintext.length > maxBytes) throw Object.assign(new Error('artifact-too-large'), { code: 'artifact-too-large' });
+        return plaintext;
       },
     });
   }
@@ -527,6 +549,7 @@ export function createWeixinApi({ fetchImpl = fetch, uploadFetchImpl = fetchImpl
     contextToken,
     runId,
     signal,
+    beforeSend,
   }, { mediaType, createItem }) {
     const recipient = nonEmptyString(toUserId);
     if (!recipient || !file || typeof file !== 'object'
@@ -600,6 +623,8 @@ export function createWeixinApi({ fetchImpl = fetch, uploadFetchImpl = fetchImpl
       aes_key: Buffer.from(aesKey.toString('hex')).toString('base64'),
       encrypt_type: 1,
     };
+    await beforeSend?.();
+    signal?.throwIfAborted();
     let response;
     try {
       response = await requestJson(fetchImpl, {
