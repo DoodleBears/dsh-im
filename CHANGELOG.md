@@ -6,6 +6,17 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+### Added / 新增
+
+- 飞书/Lark 可由同 Host 应用独占接收文本消息，等待应用确认持久化后返回，并按校验过的原消息/话题回复；外部消费模式在释放或重启后不回退到独立 Session。
+  Same-Host applications can opt into exclusive Feishu/Lark text intake, acknowledge after durable acceptance, and reply through a checked original-message/topic route. Releasing or restarting an external consumer never falls back to a standalone Session.
+
+### Fixed / 修复
+
+- 独占收件接管与凭据重绑共用配置事务队列；展示设置更新不再被误判为账号变更。应用回调不占用机器人操作队列，断开可取消待处理回调，回调也可读取或回复原消息。
+  Exclusive takeover shares configuration serialization with credential rebinding; presentation changes no longer look like account changes. Application callbacks release the bot operation queue so disconnect can cancel them and callbacks can await checked reads or replies.
+
+
 ## [4.35.1] - 2026-10-05
 
 ### Fixed / 修复

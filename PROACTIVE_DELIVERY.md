@@ -364,3 +364,15 @@ same-Host `dshIm` Service 新增 `contractVersion:1`、`describeBot(botId)` 和 
 options 必须包含 `expectedFingerprint`、`expectedTargetDigest`，可选 `signal`、`format`。目标 digest 为 `JSON.stringify({kind,route})` 的 UTF-8 小写 SHA-256，route keys 按 JavaScript 字符串 code-unit 升序排列；名称和 alias 不参与。发送检查当前 saved target，冻结规范化 route，再在账号 transition 内重新验证认证身份后使用此 route；验证期间编辑 alias 不会改投。lookup 前删除或改址会拒绝；请求已经开始后，修改不能撤销外部效果。
 
 `account-unverified`、`account-changed`、`target-changed`、`capability-unavailable` 是发送前拒绝；凭据读取与平台认证失败也返回 `account-unverified`。`{sent:true}` 仍只代表平台接受，不代表送达/已读。SDK 开始后的取消、超时和含糊失败不能证明没有发送；调用者持有 durable authorization／intent／attempt 与 reconciliation，不得盲重试。Provider Registration 撤销或控制器关闭会拒绝尚未开始 SDK 请求的条件投递，包括在最后一次账号核验期间发生的撤销；不能撤回已开始的 SDK 请求。
+
+## 飞书/Lark 独占文本收件（同 Host）
+
+拥有独立持久消息存储的应用，可通过 `ctx.dshIm`（`inboundVersion: 1`）独占接收文本消息，并使用 `replyChecked` 沿校验过的原消息/话题回复。此能力仅适用于明确选择外部消费模式的飞书/Lark 账号；其他平台及未启用此模式的账号沿用现有行为。
+
+调用 `describeBot(botId)` 校验身份和 `exclusive-text-consumer`、`reply-text-checked` 能力，然后调用 `consumeInbound(botId, {expectedFingerprint, signal, onEvent})`。`onEvent(event, {signal})` 应先进行群授权、去重和应用持久提交，再返回 `{accepted: true}`。返回的释放函数应随应用 Registration/Fiber 释放。回调仅用于同 Host Service，不暴露至浏览器 RPC 或 HTTP。完整示例见[英文契约](PROACTIVE_DELIVERY.en.md#exclusive-feishulark-text-intake-same-host)。
+
+事件 v1 携带平台、账号和可信 fingerprint、eventId/messageId、发送人原始 ID、群/私聊 ID、mentions、mentionedAccount、ISO 时间、原始文本和原消息回复路由（messageId/conversationId/actorId/threadId/rootId/parentId）。此切片不提供姓名、头像、附件或历史读取；应用自行决定收件范围和唤醒策略。
+
+每个账号只能有一个 Consumer；冲突返回 `consumer-conflict`。`consumerMode: external-consumer` 持久保存后，不创建独立 Session，不执行原生卡片或 slash command。释放 Consumer、Registration 替换、Host 重启均不自动回退独立处理；需重新注册 Consumer，或者明确修改账号模式并重连。应用持久提交需响应取消；已完成的提交不能被释放操作撤销。
+
+`replyChecked` 在发送前读取原消息，核对发送人、群以及 thread/root/parent 路由；同话题回复不回退群主线。来源消失或变化返回 `stale-route`。发送请求已尝试后的 SDK 失败返回 `reply-result-unknown`，应先核对外部会话再决定是否重试。平台重投递可能有缺口、无恢复游标；本契约不保证传输恰好一次，不提供消息已读回执或跨账号回复。去重和持久发送意图归应用管理。
