@@ -448,3 +448,11 @@ lease 与收件确认检查；应用需订阅 `message.channels`，使用已有 
 BotHarness 仍按明确授权的频道分别控制收件与现有数量／时间汇总或逐条唤醒。自己的 @
 只走 `app_mention`，不因两种订阅重叠而重复收件；不接收私聊、私有频道、Bot 回显、
 编辑／撤回或普通文件分享。无新 Session、队列、历史补收或强制回复，lease 释放撤销 opt-in。
+
+## 经校验的 Discord 原文件与原位置结果回复（开发候选）
+
+Discord 仅为已验证的独占 consumer 增加 `source-file-checked`、`reply-file-checked`。明确设置 `sourceFiles: true` 后，服务器文字频道或已有公开 thread 中直接提及自身 Bot 的 Human 消息可携带一个托管附件的安全 `{id,messageId,resourceKey,name,sizeBytes,mediaType?}` 元信息。多附件、临时附件、非法或超过 20 MiB 的文件明确拒绝；签名 URL 不离开 Provider。旧 consumer 保留原文本 envelope。直接提及的来源无需开启 Message Content；普通文件收件和图片视觉能力仍未启用。
+
+读取重新查询准确原消息，核对全部保留元信息，并使用刷新后的 HTTPS CDN 附件地址下载，不转发 Bot 凭据、不跟随跳转。下载受当前 lease、取消、声明／实际字节校验及 20 MiB 上限约束。canonical 持久化和 Workspace Grant 权限仍由 consumer 负责。
+
+明确选择的新结果最多 20 MiB；发送前重查来源身份、频道／thread 归属及 VIEW_CHANNEL、READ_MESSAGE_HISTORY、SEND_MESSAGES(_IN_THREADS)、ATTACH_FILES。Host 的 `beforeSend` 校验在唯一一次不自动重试的 multipart 请求前执行，`fail_if_not_exists=true`。返回的原生作者、频道、原消息引用、附件身份／名称／大小必须一致。明确拒绝与 `reply-result-unknown` 分开记录；未知结果不得盲目重试。结果只回原生原频道／thread，无回退目标或新 thread。本候选不升级产品 pin、不发布版本。验收见 [BotHarness #1002](https://github.com/BotHarness/BotHarness/issues/1002)。

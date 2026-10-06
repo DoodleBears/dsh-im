@@ -280,13 +280,15 @@ export class TokenBotController {
     });
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false } = {}) {
     return this.#withBotTransition(botId, async () => {
       const config = this.#configStore.get(botId);
       if (!config) throw Object.assign(new Error('unknown-bot'), { code: 'unknown-bot' });
       const account = await this.#checkedAccount(config, signal);
       if (account.fingerprint !== expectedFingerprint) throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal });
+      if (sourceFiles && !this.#checkedDelivery?.capabilities?.includes('source-file-checked'))
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles });
       try {
         const saved = await this.#configStore.save({ ...config, consumerMode: 'external-consumer' });
         if (saved.consumerMode !== 'external-consumer') throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
@@ -327,6 +329,18 @@ export class TokenBotController {
       const result = await checked.runtime.historyChecked(route, query, { signal: checked.signal });
       checked.signal.throwIfAborted();
       return result;
+    });
+  }
+
+  async externalFileChecked(botId, route, file, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const capability = options.reply ? 'reply-file-checked' : 'source-file-checked';
+      if (!this.#checkedDelivery?.capabilities?.includes(capability) || !this.#inboundConsumers.acceptsFiles(botId))
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      if (typeof checked.runtime.externalFileChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return checked.runtime.externalFileChecked(route, file, { ...options, signal: checked.signal });
     });
   }
 
@@ -460,7 +474,8 @@ export class TokenBotController {
     await this.#stopRuntime(config.botId);
     if (this.#closed) throw new Error(`${this.#descriptor.label} controller is closed`);
     const runtime = await atConnectionStage('runtime.prepare', () => this.#createRuntime({ botId: config.botId, config, token,
-      ...(this.#checkedDelivery ? { externalConsumer: (event, signal) => this.#inboundConsumers.accept(config.botId, event, signal) } : {}) }));
+      ...(this.#checkedDelivery ? { externalConsumer: (event, signal) => this.#inboundConsumers.accept(config.botId, event, signal),
+        externalSourceFiles: () => this.#inboundConsumers.acceptsFiles(config.botId) } : {}) }));
     if (!runtime || typeof runtime.start !== 'function' || typeof runtime.stop !== 'function') {
       throw new TypeError(`createRuntime returned an invalid ${this.#descriptor.label} runtime`);
     }
