@@ -79,6 +79,13 @@ function normalizeRoute(channel, kind, route) {
       return routeWithStrings(route, ['toUserId']);
     case 'feishu':
       oneOf(kind, ['user', 'group']);
+      if (kind === 'user' && route !== null && typeof route === 'object'
+        && Object.hasOwn(route, 'chatId')) {
+        const normalized = routeWithStrings(route, ['openId', 'chatId']);
+        if (!/^oc_[A-Za-z0-9]+$/.test(normalized.chatId))
+          throw invalidTarget('route.chatId must identify a private Feishu/Lark chat');
+        return normalized;
+      }
       return routeWithStrings(route, kind === 'user' ? ['openId'] : ['chatId']);
     case 'dingtalk':
       oneOf(kind, ['user', 'group']);
