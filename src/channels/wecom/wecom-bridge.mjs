@@ -1,3 +1,4 @@
+import { BusyMessageDispatcher, canAutomaticallySteer } from '../shared/busy-message-dispatcher.mjs';
 import { imageInputLimits } from '../shared/image-input-policy.mjs';
 import { imageDownloadLimitMessage } from '../shared/image-prompt.mjs';
 import { createDeferredDeliveryCoordinator, deferredOutcomeText } from '../shared/deferred-delivery-coordinator.mjs';
@@ -567,6 +568,7 @@ export class WecomHarnessBridge {
   #signal;
   #fileUploadTimeoutMs;
   #queues = new Map();
+  #busyMessages = new BusyMessageDispatcher();
   #pendingInteractions = new Map();
   #interactionKeys = new Map();
   // Keep the accepted configuration through the existing queue/reply lifecycle.
@@ -1052,7 +1054,23 @@ export class WecomHarnessBridge {
       pending.queue = current;
       return current;
     }
-    return this.#enqueueMessage(frame, messageId, key);
+    return this.#busyMessages.dispatch({
+      key, messageId, text: commandText,
+      eligible: () => isNativeWecomText(frame) && !hasReplyReference(commandMessage)
+        && !parseWecomMenu(commandText) && !this.#cardFrames.has(frame)
+        && canAutomaticallySteer(this.#accessPolicy, conversationType, senderId),
+      harness: this.#harness, state: this.#state, status: this.#status,
+      signal: this.#signal, control: { owner: this, key }, logger: this.#logger,
+      acceptedMessageIds: this.#acceptedMessageIds,
+      pendingInteraction: () => this.#pendingInteractions.has(key) || this.#approvals.hasPending(key),
+      enhancement: {
+        snapshot: this.#acceptedMessageIds.get(messageId),
+        source: () => ({ channel: 'wecom', senderId, chatId }),
+      },
+      isQueued: () => this.#queues.has(key),
+      enqueue: (options) => this.#enqueueMessage(frame, messageId, key, options),
+      send: (reply) => this.#sendImmediate(frame, chatId, reply),
+    });
   }
 
   #enqueueMessage(frame, messageId, key, {
@@ -1155,6 +1173,7 @@ export class WecomHarnessBridge {
   }
 
   async waitForIdle() {
+    await this.#busyMessages.whenIdle();
     await Promise.allSettled([
       ...this.#queues.values(),
       ...[...this.#pendingInteractions.values()].flatMap((pending) => (

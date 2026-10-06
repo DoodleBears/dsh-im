@@ -1,3 +1,4 @@
+import { normalizeBusyMessageMode } from '../../../../src/channels/shared/message-mode.mjs';
 import { diagnosticFields } from '../../../../src/channels/shared/diagnostic-details.mjs';
 import { normalizeBotAlias } from '../../../../src/channels/shared/bot-alias.mjs';
 import { normalizeAgentPresetCatalog, normalizeAgentPresetId, SET_AGENT_PRESET_ENDPOINT } from '../../agent-preset.js';
@@ -36,6 +37,7 @@ export const TOKEN_BOT_ENDPOINTS = Object.freeze({
   setModel: SET_MODEL_ENDPOINT,
   setAgentPreset: SET_AGENT_PRESET_ENDPOINT,
   setContextEnhancement: 'bot.context-enhancement.set',
+  setBusyMessageMode: 'bot.message-mode.set',
   setAccessPolicy: 'bot.access-policy.set',
   setAlias: 'bot.alias.set',
   setThinkingTraces: 'bot.thinking-traces.set',
@@ -69,7 +71,7 @@ export function createTokenChannelApi(channel, connectionSummary, {
       workspace: text(value.workspace, '', 4_096),
       model: normalizeModelSelection(value.model),
       agentPreset: normalizeAgentPresetId(value.agentPreset),
-      contextEnhancement: normalizeContextEnhancementConfig(value.contextEnhancement),
+      busyMessageMode: normalizeBusyMessageMode(value.busyMessageMode),      contextEnhancement: normalizeContextEnhancementConfig(value.contextEnhancement),
       // Absent from the backend means ON; only an explicit false opts out.
       thinkingTraces: value.thinkingTraces !== false,
       ...(Object.hasOwn(value, 'accessPolicy')

@@ -2375,8 +2375,9 @@ test('Telegram private placeholder streams keep controls responsive and ordinary
           await bounded(Promise.all([prompt, followUp]), 'queued follow-up did not complete');
           assert.deepEqual(asked, ['long task', 'ordinary follow-up']);
           assert.equal(controls.length, 0);
-          assert.equal(sent.length, 2, 'one placeholder for each prompt');
-          assert.deepEqual(edits.map((entry) => entry.messageId), [901, 901, 902]);
+          assert.equal(sent.length, 3, 'one placeholder per prompt plus the queue receipt');
+          assert.match(sent[1].text, /已排队/);
+          assert.deepEqual(edits.map((entry) => entry.messageId), [901, 901, 903]);
         } else {
           await bounded(bridge.accept(incoming(101, action === 'stop' ? '/stop' : '/steer add ANDROID_OK')),
             'control command waited for the ordinary prompt queue');

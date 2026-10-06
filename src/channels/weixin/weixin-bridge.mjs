@@ -1,3 +1,4 @@
+import { BusyMessageDispatcher, canAutomaticallySteer } from '../shared/busy-message-dispatcher.mjs';
 import { createDeferredDeliveryCoordinator, deferredOutcomeText } from '../shared/deferred-delivery-coordinator.mjs';
 import {
   DEFAULT_WEIXIN_MAX_MESSAGE_CHARS,
@@ -315,6 +316,7 @@ export class WeixinHarnessBridge {
   #typingKeepaliveMs;
   #signal;
   #queues = new Map();
+  #busyMessages = new BusyMessageDispatcher();
   #pendingInteractions = new Map();
   #interactionKeys = new Map();
   // Keep the accepted configuration through the existing queue/reply lifecycle.
@@ -545,7 +547,20 @@ export class WeixinHarnessBridge {
       pending.queue = current;
       return current;
     }
-    return this.#enqueueMessage(message, messageId, key);
+    return this.#busyMessages.dispatch({
+      key, messageId, text: commandText,
+      eligible: () => isNativeWeixinText(message) && !extractWeixinReplyReference(message)
+        && canAutomaticallySteer(this.#accessPolicy, 'direct', sender),
+      harness: this.#harness, state: this.#state, status: this.#status,
+      signal: this.#signal, control: { owner: this, key }, logger: this.#logger,
+      acceptedMessageIds: this.#acceptedMessageIds,
+      pendingInteraction: () => this.#pendingInteractions.has(key) || this.#approvals.hasPending(key),
+      enhancement: this.#acceptedMessageIds.get(messageId),
+      isQueued: () => this.#queues.has(key),
+      enqueue: (options) => this.#enqueueMessage(message, messageId, key, options),
+      send: (reply) => this.#sendOutOfBand(key, sender, reply, contextToken, runId),
+      onError: (error) => this.#handleInteractionFailure(message, messageId, error),
+    });
   }
 
   #enqueueMessage(message, messageId, key, {
@@ -687,6 +702,7 @@ export class WeixinHarnessBridge {
   }
 
   async waitForIdle() {
+    await this.#busyMessages.whenIdle();
     await Promise.allSettled([
       ...this.#queues.values(),
       ...[...this.#pendingInteractions.values()].flatMap((pending) => (

@@ -876,13 +876,14 @@ export class DiscordRuntime {
         this.#contextEnhancement,
         message.guild_id ? 'group' : 'direct',
       );
+      const busyMessageMode = this.#harness.currentBusyMessageMode?.() ?? 'queue';
       const pendingRoute = resolveDiscordMessageRoute(message, this.#config.platformId, {
         api: this.#api,
         channel: this.#channels.get(String(message.channel_id)),
         signal: this.#abortController?.signal,
         onChannel: (resolved) => this.#rememberChannel(resolved),
       });
-      route = { pendingRoute, contextSnapshot };
+      route = { pendingRoute, contextSnapshot, busyMessageMode };
       this.#routing.set(messageId, route);
       void pendingRoute.finally(() => {
         if (this.#routing.get(messageId) === route) this.#routing.delete(messageId);
@@ -893,6 +894,7 @@ export class DiscordRuntime {
       if (normalized) {
         await bridge.accept(normalized, {
           contextSnapshot: route.contextSnapshot,
+          busyMessageMode: route.busyMessageMode,
           ...(accessDecision ? { accessDecision } : {}),
         });
       }

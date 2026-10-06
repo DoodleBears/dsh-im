@@ -311,6 +311,7 @@ export class DingtalkRuntime {
         } catch {
           // Optional settings failures leave the original message path active.
         }
+        const busyMessageMode = this.#harness.currentBusyMessageMode?.() ?? 'queue';
         const task = Promise.resolve().then(async () => {
           if (this.#bridge !== bridge) return;
           let message;
@@ -330,7 +331,7 @@ export class DingtalkRuntime {
             get botId() { return contextEnhancement?.botId; },
           }, message.conversationType === '1' || message.conversationType === 1 ? 'direct'
             : message.conversationType === '2' || message.conversationType === 2 ? 'group' : null);
-          await bridge.accept(message, { contextSnapshot });
+          await bridge.accept(message, { contextSnapshot, busyMessageMode });
         }).catch(() => {
           if (signal.aborted || this.#bridge !== bridge) return;
           this.#status.lastError = t('钉钉消息处理失败。');

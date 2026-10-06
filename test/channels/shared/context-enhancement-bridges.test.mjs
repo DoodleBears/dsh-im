@@ -77,7 +77,7 @@ function withoutPrompt(calls) {
     ? [operation, args[0], '(prompt)', args[2]] : [operation, ...args]);
 }
 
-function fixture(channel, { contextEnhancement, onAsk } = {}) {
+function fixture(channel, { contextEnhancement, onAsk, busyMessageMode = 'queue' } = {}) {
   const calls = [];
   const prompts = [];
   const sessions = new Map();
@@ -92,6 +92,7 @@ function fixture(channel, { contextEnhancement, onAsk } = {}) {
     pendingSenders: () => [],
   };
   const harness = {
+    currentBusyMessageMode: () => busyMessageMode,
     ensureRunning: async () => { calls.push(['ensureRunning']); },
     createSession: async () => { calls.push(['createSession']); return 'session-existing'; },
     renameSession: async (sessionId, title) => {
@@ -689,3 +690,36 @@ test('Feishu topics expose chatId always and threadId only when the event carrie
   assert.equal(sourceOf(current.prompts[2]).chatId, 'chat');
   assert.equal(Object.hasOwn(sourceOf(current.prompts[2]), 'threadId'), false);
 });
+
+for (const channel of CHANNELS) {
+  for (const variant of ['image', 'file', 'mixed', 'quote']) {
+    test(`${channel}: steer mode keeps ${variant} on the full ordinary input path`, async (t) => {
+      const release = deferred();
+      t.after(() => release.resolve());
+      const f = fixture(channel, {
+        busyMessageMode: 'steer',
+        onAsk: async ({ prompts }) => {
+          if (prompts.length === 1) await release.promise;
+          return 'answer';
+        },
+      });
+      const first = f.bridge.accept(f.event(801, 'long task'));
+      await eventually(() => f.prompts.length === 1);
+      const next = f.bridge.accept(f.event(802, 'keep full input',
+        variant === 'quote' ? { quote: true } : { media: variant }));
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(f.prompts.length, 1);
+      release.resolve();
+      await Promise.all([first, next]);
+      assert.equal(f.prompts.length, 2, 'attachments/quotes must reach the original prompt builder');
+      const baseline = fixture(channel);
+      await baseline.bridge.accept(baseline.event(801, 'long task'));
+      await baseline.bridge.accept(baseline.event(802, 'keep full input',
+        variant === 'quote' ? { quote: true } : { media: variant }));
+      assert.deepEqual(f.prompts[1], baseline.prompts[1], 'the complete prompt is unchanged by steer mode');
+      assert.deepEqual(f.calls.filter(([op]) => op === 'file'), baseline.calls.filter(([op]) => op === 'file'),
+        'all attachment bytes are preserved');
+      if (variant === 'quote') assert.match(textOf(f.prompts[1]), /dsh_im_reply_to/);
+    });
+  }
+}

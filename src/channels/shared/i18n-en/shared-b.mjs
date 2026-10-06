@@ -284,6 +284,7 @@ export default {
     'No session is bound to this chat, so an additional instruction cannot be given. Bind a session first.',
   '任务已结束，没有正在运行的任务，无法补充指令。请直接发送消息开始新任务。':
     'The task has ended and there is no running task to steer. Send a message to start a new task.',
+  '已排队，等待前序消息处理。': 'Queued. Waiting for the preceding messages to finish.',
   '已提交补充指令，Agent 会在下一步读取。':
     'Additional instruction submitted; the Agent will read it at the next step.',
 };

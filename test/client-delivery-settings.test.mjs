@@ -108,10 +108,12 @@ test('delivery settings define only the ten supported IM channel routes', () => 
   assert.deepEqual(BOT_SETTINGS_TABS, [
     { id: 'delivery', label: '投递设置' },
     { id: 'access', label: '访问设置' },
+    { id: 'general', label: '通用' },
   ]);
   assert.deepEqual(FEISHU_BOT_SETTINGS_TABS, [
     { id: 'delivery', label: '投递设置' },
     { id: 'access', label: '访问设置' },
+    { id: 'general', label: '通用' },
     { id: 'group', label: '群聊' },
     { id: 'slash', label: '指令面板' },
     { id: 'voice', label: '语音交互' },
@@ -274,7 +276,7 @@ test('expanded card more settings opens a bot-scoped page and returns in place',
     0,
   );
   const settingsTabs = page.findAllByProps({ role: 'tab' });
-  assert.deepEqual(settingsTabs.map(textOf), ['投递设置', '访问设置']);
+  assert.deepEqual(settingsTabs.map(textOf), ['投递设置', '访问设置', '通用']);
   const settingsTab = settingsTabs[0];
   const settingsPanel = page.findByProps({ role: 'tabpanel' });
   assert.equal(textOf(settingsTab), '投递设置');
@@ -377,7 +379,7 @@ test('Feishu more settings has separate group and voice tabs, with only group co
 
   const page = renderer.root.findByProps({ className: 'dim-deliveryPage' });
   assert.deepEqual(page.findAllByProps({ role: 'tab' }).map(textOf), [
-    '投递设置', '访问设置', '群聊', '指令面板', '语音交互',
+    '投递设置', '访问设置', '通用', '群聊', '指令面板', '语音交互',
   ]);
   await act(async () => {
     button(page, '群聊').props.onClick();
@@ -520,8 +522,8 @@ test('access settings preserve independent mode drafts and save direct and group
     await flush();
   });
 
-  // 投递设置 / 访问设置 / 群聊 / 指令面板 / 语音交互（语音来自 main，指令面板来自本分支）
-  assert.equal(renderer.root.findAllByProps({ role: 'tab' }).length, 5);
+  // Common settings plus Feishu-specific tabs.
+  assert.equal(renderer.root.findAllByProps({ role: 'tab' }).length, 6);
   assert.equal(renderer.root.findAllByProps({ className: 'dim-accessScene' }).length, 2);
   assert.equal(renderer.root.findAllByProps({ className: 'dim-accessOwnerNotice' }).length, 0);
   assert.equal(accessHelpButtons(renderer.root).length, 2);
@@ -1070,7 +1072,7 @@ test('recent conversation names remain platform data in the English UI', async (
   );
   assert.deepEqual(
     renderer.root.findAllByProps({ role: 'tab' }).map(textOf),
-    ['Delivery settings', 'Access settings', 'Group', 'Command panel', 'Voice'],
+    ['Delivery settings', 'Access settings', 'General', 'Group', 'Command panel', 'Voice'],
   );
 });
 

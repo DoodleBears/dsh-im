@@ -1,3 +1,4 @@
+import { BusyMessageDispatcher, canAutomaticallySteer } from '../shared/busy-message-dispatcher.mjs';
 import { isPermissionCommand, runPermissionCommand } from '../shared/permission-command.mjs';
 import { randomUUID } from 'node:crypto';
 import QRCode from 'qrcode';
@@ -618,6 +619,7 @@ export class FeishuHarnessBridge {
   #contextEnhancement;
   #accessPolicy;
   #queues = new Map();
+  #busyMessages = new BusyMessageDispatcher();
   #batchInputs = new BatchInputManager();
   #pendingInteractions = new Map();
   #interactionKeys = new Map();
@@ -1389,7 +1391,27 @@ export class FeishuHarnessBridge {
       this.#interactionTasks.add(current);
       return current;
     }
-    return this.#enqueueMessage(event, messageId, key, processingReaction);
+    return this.#busyMessages.dispatch({
+      key, messageId, text: commandText,
+      eligible: () => event.message.message_type === 'text' && !hasImages && !hasFiles
+        && !hasReplyReference(commandMessage) && !isFeishuLocalCommand(commandText)
+        && !(NUMBER_REPLY.test(commandText) && this.#menus.has(key))
+        && canAutomaticallySteer(this.#accessPolicy, conversationType, senderOpenId(event)),
+      harness: this.#harness, state: this.#state, status: this.#status,
+      signal: this.#signal, control: { owner: this, key }, logger: this.#logger,
+      acceptedMessageIds: this.#acceptedMessageIds,
+      pendingInteraction: () => this.#pendingInteractions.has(key) || this.#approvals.hasPending(key),
+      enhancement: {
+        snapshot: this.#acceptedMessageIds.get(messageId),
+        source: () => ({ channel: 'feishu', senderId: senderOpenId(event),
+          chatId: event.message.chat_id, threadId: event.message.thread_id }),
+      },
+      isQueued: () => this.#queues.has(key),
+      enqueue: (options) => this.#enqueueMessage(event, messageId, key, processingReaction, options),
+      send: (reply) => this.#send(event.message.chat_id, reply, { replyTo: messageId }),
+      onSteered: () => this.#finishReaction(messageId, processingReaction, 'DONE'),
+      onError: (error) => this.#handleMessageFailure(event, messageId, processingReaction, error),
+    });
   }
 
   #finishBatchResult(event, messageId, processingReaction, result) {
@@ -1546,6 +1568,7 @@ export class FeishuHarnessBridge {
   }
 
   async waitForIdle() {
+    await this.#busyMessages.whenIdle();
     // Drain to a fixed point: awaited work can register compensation or
     // another serialized tail before it settles.
     for (;;) {

@@ -1,3 +1,4 @@
+import { BusyMessageDispatcher, canAutomaticallySteer } from '../shared/busy-message-dispatcher.mjs';
 import { createDeferredDeliveryCoordinator, deferredOutcomeText } from '../shared/deferred-delivery-coordinator.mjs';
 import {
   DINGTALK_DONE_REACTION_NAME,
@@ -541,6 +542,7 @@ export class DingtalkHarnessBridge {
   #maxMessageChars;
   #signal;
   #queues = new Map();
+  #busyMessages = new BusyMessageDispatcher();
   #pendingInteractions = new Map();
   #interactionKeys = new Map();
   #interactionTasks = new Set();
@@ -599,7 +601,7 @@ export class DingtalkHarnessBridge {
     return structuredClone(this.#status);
   }
 
-  accept(message, { contextSnapshot } = {}) {
+  accept(message, { contextSnapshot, busyMessageMode } = {}) {
     if (this.#signal?.aborted) return Promise.resolve();
     const messageId = nonEmptyString(message?.msgId);
     const sender = senderStaffId(message);
@@ -837,7 +839,28 @@ export class DingtalkHarnessBridge {
       pending.queue = current;
       return finish(current);
     }
-    return finish(this.#enqueueMessage(message, messageId, sender, key, { statusReaction }));
+    return finish(this.#busyMessages.dispatch({
+      key, messageId, text: commandText, mode: busyMessageMode,
+      onFailure: (error) => this.#finishStatusReaction(statusReaction,
+        this.#signal?.aborted || error?.code === 'turn-stopped' ? 'clear' : 'error'),
+      eligible: () => Boolean(sessionWebhook) && addressed && String(message.msgtype).toLowerCase() === 'text'
+        && !hasInboundImages(promptMessage) && !hasInboundFiles(promptMessage)
+        && !hasReplyReference(promptMessage) && !isDingtalkMenuCommand(commandText)
+        && canAutomaticallySteer(this.#accessPolicy, conversationType, sender),
+      harness: this.#harness, state: this.#state, status: this.#status,
+      signal: this.#signal, control: { owner: this, key }, logger: this.#logger,
+      acceptedMessageIds: this.#acceptedMessageIds,
+      pendingInteraction: () => this.#pendingInteractions.has(key) || this.#approvals.hasPending(key),
+      enhancement: {
+        snapshot: this.#acceptedMessageIds.get(messageId),
+        source: () => ({ channel: 'dingtalk', senderId: sender, senderName: message.senderNick,
+          conversationTitle: message.conversationTitle, chatId: message.conversationId }),
+      },
+      isQueued: () => this.#queues.has(key),
+      enqueue: (options) => this.#enqueueMessage(message, messageId, sender, key, { ...options, statusReaction }),
+      send: (reply) => sessionWebhook && addressed
+        ? this.#send(sessionWebhook, reply, this.#atUsersFor(message)) : Promise.resolve(),
+    }));
   }
 
   async #showMenu(message, key) {
@@ -1137,6 +1160,7 @@ export class DingtalkHarnessBridge {
   }
 
   async waitForIdle() {
+    await this.#busyMessages.whenIdle();
     await Promise.allSettled([
       ...this.#queues.values(),
       ...[...this.#pendingInteractions.values()].flatMap((pending) => (

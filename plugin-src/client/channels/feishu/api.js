@@ -1,3 +1,4 @@
+import { normalizeBusyMessageMode } from '../../../../src/channels/shared/message-mode.mjs';
 import { diagnosticFields } from '../../../../src/channels/shared/diagnostic-details.mjs';
 import { normalizeBotAlias } from '../../../../src/channels/shared/bot-alias.mjs';
 /**
@@ -34,6 +35,7 @@ export const FEISHU_ENDPOINTS = Object.freeze({
   setModel: SET_MODEL_ENDPOINT,
   setAgentPreset: "bot.preset.set",
   setContextEnhancement: "bot.context-enhancement.set",
+  setBusyMessageMode: 'bot.message-mode.set',
   setAccessPolicy: "bot.access-policy.set",
   setAlias: 'bot.alias.set',
   setGroupResponseMode: "bot.group-response-mode.set",
@@ -223,7 +225,7 @@ export function normalizeBotConnection(value, fallbackBotId) {
     workspace: optionalString(value.workspace)?.slice(0, 4_096) ?? "",
     model: normalizeModelSelection(value.model),
     agentPreset: normalizeAgentPresetId(value.agentPreset),
-    contextEnhancement: normalizeContextEnhancementConfig(value.contextEnhancement),
+    busyMessageMode: normalizeBusyMessageMode(value.busyMessageMode),    contextEnhancement: normalizeContextEnhancementConfig(value.contextEnhancement),
     ...(Object.hasOwn(value, "accessPolicy")
       ? { accessPolicy: normalizeAccessPolicy(value.accessPolicy) }
       : {}),

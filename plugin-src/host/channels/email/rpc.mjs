@@ -17,6 +17,7 @@ export const EMAIL_ENDPOINTS = Object.freeze({
   setModel: 'bot.model.set',
   setAgentPreset: 'bot.agent-preset.set',
   setContextEnhancement: 'bot.context-enhancement.set',
+  setBusyMessageMode: 'bot.message-mode.set',
   setAccessPolicy: 'bot.access-policy.set',
   setAlias: 'bot.alias.set',
   // Session binding: read the current bindings, change them, and list the

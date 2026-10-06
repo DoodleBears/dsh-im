@@ -6,6 +6,16 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+### Added / 新增
+
+- 全部 13 个聊天渠道新增每个机器人独立的「排队／插话」设置，入口为「更多设置 → 通用」，默认排队。插话模式复用现有 `/steer` 权限、任务归属与补充指令机制；普通纯文字可在当前任务的下一步读取，并提供排队或提交回执。（[#314](https://github.com/xmanrui/dsh-im/issues/314)、[#115](https://github.com/xmanrui/dsh-im/issues/115)）
+  All 13 chat channels add a per-bot Queue/Steer setting under More settings → General, defaulting to Queue. Automatic steering reuses `/steer` permissions, task ownership, and instruction submission for ordinary plain text, with queue or submission receipts. ([#314](https://github.com/xmanrui/dsh-im/issues/314), [#115](https://github.com/xmanrui/dsh-im/issues/115))
+
+### Notes / 使用说明
+
+- 设置保存后对新消息生效，已排队消息保持原顺序；没有运行任务时正常开始新任务，附件、语音、引用、命令、审批和菜单保持原有处理方式。手动 `/steer` 在两种模式下均可用；AI Office 的任务协议不适用此设置。
+  Settings apply to new messages without reinterpreting queued inputs. Idle messages start normally; attachments, voice, quotes, commands, approvals, and menus retain their existing handling. Manual `/steer` works in either mode. AI Office's task protocol is outside this setting's scope.
+
 ## [4.36.1] - 2026-10-06
 
 ### Fixed / 修复

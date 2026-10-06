@@ -1,3 +1,4 @@
+import { normalizeBusyMessageMode } from '../../../../src/channels/shared/message-mode.mjs';
 import { normalizeConnectionError as normalizeTestError } from '../../connection-error.js';
 import { normalizeWeixinDiagnosticDetails } from '../../../../src/channels/weixin/diagnostic-details.mjs';
 import { normalizeBotAlias } from '../../../../src/channels/shared/bot-alias.mjs';
@@ -20,6 +21,7 @@ export const WEIXIN_ENDPOINTS = Object.freeze({
   setModel: SET_MODEL_ENDPOINT,
   setAgentPreset: SET_AGENT_PRESET_ENDPOINT,
   setContextEnhancement: 'bot.context-enhancement.set',
+  setBusyMessageMode: 'bot.message-mode.set',
   setAccessPolicy: 'bot.access-policy.set',
   setAlias: 'bot.alias.set',
 });
@@ -154,7 +156,7 @@ function normalizeBot(value) {
     workspace: string(value.workspace).slice(0, 4_096),
     model: normalizeModelSelection(value.model),
     agentPreset: normalizeAgentPresetId(value.agentPreset),
-    contextEnhancement: normalizeContextEnhancementConfig(value.contextEnhancement),
+    busyMessageMode: normalizeBusyMessageMode(value.busyMessageMode),    contextEnhancement: normalizeContextEnhancementConfig(value.contextEnhancement),
     ...(Object.hasOwn(value, 'accessPolicy')
       ? { accessPolicy: normalizeAccessPolicy(value.accessPolicy) }
       : {}),

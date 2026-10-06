@@ -1,3 +1,4 @@
+import { BusyMessageDispatcher, canAutomaticallySteer } from '../shared/busy-message-dispatcher.mjs';
 import { createDeferredDeliveryCoordinator, deferredOutcomeText } from '../shared/deferred-delivery-coordinator.mjs';
 import {
   harnessAnswerForQuestion,
@@ -204,6 +205,7 @@ export class WecomAppBridge {
   #streamRegistry;
   #maxChunkBytes;
   #queues = new Map();
+  #busyMessages = new BusyMessageDispatcher();
   #acceptedMessageIds = new Map();
   #commandTasks = new Set();
   #approvalTasks = new Set();
@@ -388,7 +390,24 @@ export class WecomAppBridge {
       pending.queue = current;
       return current;
     }
-    return this.#enqueueMessage(message, messageId, key, { sink });
+    return this.#busyMessages.dispatch({
+      key, messageId, text: commandText,
+      eligible: () => message.msgtype === 'text' && !hasImages
+        && !hasReplyReference(wecomAppInboundMessage(message, this.#api))
+        && canAutomaticallySteer(this.#accessPolicy, 'direct', sender),
+      harness: this.#harness, state: this.#state, status: this.#status,
+      signal: this.#signal, control: { owner: this, key }, logger: this.#logger,
+      acceptedMessageIds: this.#acceptedMessageIds,
+      pendingInteraction: () => this.#pendingInteractions.has(key) || this.#approvals.hasPending(key),
+      enhancement: {
+        snapshot: this.#acceptedMessageIds.get(messageId),
+        source: () => ({ channel: 'wecom-app', senderId: sender, chatId: sender }),
+      },
+      isQueued: () => this.#queues.has(key),
+      enqueue: (options) => this.#enqueueMessage(message, messageId, key, { ...options, sink }),
+      send: (reply) => this.#send(sender, reply),
+      onError: (error) => this.#handleInteractionFailure(message, messageId, error),
+    });
   }
 
   #enqueueMessage(message, messageId, key, {
@@ -475,6 +494,7 @@ export class WecomAppBridge {
   }
 
   async waitForIdle() {
+    await this.#busyMessages.whenIdle();
     await Promise.allSettled([
       ...this.#queues.values(),
       ...[...this.#pendingInteractions.values()].flatMap((pending) => (

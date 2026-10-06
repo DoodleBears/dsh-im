@@ -1,3 +1,4 @@
+import { BusyMessageDispatcher, canAutomaticallySteer } from './busy-message-dispatcher.mjs';
 import { randomUUID } from 'node:crypto';
 
 import { createDeferredDeliveryCoordinator, deferredOutcomeText } from './deferred-delivery-coordinator.mjs';
@@ -179,6 +180,7 @@ export class TextHarnessBridge {
   #signal;
   #keepaliveIntervalMs;
   #queues = new Map();
+  #busyMessages = new BusyMessageDispatcher();
   #pendingInteractions = new Map();
   #interactionKeys = new Map();
   // Keep the accepted configuration through the existing queue/reply lifecycle.
@@ -237,7 +239,7 @@ export class TextHarnessBridge {
     return structuredClone(this.#status);
   }
 
-  accept(message, { contextSnapshot, accessDecision } = {}) {
+  accept(message, { contextSnapshot, accessDecision, busyMessageMode } = {}) {
     if (this.#signal?.aborted) return Promise.resolve();
     const conversationId = cleanText(message?.conversationId);
     const kind = message?.kind === 'group' ? 'group' : 'direct';
@@ -301,7 +303,7 @@ export class TextHarnessBridge {
     });
     normalized.statusReaction = statusReaction;
 
-    const processing = this.#acceptAcceptedMessage(normalized, messageId, senderId);
+    const processing = this.#acceptAcceptedMessage(normalized, messageId, senderId, busyMessageMode);
     void processing.then(
       () => statusReaction.success(),
       () => statusReaction.error(),
@@ -309,7 +311,7 @@ export class TextHarnessBridge {
     return processing;
   }
 
-  #acceptAcceptedMessage(normalized, messageId, senderId) {
+  #acceptAcceptedMessage(normalized, messageId, senderId, busyMessageMode) {
     if (normalized.kind === 'direct') {
       rememberConnectionTestTarget(
         this.#state,
@@ -472,7 +474,33 @@ export class TextHarnessBridge {
       pending.queue = current;
       return current;
     }
-    return this.#enqueueMessage(normalized, messageId, senderId, key);
+    return this.#busyMessages.dispatch({
+      key, messageId, text: normalized.content,
+      commandText: text, mode: busyMessageMode,
+      onFailure: (error) => this.#signal?.aborted || error?.code === 'turn-stopped'
+        ? normalized.statusReaction?.clear() : normalized.statusReaction?.error(),
+      eligible: () => normalized.plainText !== false
+        && !hasInboundImages(normalized) && !hasInboundFiles(normalized)
+        && !hasReplyReference(normalized)
+        && canAutomaticallySteer(this.#accessPolicy, normalized.kind,
+          [senderId, normalized.senderAlternateId].filter(Boolean)),
+      harness: this.#harness, state: this.#state, status: this.#status,
+      signal: this.#signal, control: { owner: this, key }, logger: this.#logger,
+      acceptedMessageIds: this.#acceptedMessageIds,
+      pendingInteraction: () => this.#pendingInteractions.has(key) || this.#approvals.hasPending(key),
+      enhancement: {
+        snapshot: this.#acceptedMessageIds.get(messageId),
+        source: () => {
+          const source = normalized.contextSource?.();
+          return { channel: this.#descriptor.key, senderId, senderName: source?.senderName,
+            conversationTitle: source?.conversationTitle,
+            chatId: source?.chatId ?? normalized.conversationId, threadId: source?.threadId };
+        },
+      },
+      isQueued: () => this.#queues.has(key),
+      enqueue: (options) => this.#enqueueMessage(normalized, messageId, senderId, key, options),
+      send: (reply) => this.#bot.sendText(normalized.replyTarget, reply),
+    });
   }
 
   #finishLocalMessage(message, messageId, reply, { recordReceived = true } = {}) {
@@ -536,6 +564,7 @@ export class TextHarnessBridge {
   }
 
   async waitForIdle() {
+    await this.#busyMessages.whenIdle();
     await Promise.allSettled([
       ...this.#queues.values(),
       ...[...this.#pendingInteractions.values()].flatMap((pending) => (

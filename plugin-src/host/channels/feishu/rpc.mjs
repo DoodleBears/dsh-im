@@ -1,3 +1,4 @@
+import { SET_MESSAGE_MODE_ENDPOINT, validMessageModePayload, normalizeBusyMessageMode } from '../../../../src/channels/shared/message-mode.mjs';
 import { diagnosticFields } from '../../../../src/channels/shared/diagnostic-details.mjs';
 import { createConnectionDiagnostics, diagnosticRpcResult } from '../../../../src/channels/shared/connection-error.mjs';
 import { normalizeBotAlias } from '../../../../src/channels/shared/bot-alias.mjs';
@@ -42,6 +43,7 @@ import {
 
 export const FEISHU_ENDPOINTS = Object.freeze({
   ...FEISHU_CLIENT_ENDPOINTS,
+  setBusyMessageMode: SET_MESSAGE_MODE_ENDPOINT,
   setAccessPolicy: SET_ACCESS_POLICY_ENDPOINT,
   setAlias: SET_ALIAS_ENDPOINT,
 });
@@ -307,6 +309,7 @@ function publicBotEntry(entry) {
     model: normalizeModelSelection(source.model),
     agentPreset: normalizeAgentPresetId(source.agentPreset),
     contextEnhancement: normalizeContextEnhancementConfig(source.contextEnhancement),
+    busyMessageMode: normalizeBusyMessageMode(source.busyMessageMode),
     accessPolicy: normalizeAccessPolicy(source.accessPolicy),
     groupResponseMode: normalizeFeishuGroupResponseMode(source.groupResponseMode),
     mentionTopicReply: source.mentionTopicReply !== false,
@@ -456,6 +459,10 @@ function validPayload(endpoint, payload) {
   if (endpoint === FEISHU_ENDPOINTS.setAgentPreset) {
     return validAgentPresetPayload(payload)
       ? null : '请选择 Agent Preset。';
+  }
+  if (endpoint === FEISHU_ENDPOINTS.setBusyMessageMode) {
+    return validMessageModePayload(payload)
+      ? null : '请提交有效的消息处理方式。';
   }
   if (endpoint === FEISHU_ENDPOINTS.setContextEnhancement) {
     return validContextEnhancementPayload(payload)
@@ -765,6 +772,12 @@ export function createFeishuRpcHandler(controller, { encodeQr = qrCodeDataUrl } 
         value = await toPublicFeishuStatus(
           await controller.updateModel(payload.botId, payload.model),
           { encodeQr: cachedEncodeQr },
+        );
+      } else if (endpoint === FEISHU_ENDPOINTS.setBusyMessageMode) {
+        if (typeof controller.updateBusyMessageMode !== 'function') throw new Error('Message mode update is unavailable');
+        value = await controller.updateBusyMessageMode(
+          payload.botId, payload.busyMessageMode,
+          (status) => toPublicFeishuStatus(status, { encodeQr: cachedEncodeQr }),
         );
       } else if (endpoint === FEISHU_ENDPOINTS.setContextEnhancement) {
         if (typeof controller.updateContextEnhancement !== 'function') throw new Error('Context enhancement update is unavailable');
