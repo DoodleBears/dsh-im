@@ -20,12 +20,29 @@ export function pairedWeixinAccount(config, token) {
 }
 
 /** Paired-owner text and opt-in native files/images. No group, mention, or thread is invented. */
-export function normalizeWeixinExternalText(message, { botId, account, sourceFiles = false, sourceImages = false }) {
+export function normalizeWeixinExternalText(message, { botId, account, sourceFiles = false, sourceImages = false, sourceVoiceTranscripts = false }) {
   if (message?.message_type !== 1 || message.from_user_id !== account.ownerUserId || message.group_id) return null;
   if (message.to_user_id !== account.accountId) throw weixinRefusal('account-changed');
   if (!Array.isArray(message.item_list) || !message.item_list.length
-    || message.item_list.some(item => item?.type !== 1 && !(sourceFiles && item?.type === 4) && !(sourceImages && item?.type === 2))) return null;
+    || message.item_list.some(item => item?.type !== 1 && !(sourceFiles && item?.type === 4) && !(sourceImages && item?.type === 2) && !(sourceVoiceTranscripts && item?.type === 3))) return null;
   const messageId = weixinMessageId(message);
+  const voiceItems = message.item_list.filter(item => item?.type === 3);
+  let voice;
+  let transcript;
+  if (voiceItems.length) {
+    if (voiceItems.length !== 1 || message.item_list.length !== 1) throw weixinRefusal('invalid-inbound');
+    const item = voiceItems[0];
+    if (item.is_completed === false || message.message_state === 1) return null;
+    const native = item.voice_item;
+    if (!native || typeof native !== 'object' || (native.text !== undefined && typeof native.text !== 'string')
+      || (item.msg_id !== undefined && !id(item.msg_id))
+      || (native.playtime !== undefined && (!Number.isSafeInteger(native.playtime) || native.playtime < 0)))
+      throw weixinRefusal('invalid-inbound');
+    transcript = native.text?.trim();
+    voice = Object.freeze({ transcript: transcript ? 'platform' : 'unavailable',
+      ...(item.msg_id === undefined ? {} : { itemId: item.msg_id }),
+      ...(native.playtime === undefined ? {} : { durationMs: native.playtime }) });
+  }
   const files = message.item_list.filter(item => item?.type === 4 || item?.type === 2);
   const image = files[0]?.type === 2 ? files[0].image_item : undefined;
   if (files[0]?.type === 2 && (!image || typeof image !== 'object')) throw weixinRefusal('resource-unavailable');
@@ -33,7 +50,8 @@ export function normalizeWeixinExternalText(message, { botId, account, sourceFil
   const nativeFile = image ? { file_name: 'image', image: true } : files[0]?.file_item;
   if (files.length && (!nativeFile || !id(nativeFile.file_name)
     || /[\x00-\x1f\x7f/\\]/.test(nativeFile.file_name))) throw weixinRefusal('resource-unavailable');
-  const text = extractWeixinText(message) || (nativeFile ? (image ? '[Image]' : `[File: ${nativeFile.file_name}]`) : '');
+  const text = voice ? (transcript || '[WeChat voice message: platform did not provide a transcript]')
+    : extractWeixinText(message) || (nativeFile ? (image ? '[Image]' : `[File: ${nativeFile.file_name}]`) : '');
   const time = typeof message.create_time_ms === 'string' ? Number(message.create_time_ms) : message.create_time_ms;
   if (!messageId || !/^\d+$/.test(messageId) || !text?.trim() || text.length > 16000
     || !Number.isSafeInteger(time) || time <= 0 || !continuation(message.context_token)) throw weixinRefusal('invalid-inbound');
@@ -54,7 +72,7 @@ export function normalizeWeixinExternalText(message, { botId, account, sourceFil
   return Object.freeze({ version: 1, channel: 'weixin', botId, fingerprint: account.fingerprint,
     eventId: messageId, messageId, actor: Object.freeze({ kind: 'user', id: account.ownerUserId }),
     conversation: Object.freeze({ kind: 'dm', id: conversationId }), mentions: Object.freeze([]),
-    mentionedAccount: false, at: at.toISOString(), text, ...(attachments ? { attachments } : {}),
+    mentionedAccount: false, at: at.toISOString(), text, ...(voice ? { voice } : {}), ...(attachments ? { attachments } : {}),
     reply: Object.freeze({ messageId, conversationId, actorId: account.ownerUserId }),
     replay: Object.freeze({ kind: 'provider-redelivery', resumeCursor: false, gapPossible: true }) });
 }
