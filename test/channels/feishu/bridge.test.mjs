@@ -5680,6 +5680,148 @@ test('card buttons from an allowed sender work', async () => {
   assert.match(patches.at(-1).data.content, /已执行：新会话/);
 });
 
+test('numeric new-session clears an idle binding without starting a turn', async () => {
+  const fixture = stateFixture([['p2p:ou_user', 'session-existing']]);
+  const sent = [];
+  let clearCalls = 0;
+  let askCalls = 0;
+  const clearSession = fixture.state.clearSession;
+  fixture.state.clearSession = async (key) => {
+    clearCalls += 1;
+    return clearSession(key);
+  };
+  const bridge = new FeishuHarnessBridge({
+    client: cardClient(async (outgoing) => sent.push(outgoing)),
+    harness: {
+      sessionExists: async () => true,
+      ask: async () => { askCalls += 1; return 'unexpected task'; },
+    },
+    state: fixture.state,
+    status: bridgeStatus(),
+    allowedSenderOpenIds: new Set(['ou_user']),
+  });
+
+  await bridge.accept(event('numeric-new-menu', '/m'));
+  await bridge.accept(event('numeric-new-pick', '2'));
+  await bridge.waitForIdle();
+
+  assert.equal(clearCalls, 1);
+  assert.equal(fixture.state.sessionFor('p2p:ou_user'), null);
+  assert.equal(askCalls, 0);
+  const replies = sent.filter(({ msgType }) => msgType === 'text').map(({ content }) => JSON.parse(content).text);
+  assert.ok(replies.includes('已开启全新 Harness 会话。'));
+  assert.equal(replies.some((text) => text.includes('当前任务仍在运行')), false);
+});
+
+for (const withFollowingMessage of [false, true]) {
+  test(`numeric new-session waits for the active turn${withFollowingMessage ? ' and rebinds the following message' : ''}`, async () => {
+    const fixture = stateFixture([['p2p:ou_user', 'session-existing']]);
+    const sent = [];
+    const order = [];
+    const started = deferred();
+    const release = deferred();
+    const clearSession = fixture.state.clearSession;
+    fixture.state.clearSession = async (key) => {
+      order.push('clear');
+      return clearSession(key);
+    };
+    const bridge = new FeishuHarnessBridge({
+      client: cardClient(async (outgoing) => sent.push(outgoing)),
+      harness: {
+        sessionExists: async () => true,
+        createSession: async () => { order.push('create'); return 'session-new'; },
+        ask: async (sessionId) => {
+          order.push(`ask:${sessionId}`);
+          if (order.length === 1) {
+            started.resolve();
+            await release.promise;
+            order.push('finished');
+          }
+          return 'task finished';
+        },
+      },
+      state: fixture.state,
+      status: bridgeStatus(),
+      allowedSenderOpenIds: new Set(['ou_user']),
+    });
+
+    await bridge.accept(event('numeric-busy-menu', '/m'));
+    const turn = bridge.accept(event('numeric-busy-task', 'run a task'));
+    await started.promise;
+    const pick = bridge.accept(event('numeric-busy-pick', '2'));
+    const following = withFollowingMessage
+      ? bridge.accept(event('numeric-following', 'start the next task'))
+      : Promise.resolve();
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(order, ['ask:session-existing']);
+      assert.equal(fixture.state.sessionFor('p2p:ou_user'), 'session-existing');
+    } finally {
+      release.resolve();
+      await Promise.all([turn, pick, following]);
+    }
+    await bridge.waitForIdle();
+
+    assert.deepEqual(order, withFollowingMessage
+      ? ['ask:session-existing', 'finished', 'clear', 'create', 'ask:session-new']
+      : ['ask:session-existing', 'finished', 'clear']);
+    assert.equal(fixture.state.sessionFor('p2p:ou_user'), withFollowingMessage ? 'session-new' : null);
+    const replies = sent.filter(({ msgType }) => msgType === 'text').map(({ content }) => JSON.parse(content).text);
+    assert.ok(replies.includes('已开启全新 Harness 会话。'));
+    assert.equal(replies.some((text) => text.includes('当前任务仍在运行')), false);
+  });
+}
+
+test('numeric question reply takes precedence over the new-session menu choice', async () => {
+  const fixture = stateFixture([['p2p:ou_user', 'session-question']]);
+  const ready = deferred();
+  const answered = deferred();
+  const sent = [];
+  const bridge = new FeishuHarnessBridge({
+    client: cardClient(async (outgoing) => sent.push(outgoing)),
+    harness: {
+      sessionExists: async () => true,
+      ask: async (sessionId, _text, options) => {
+        await options.onInteraction({
+          kind: 'question',
+          interactionId: 'numeric-menu-question',
+          rpcId: 'numeric-menu-question',
+          sessionId,
+          payload: {
+            type: 'question/requested', sessionId,
+            questions: [{
+              id: 'language', question: '请选择语言',
+              options: [{ label: '中文' }, { label: 'English' }],
+            }],
+          },
+          respond: async (result) => {
+            answered.resolve(result);
+            return { accepted: true };
+          },
+        });
+        ready.resolve();
+        await answered.promise;
+        return 'question finished';
+      },
+    },
+    state: fixture.state,
+    status: bridgeStatus(),
+    allowedSenderOpenIds: new Set(['ou_user']),
+  });
+
+  await bridge.accept(event('numeric-question-menu', '/m'));
+  const turn = bridge.accept(event('numeric-question-start', 'ask a question'));
+  await ready.promise;
+  await bridge.accept(event('numeric-question-answer', '2'));
+  await turn;
+  assert.deepEqual(await answered.promise, {
+    ok: true,
+    value: { sessionId: 'session-question', answer: { answers: [{ id: 'language', selected: ['English'] }] } },
+  });
+  assert.equal(fixture.state.sessionFor('p2p:ou_user'), 'session-question');
+  assert.equal(sent.some(({ content }) => JSON.stringify(content).includes('已开启全新 Harness 会话')), false);
+});
+
 test('/new menu shows processing and success on the original card and consumes duplicate clicks', async () => {
   const fixture = stateFixture();
   const sent = [];

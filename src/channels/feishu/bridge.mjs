@@ -2551,6 +2551,7 @@ export class FeishuHarnessBridge {
     actor = null,
     menuContext = null,
     newSessionActionId = null,
+    fromMessageQueue = false,
   }) {
     // Confirmations triggered by a card interaction stay anchored to the
     // card's message so they land inside the same Feishu topic.
@@ -2704,7 +2705,9 @@ export class FeishuHarnessBridge {
         await this.#handleNewSessionMenu({ key, chatId, messageId, menuContext, newSessionActionId });
         return;
       }
-      if (this.#queues.has(key) || this.#hasPendingInteraction(key)) {
+      // A queued menu pick runs after earlier messages; its own unfinished
+      // queue (including later messages) must not prevent the reset.
+      if ((!fromMessageQueue && this.#queues.has(key)) || this.#hasPendingInteraction(key)) {
         await reply(t('当前任务仍在运行，请先停止任务或等待任务完成后再开启新会话。'));
         return;
       }
@@ -2927,7 +2930,9 @@ export class FeishuHarnessBridge {
         await this.#handleRepairCommand(event, '/repair');
         return;
       }
-      await this.#handleCardAction(action, { chatId, key, messageId: replyTo });
+      await this.#handleCardAction(action, {
+        chatId, key, messageId: replyTo, fromMessageQueue: action === 'new',
+      });
       return;
     }
     if (menu.kind === 'sessions') {
