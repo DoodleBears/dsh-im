@@ -1,3 +1,4 @@
+import { externalSenderName } from './external-names.mjs';
 import { qualifyExternalReply } from './reply-context.mjs';
 import { readExternalHistory } from './history-reader.mjs';
 import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
@@ -746,6 +747,15 @@ export class FeishuRuntime {
     if (!client || this.#consumerMode !== 'external-consumer')
       throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
     const result = await readExternalHistory(client, identity, route, query, signal);
+    signal?.throwIfAborted();
+    if (this.#client !== client) throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    return result;
+  }
+
+  async enrichExternalNames(evidence, { signal } = {}) {
+    const client = this.#client;
+    if (!client || this.#consumerMode !== 'external-consumer') throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    const result = await externalSenderName(client, evidence, { signal });
     signal?.throwIfAborted();
     if (this.#client !== client) throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
     return result;
