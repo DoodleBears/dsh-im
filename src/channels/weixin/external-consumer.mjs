@@ -20,11 +20,11 @@ export function pairedWeixinAccount(config, token) {
 }
 
 /** Paired-owner text and opt-in native files/images. No group, mention, or thread is invented. */
-export function normalizeWeixinExternalText(message, { botId, account, sourceFiles = false, sourceImages = false, sourceVoiceTranscripts = false }) {
+export function normalizeWeixinExternalText(message, { botId, account, sourceFiles = false, sourceImages = false, sourceVoiceTranscripts = false, sourceVoiceAudio = false }) {
   if (message?.message_type !== 1 || message.from_user_id !== account.ownerUserId || message.group_id) return null;
   if (message.to_user_id !== account.accountId) throw weixinRefusal('account-changed');
   if (!Array.isArray(message.item_list) || !message.item_list.length
-    || message.item_list.some(item => item?.type !== 1 && !(sourceFiles && item?.type === 4) && !(sourceImages && item?.type === 2) && !(sourceVoiceTranscripts && item?.type === 3))) return null;
+    || message.item_list.some(item => item?.type !== 1 && !(sourceFiles && item?.type === 4) && !(sourceImages && item?.type === 2) && !((sourceVoiceTranscripts || sourceVoiceAudio) && item?.type === 3))) return null;
   const messageId = weixinMessageId(message);
   const voiceItems = message.item_list.filter(item => item?.type === 3);
   let voice;
@@ -38,10 +38,17 @@ export function normalizeWeixinExternalText(message, { botId, account, sourceFil
       || (item.msg_id !== undefined && !id(item.msg_id))
       || (native.playtime !== undefined && (!Number.isSafeInteger(native.playtime) || native.playtime < 0)))
       throw weixinRefusal('invalid-inbound');
+    for (const key of ['encode_type', 'sample_rate', 'bits_per_sample']) {
+      if (native[key] !== undefined && (!Number.isSafeInteger(native[key]) || native[key] < 0 || native[key] > 1000000))
+        throw weixinRefusal('invalid-inbound');
+    }
     transcript = native.text?.trim();
     voice = Object.freeze({ transcript: transcript ? 'platform' : 'unavailable',
       ...(item.msg_id === undefined ? {} : { itemId: item.msg_id }),
-      ...(native.playtime === undefined ? {} : { durationMs: native.playtime }) });
+      ...(native.playtime === undefined ? {} : { durationMs: native.playtime }),
+      ...(native.encode_type === undefined ? {} : { encodeType: native.encode_type }),
+      ...(native.sample_rate === undefined ? {} : { sampleRate: native.sample_rate }),
+      ...(native.bits_per_sample === undefined ? {} : { bitsPerSample: native.bits_per_sample }) });
   }
   const files = message.item_list.filter(item => item?.type === 4 || item?.type === 2);
   const image = files[0]?.type === 2 ? files[0].image_item : undefined;
@@ -64,7 +71,17 @@ export function normalizeWeixinExternalText(message, { botId, account, sourceFil
   const size = nativeFile?.len === undefined ? undefined : Number(nativeFile.len);
   if (nativeFile?.len !== undefined && (!/^\d+$/.test(String(nativeFile.len))
     || !Number.isSafeInteger(size) || size < 0)) throw weixinRefusal('resource-unavailable');
-  const attachments = nativeFile ? Object.freeze([Object.freeze({
+  const nativeVoice = voice && sourceVoiceAudio ? voiceItems[0].voice_item : undefined;
+  const voiceMedia = nativeVoice?.media;
+  const voiceAttachment = voiceMedia && typeof voiceMedia === 'object'
+    && typeof voiceMedia.aes_key === 'string' && voiceMedia.aes_key.length > 0 && voiceMedia.aes_key.length <= 128
+    && [voiceMedia.encrypt_query_param, voiceMedia.full_url].some(value => typeof value === 'string' && value.length > 0 && value.length <= 16384)
+    ? Object.freeze({
+      id: createHash('sha256').update(JSON.stringify([account.fingerprint, conversationId, messageId, 'voice-audio'])).digest('hex'),
+      messageId, resourceKey: createHash('sha256').update(JSON.stringify([account.fingerprint, messageId, 'voice-audio', voice])).digest('hex'),
+      name: nativeVoice.encode_type === 6 ? 'voice.silk' : 'voice.bin', mediaType: 'audio/unknown',
+    }) : undefined;
+  const attachments = voiceAttachment ? Object.freeze([voiceAttachment]) : nativeFile ? Object.freeze([Object.freeze({
     id: createHash('sha256').update(JSON.stringify([account.fingerprint, conversationId, messageId, resourceKey])).digest('hex'),
     messageId, resourceKey, name: nativeFile.file_name,
     ...(size > 0 ? { sizeBytes: size } : {}), mediaType: image ? 'image/unknown' : 'application/octet-stream',

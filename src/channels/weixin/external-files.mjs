@@ -6,17 +6,18 @@ export const WEIXIN_EXTERNAL_FILE_LIMIT = 25 * 1024 * 1024;
 /** A source-scoped file ticket is private state, not a model-readable download URL. */
 export function privateWeixinFile(message, event) {
   if (!event.attachments?.length) return undefined;
-  const native = message.item_list.find(item => item.type === 4 || item.type === 2);
+  const native = message.item_list.find(item => item.type === 4 || item.type === 2 || item.type === 3);
   const image = native?.type === 2;
-  const file = image ? native.image_item : native?.file_item;
+  const voice = native?.type === 3;
+  const file = voice ? native.voice_item : image ? native.image_item : native?.file_item;
   const media = file?.media;
   if (!media || typeof media !== 'object'
     || (!(image && typeof file.aeskey === 'string' && /^[a-fA-F0-9]{32}$/.test(file.aeskey))
       && (typeof media.aes_key !== 'string' || !media.aes_key || media.aes_key.length > 128))
     || ![media.encrypt_query_param, media.full_url].some(value => typeof value === 'string' && value.length > 0 && value.length <= 16384))
     throw weixinRefusal('resource-unavailable');
-  return { attachment: event.attachments[0], ...(image ? { kind: 'image' } : {}), item: {
-    ...(image ? (typeof file.aeskey === 'string' ? { aeskey: file.aeskey } : {}) : { file_name: file.file_name }),
+  return { attachment: event.attachments[0], ...(voice ? { kind: 'voice' } : image ? { kind: 'image' } : {}), item: {
+    ...(image ? (typeof file.aeskey === 'string' ? { aeskey: file.aeskey } : {}) : { file_name: voice ? event.attachments[0].name : file.file_name }),
     ...(file.len === undefined ? {} : { len: String(file.len) }),
     media: { aes_key: media.aes_key, encrypt_type: media.encrypt_type,
       ...(typeof media.encrypt_query_param === 'string' && media.encrypt_query_param.length <= 16384
@@ -33,7 +34,10 @@ export async function readWeixinExternalFile(api, source, attachment, { signal, 
     throw weixinRefusal('stale-route');
   if (attachment.sizeBytes > WEIXIN_EXTERNAL_FILE_LIMIT) throw weixinRefusal('artifact-too-large');
   const image = saved.kind === 'image';
-  const file = image
+  const voice = saved.kind === 'voice';
+  const file = voice
+    ? api.inboundVoice({ item_list: [{ type: 3, voice_item: saved.item }] })[0]
+    : image
     ? api.inboundImages({ item_list: [{ type: 2, image_item: saved.item }] })[0]
     : api.inboundFiles({ item_list: [{ type: 4, file_item: saved.item }] })[0];
   if (!file) throw weixinRefusal('resource-unavailable');

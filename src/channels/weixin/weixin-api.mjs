@@ -666,6 +666,12 @@ export function createWeixinApi({ fetchImpl = fetch, uploadFetchImpl = fetchImpl
       return extractWeixinImages(message, { fetchImpl });
     },
 
+    inboundVoice(message) {
+      return extractWeixinFiles({ item_list: (message?.item_list ?? [])
+        .filter(item => item?.type === 3 && item.voice_item?.media)
+        .map(item => ({ file_item: { media: item.voice_item.media, file_name: 'voice',
+          ...(item.voice_item.len === undefined ? {} : { len: item.voice_item.len }) } })) }, { fetchImpl });
+    },
     inboundFiles(message) {
       return extractWeixinFiles(message, { fetchImpl });
     },

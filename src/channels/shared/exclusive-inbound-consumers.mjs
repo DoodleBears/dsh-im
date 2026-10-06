@@ -8,15 +8,16 @@ export class ExclusiveInboundConsumers {
   acceptsFiles(botId) { return this.#entries.get(botId)?.sourceFiles === true; }
   acceptsImages(botId) { return this.#entries.get(botId)?.sourceImages === true; }
   acceptsVoiceTranscripts(botId) { return this.#entries.get(botId)?.sourceVoiceTranscripts === true; }
+  acceptsVoiceAudio(botId) { return this.#entries.get(botId)?.sourceVoiceAudio === true; }
   acceptsOrdinary(botId) { return this.#entries.get(botId)?.ordinaryText === true; }
 
-  register(botId, { fingerprint, onEvent, signal, sourceFiles = false, sourceImages = false, sourceVoiceTranscripts = false, ordinaryText = false, onEcho }) {
+  register(botId, { fingerprint, onEvent, signal, sourceFiles = false, sourceImages = false, sourceVoiceTranscripts = false, sourceVoiceAudio = false, ordinaryText = false, onEcho }) {
     if (this.#entries.has(botId)) throw refusal('consumer-conflict');
-    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function' || typeof sourceFiles !== 'boolean' || typeof sourceImages !== 'boolean' || typeof sourceVoiceTranscripts !== 'boolean' || typeof ordinaryText !== 'boolean' || (onEcho !== undefined && typeof onEcho !== 'function'))
+    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function' || typeof sourceFiles !== 'boolean' || typeof sourceImages !== 'boolean' || typeof sourceVoiceTranscripts !== 'boolean' || typeof sourceVoiceAudio !== 'boolean' || typeof ordinaryText !== 'boolean' || (onEcho !== undefined && typeof onEcho !== 'function'))
       throw refusal('bad-request');
     signal?.throwIfAborted();
     const controller = new AbortController();
-    const entry = { fingerprint, onEvent, onEcho, sourceFiles, sourceImages, sourceVoiceTranscripts, ordinaryText, controller, dispose: undefined };
+    const entry = { fingerprint, onEvent, onEcho, sourceFiles, sourceImages, sourceVoiceTranscripts, sourceVoiceAudio, ordinaryText, controller, dispose: undefined };
     const dispose = () => {
       if (this.#entries.get(botId) === entry) this.#entries.delete(botId);
       controller.abort(refusal('consumer-unavailable'));
