@@ -384,3 +384,13 @@ test('channel-specific route kinds stay strict', () => {
     (error) => error?.code === 'invalid-target',
   );
 });
+
+test('Feishu user targets optionally retain an exact private-chat locator without changing the send recipient', () => {
+  const target = {targetId:'owner',kind:'user',route:{openId:'ou_owner',chatId:'oc_private'}};
+  assert.deepEqual(normalizeDeliveryTarget('feishu',target,{targetIdRequired:true}),target);
+  assert.deepEqual(normalizeDeliveryTarget('feishu',{...target,route:{openId:'ou_owner'}},{targetIdRequired:true}),{...target,route:{openId:'ou_owner'}});
+  for (const chatId of ['', 'ou_owner', 123]) {
+    assert.throws(() => normalizeDeliveryTarget('feishu',{...target,route:{openId:'ou_owner',chatId}},{targetIdRequired:true}), {code:'invalid-target'});
+  }
+  assert.throws(() => normalizeDeliveryTarget('feishu',{...target,route:{...target.route,secret:'forbidden'}},{targetIdRequired:true}),{code:'invalid-target'});
+});
