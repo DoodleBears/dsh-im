@@ -44,6 +44,8 @@ function normalizeContextTokens(value) {
       seq: sequence(entry.seq),
       messageTimeMs: timestamp(entry.messageTimeMs),
       receivedAt: timestamp(entry.receivedAt),
+      ...(typeof entry.fingerprint === 'string' && /^[a-f0-9]{64}$/.test(entry.fingerprint)
+        ? { fingerprint: entry.fingerprint, expiresAt: timestamp(entry.expiresAt) } : {}),
     };
   }
   return { credentialHash: value.credentialHash, users };
@@ -149,11 +151,12 @@ export class WeixinStateStore {
     return this.#state.contextTokens?.users?.[userId]?.token ?? undefined;
   }
 
-  async rememberContextToken({ userId, contextToken, seq, messageTimeMs }) {
+  async rememberContextToken({ userId, contextToken, seq, messageTimeMs, fingerprint, expiresAt }) {
     if (!nonEmptyString(userId) || !nonEmptyString(contextToken) || !this.#state.contextTokens) return;
     const users = this.#state.contextTokens.users;
     const previous = users[userId];
-    const next = { token: contextToken, seq: sequence(seq), messageTimeMs: timestamp(messageTimeMs), receivedAt: Date.now() };
+    const next = { token: contextToken, seq: sequence(seq), messageTimeMs: timestamp(messageTimeMs), receivedAt: Date.now(),
+      ...(fingerprint === undefined ? {} : { fingerprint, expiresAt }) };
     // Late/duplicate batches must not replace a newer conversation capability.
     if (previous) {
       if (previous.seq !== null && next.seq !== null && BigInt(next.seq) <= BigInt(previous.seq)) return;
@@ -169,6 +172,15 @@ export class WeixinStateStore {
 
   externalReplySource(messageId) {
     return structuredClone(this.#state.externalReplySources?.[messageId]);
+  }
+
+  // This is a local retention fence, not a claim about the server's token lifetime.
+  externalPostContext(account) {
+    const entry = this.#state.contextTokens?.users?.[account.ownerUserId];
+    if (entry?.fingerprint !== account.fingerprint || !Number.isFinite(entry.expiresAt)
+      || entry.expiresAt <= Date.now() || typeof entry.token !== 'string'
+      || !entry.token.trim() || entry.token.length > 16384) return undefined;
+    return entry.token;
   }
 
   async rememberExternalReplySource(source) {

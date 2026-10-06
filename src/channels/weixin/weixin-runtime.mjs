@@ -438,7 +438,7 @@ export class WeixinRuntime {
     return result;
   }
 
-  async sendProactiveText(target, text, { signal } = {}) {
+  async sendProactiveText(target, text, { signal, account, receipt = false, beforeSend } = {}) {
     const toUserId = typeof target?.route?.toUserId === 'string'
       ? target.route.toUserId.trim() : '';
     if (target?.kind !== 'user' || !toUserId) {
@@ -452,6 +452,34 @@ export class WeixinRuntime {
       throw error;
     }
     signal?.throwIfAborted();
+    if (receipt) {
+      if (!account || toUserId !== account.ownerUserId || typeof beforeSend !== 'function')
+        throw weixinRefusal('send-permission-denied');
+      if (typeof text !== 'string' || !text.trim() || text.length > 4000)
+        throw weixinRefusal('bad-request');
+      const contextToken = this.#state.externalPostContext(account);
+      if (!contextToken) throw weixinRefusal('private-context-unavailable');
+      const sendSignal = signal ? AbortSignal.any([signal, this.#abortController.signal]) : this.#abortController.signal;
+      sendSignal.throwIfAborted();
+      if (beforeSend() !== true) throw weixinRefusal('send-permission-denied');
+      let result;
+      try {
+        result = await this.#api.sendText({ baseUrl: this.#config.baseUrl, token: this.#token,
+          toUserId, contextToken, text, signal: sendSignal });
+      } catch (error) {
+        if (error?.code === 'send-rejected') throw weixinRefusal('private-context-rejected');
+        throw error;
+      }
+      const clientId = result?.providerMessageIds?.[0];
+      if (typeof clientId !== 'string' || !clientId.startsWith('dsh-weixin-'))
+        throw weixinRefusal('send-result-unknown');
+      const serverId = result.message_id;
+      if (serverId !== undefined && (typeof serverId !== 'string' || !/^\d{1,512}$/.test(serverId)))
+        throw weixinRefusal('send-result-unknown');
+      return { sent: true, receipt: { version: 1, messageId: clientId,
+        conversationId: toUserId, identityKind: 'client-acknowledgement',
+        ...(serverId === undefined ? {} : { serverMessageId: serverId }) } };
+    }
     await this.#sendTrackedText({
       toUserId,
       text,

@@ -162,7 +162,7 @@ export class WeixinController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'weixin', account,
         connected: this.#runtimes.get(botId)?.status?.ready === true,
-        capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'reply-text-checked',
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'proactive-fence-checked', 'exclusive-text-consumer', 'reply-text-checked',
           'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked',
           'source-file-checked', 'reply-file-checked', 'reply-file-fence-checked',
           'source-image-checked', 'reply-image-fence-checked', 'source-voice-transcript-checked', 'source-voice-audio-checked', 'source-video-checked', 'reply-video-fence-checked', 'source-quote-checked'] };
@@ -348,21 +348,22 @@ export class WeixinController {
   }
 
   async sendProactiveText(botId, target, text, options = {}) {
-    const config = this.#configStore.get(botId);
-    if (!config) throw new Error('Unknown Weixin account');
     return this.#withBotTransition(botId, async () => {
+      const config = this.#configStore.get(botId);
+      if (!config) throw weixinRefusal('unknown-bot');
       const runtime = this.#runtimes.get(botId);
       if (!runtime?.status?.ready || typeof runtime.sendProactiveText !== 'function') {
         const error = new Error(t('微信连接当前离线'));
         error.code = 'bot-not-connected';
         throw error;
       }
+      let account;
       if (options.expectedFingerprint !== undefined) {
-        const account = await this.#deliveryAccount(config, options.signal);
+        account = await this.#deliveryAccount(config, options.signal);
         if (account.fingerprint !== options.expectedFingerprint) throw weixinRefusal('account-changed');
         if (target?.kind !== 'user' || target.route?.toUserId !== account.ownerUserId) throw weixinRefusal('invalid-target');
       }
-      return runtime.sendProactiveText(target, text, options);
+      return runtime.sendProactiveText(target, text, { ...options, ...(account === undefined ? {} : { account }) });
     });
   }
 
@@ -683,6 +684,9 @@ export class WeixinController {
             sourceQuotes: this.#inboundConsumers.acceptsQuotes(config.botId),
             sourceVideos: this.#inboundConsumers.acceptsVideos(config.botId) });
           if (!event) return { accepted: true, ignored: true };
+          await state.rememberContextToken?.({ userId: event.actor.id, contextToken: message.context_token,
+            seq: message.seq, messageTimeMs: message.create_time_ms, fingerprint: account.fingerprint,
+            expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 });
           await state.rememberExternalReplySource({ messageId: event.messageId, actorId: event.actor.id,
             fingerprint: account.fingerprint, contextToken: message.context_token,
             expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,

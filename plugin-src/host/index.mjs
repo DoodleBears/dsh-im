@@ -95,6 +95,7 @@ export function createImHostPlugin(internals = {}) {
           inboundVersion: 1,
           fileVersion: 1,
           receiptVersion: 1,
+          postFenceVersion: 1,
           echoVersion: 1,
           replyContextVersion: 1,
           replyReceiptVersion: 1,
