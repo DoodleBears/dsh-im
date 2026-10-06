@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- Discord 的 checked external consumer 增加有界频道／已有公开 Thread Human 文本历史读取：核对原生 App 正文可见性、来源和权限，使用账号／来源／查询绑定的签名 cursor；普通 @ 收件条件不变，本候选未发布（[BotHarness #937](https://github.com/BotHarness/BotHarness/issues/937)）。
+  Discord checked external consumers add bounded channel/existing-public-thread Human-text history, with native App content visibility, source and permission checks plus signed account/source/query-bound continuations. Mention-only intake stays unchanged; this candidate is unreleased ([BotHarness #937](https://github.com/BotHarness/BotHarness/issues/937)).
+
 - Discord 增加可选 external-only Profile 与受校验的 App/Bot 身份、独占 @ 收件和原频道／已有公开 Thread 回复；缺失 consumer 不回退到独立 Session，发送前复查原消息及权限，不确定结果不自动重发。真实 BotHarness App/E2E 资格仍待验证（BotHarness/BotHarness#855）。
   Discord adds an optional external-only Profile with checked App/Bot identity, exclusive mention intake and replies in the original channel or existing public thread. Consumer loss never restores standalone Sessions; source and permissions are checked before dispatch and ambiguous results are not automatically retried. Real BotHarness App/E2E qualification remains pending (BotHarness/BotHarness#855).
 

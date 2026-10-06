@@ -6,6 +6,7 @@ import { t } from '../shared/i18n.mjs';
 import { captureContextEnhancement } from '../shared/context-enhancement.mjs';
 import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
 import { DiscordApi } from './discord-api.mjs';
+import { createDiscordHistoryReader } from './history-reader.mjs';
 import { createDiscordBridgeStatus, DiscordHarnessBridge } from './discord-bridge.mjs';
 import { discordRefusal, verifiedDiscordAccount, inspectDiscordSourceChannel, normalizeDiscordExternalText,
   qualifyDiscordReply, sendDiscordReply, sendDiscordCheckedText } from './external-consumer.mjs';
@@ -563,6 +564,7 @@ export class DiscordRuntime {
   #routing = new Map();
   #account = null;
   #externalConsumer;
+  #readHistory = createDiscordHistoryReader();
 
   constructor({
     config,
@@ -651,6 +653,12 @@ export class DiscordRuntime {
     const result = await qualifyDiscordReply(checked.api, checked.account, route, checked.signal);
     checked.assertCurrent();
     return result.route;
+  }
+
+  async historyChecked(route, query, { signal } = {}) {
+    const checked = this.#checkedLifetime(signal);
+    return this.#readHistory(checked.api, { botId: this.#config.botId, account: checked.account },
+      route, query, checked.signal, checked.assertCurrent);
   }
 
   async replyChecked(route, text, options = {}) {
@@ -1019,6 +1027,7 @@ export class DiscordRuntime {
   }
 
   async stop() {
+    this.#readHistory = createDiscordHistoryReader();
     this.#stopped = true;
     this.#generation += 1;
     this.#abortController?.abort();

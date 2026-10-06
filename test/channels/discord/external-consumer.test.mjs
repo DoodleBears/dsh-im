@@ -183,19 +183,32 @@ test('controller persists exclusive ownership, refuses conflicting/lost consumer
     createRuntime: async ({ config, externalConsumer }) => {
       callback = externalConsumer; modes.push(config.consumerMode);
       return { status: { ready: true }, start: async () => { starts++; }, stop: async () => {},
-        qualifyReplyChecked: async route => route, replyChecked: async () => ({ sent: true }) };
+        qualifyReplyChecked: async route => route, replyChecked: async () => ({ sent: true }),
+        historyChecked: async (route, query, { signal }) => {
+          signal.throwIfAborted(); return { route, query };
+        } };
     }, logger: { warn() {}, error() {} } });
   try {
     await controller.initialize(); const description = await controller.describeDeliveryAccount(refs.botId);
     assert.equal(description.account.fingerprint, account.fingerprint);
+    assert.equal(description.capabilities.includes('history-text-checked'), true);
+    assert.equal(description.capabilities.includes('thread-history-text-checked'), true);
     const dispose = await controller.consumeInbound(refs.botId, { expectedFingerprint: account.fingerprint,
       onEvent: async () => ({ accepted: true }) });
     assert.equal(store.get(refs.botId).consumerMode, 'external-consumer');
+    const route = { messageId: ids.message, actorId: ids.actor, conversationId: ids.channel };
+    const query = { scope: 'group', limit: 2 };
+    assert.deepEqual(await controller.historyChecked(refs.botId, route, query,
+      { expectedFingerprint: account.fingerprint }), { route, query });
+    await assert.rejects(controller.historyChecked(refs.botId, route, query,
+      { expectedFingerprint: 'f'.repeat(64) }), { code: 'account-changed' });
     await assert.rejects(controller.consumeInbound(refs.botId, { expectedFingerprint: account.fingerprint,
       onEvent: async () => ({ accepted: true }) }), { code: 'consumer-conflict' });
     assert.equal(starts, 2); dispose();
     await assert.rejects(callback({ fingerprint: account.fingerprint }), { code: 'consumer-unavailable' });
     await assert.rejects(controller.replyChecked(refs.botId, {}, 'QA', { expectedFingerprint: account.fingerprint }), { code: 'consumer-unavailable' });
+    await assert.rejects(controller.historyChecked(refs.botId, route, query,
+      { expectedFingerprint: account.fingerprint }), { code: 'consumer-unavailable' });
     await controller.bindCredentials({ token: 'rotated-test-token' });
     assert.equal(modes.at(-1), 'external-consumer');
     assert.equal((await new DiscordConfigStore(path).load()).get(refs.botId).consumerMode, 'external-consumer');

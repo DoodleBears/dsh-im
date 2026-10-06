@@ -62,7 +62,7 @@ function nativeFailure(error, missing) {
 }
 
 /** Only one guild text channel and its existing public threads; no channel creation. */
-export async function inspectDiscordSourceChannel(api, channelId, account, signal, { forReply = false } = {}) {
+export async function inspectDiscordSourceChannel(api, channelId, account, signal, { forReply = false, forHistory = false } = {}) {
   if (!discordSnowflake(channelId)) throw discordRefusal('stale-route');
   signal?.throwIfAborted();
   try {
@@ -73,7 +73,7 @@ export async function inspectDiscordSourceChannel(api, channelId, account, signa
     const parent = isThread ? await api.getChannel({ channelId: channel.parent_id, signal }) : channel;
     if (parent?.type !== TEXT_CHANNEL || parent.guild_id !== channel.guild_id
       || (isThread && (parent.id !== channel.parent_id || parent.id === channel.id))) throw discordRefusal('stale-route');
-    if (isThread && (!channel.thread_metadata || channel.thread_metadata.archived !== false
+    if (isThread && !forHistory && (!channel.thread_metadata || channel.thread_metadata.archived !== false
       || channel.thread_metadata.locked !== false)) throw discordRefusal('reply-permission-denied');
     const [guild, member] = await Promise.all([
       api.getGuild({ guildId: channel.guild_id, signal }),
@@ -81,7 +81,7 @@ export async function inspectDiscordSourceChannel(api, channelId, account, signa
     ]);
     if (guild?.id !== channel.guild_id) throw discordRefusal('stale-route');
     const permissions = discordChannelPermissions(guild, member, parent, account.userId);
-    const required = VIEW | (forReply ? HISTORY | (isThread ? THREAD_SEND : SEND) : 0n);
+    const required = VIEW | (forHistory ? HISTORY : 0n) | (forReply ? HISTORY | (isThread ? THREAD_SEND : SEND) : 0n);
     if ((permissions & required) !== required) throw discordRefusal('reply-permission-denied');
     if (forReply && member.communication_disabled_until && Date.parse(member.communication_disabled_until) > Date.now())
       throw discordRefusal('reply-permission-denied');
@@ -92,13 +92,23 @@ export async function inspectDiscordSourceChannel(api, channelId, account, signa
 }
 
 export function normalizeDiscordExternalText(message, { botId, account, channel, eventId }) {
+  return normalizeDiscordHumanText(message, { botId, account, channel, eventId }, true);
+}
+
+/** History visibility never relaxes the mention-only live admission predicate. */
+export function normalizeDiscordHistoryText(message, identity) {
+  return normalizeDiscordHumanText(message, identity, false);
+}
+
+function normalizeDiscordHumanText(message, { botId, account, channel, eventId }, requireMention) {
   if (!discordSnowflake(message?.id) || !discordSnowflake(message?.author?.id)
     || message.author.bot === true || message.webhook_id || message.author.id === account.userId
     || ![0, 19].includes(message.type) || typeof message.content !== 'string' || !message.content.trim()
     || message.content.length > 16000 || !Array.isArray(message.mentions)) return null;
   if (message.guild_id !== channel.guildId || message.channel_id !== channel.channelId)
     throw discordRefusal('stale-route');
-  if (!message.mentions.some(user => user.id === account.userId)) return null;
+  const mentionedAccount = message.mentions.some(user => user.id === account.userId);
+  if (requireMention && !mentionedAccount) return null;
   const timestamp = Date.parse(message.timestamp);
   if (!Number.isFinite(timestamp) || typeof eventId !== 'string' || !eventId || eventId.length > 512)
     throw discordRefusal('invalid-inbound');
@@ -108,8 +118,8 @@ export function normalizeDiscordExternalText(message, { botId, account, channel,
     .map(user => ({ id: user.id, key: `<@${user.id}>`,
       ...(user.id === account.userId ? { name: account.name } : {}) }));
   return { version: 1, channel: 'discord', botId, fingerprint: account.fingerprint,
-    eventId, messageId: message.id, actor: { kind: 'user', id: message.author.id, ...(name ? { name } : {}) },
-    conversation: { kind: 'group', id: channel.conversationId }, mentions, mentionedAccount: true,
+    eventId, messageId: message.id, actor: { kind: 'user', id: message.author.id, ...(name ? { name: name.slice(0, 512) } : {}) },
+    conversation: { kind: 'group', id: channel.conversationId }, mentions, mentionedAccount,
     at: new Date(timestamp).toISOString(), text: message.content,
     reply: { messageId: message.id, conversationId: channel.conversationId, actorId: message.author.id,
       ...(channel.threadId ? { threadId: channel.threadId } : {}) },
