@@ -5,6 +5,7 @@ import { fetchImageBuffer } from '../shared/image-prompt.mjs';
 import { t } from '../shared/i18n.mjs';
 import { captureContextEnhancement } from '../shared/context-enhancement.mjs';
 import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
+import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
 import { DiscordApi } from './discord-api.mjs';
 import { createDiscordHistoryReader } from './history-reader.mjs';
 import { createDiscordBridgeStatus, DiscordHarnessBridge } from './discord-bridge.mjs';
@@ -564,6 +565,7 @@ export class DiscordRuntime {
   #routing = new Map();
   #account = null;
   #externalConsumer;
+  #externalSourceFiles;
   #readHistory = createDiscordHistoryReader();
 
   constructor({
@@ -580,6 +582,7 @@ export class DiscordRuntime {
     createWebSocket = (url) => new WebSocket(url),
     random = Math.random,
     externalConsumer,
+    externalSourceFiles = () => false,
   }) {
     if (!config || !token || !harness || !state) {
       throw new TypeError('DiscordRuntime requires config, token, Harness, and state');
@@ -587,6 +590,7 @@ export class DiscordRuntime {
     if (typeof createWebSocket !== 'function') throw new TypeError('DiscordRuntime requires WebSocket');
     this.#config = config;
     this.#externalConsumer = externalConsumer;
+    this.#externalSourceFiles = externalSourceFiles;
     this.#token = token;
     this.#harness = harness;
     this.#state = state;
@@ -659,6 +663,14 @@ export class DiscordRuntime {
     const checked = this.#checkedLifetime(signal);
     return this.#readHistory(checked.api, { botId: this.#config.botId, account: checked.account },
       route, query, checked.signal, checked.assertCurrent);
+  }
+
+  async externalFileChecked(route, file, options = {}) {
+    const checked = this.#checkedLifetime(options.signal);
+    if (this.#externalSourceFiles() !== true) throw discordRefusal('capability-unavailable');
+    const operation = options.reply ? replyExternalFile : readExternalFile;
+    return operation(checked.api, checked.account, route, file, { ...options,
+      signal: checked.signal, assertCurrent: checked.assertCurrent });
   }
 
   async replyChecked(route, text, options = {}) {
@@ -907,10 +919,11 @@ export class DiscordRuntime {
       || !message.mentions?.some(user => user.id === this.#account.userId)) return;
     const checked = this.#checkedLifetime();
     const channel = await inspectDiscordSourceChannel(checked.api, message.channel_id, checked.account, checked.signal);
-    const event = normalizeDiscordExternalText(message, { botId: this.#config.botId, account: checked.account,
+    let event = normalizeDiscordExternalText(message, { botId: this.#config.botId, account: checked.account,
       channel, eventId: `gateway:${this.#sessionId}:${sequence}` });
     checked.assertCurrent();
     if (!event) return;
+    if (this.#externalSourceFiles() === true) event = externalAttachments(event, message);
     if (typeof this.#externalConsumer !== 'function') throw discordRefusal('consumer-unavailable');
     const result = await this.#externalConsumer(event, checked.signal);
     checked.assertCurrent();

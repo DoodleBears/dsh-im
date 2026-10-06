@@ -15,7 +15,7 @@ export class DiscordController extends TokenBotController {
       checkedDelivery: {
         capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'reply-text-checked',
           'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked',
-          'history-text-checked', 'thread-history-text-checked'],
+          'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'],
         inspectAccount: async (token, config, { signal }) => {
           const api = (options.createApi ?? (args => new DiscordApi(args)))({ token });
           const [user, app] = await Promise.all([api.getCurrentUser({ signal }), api.getCurrentApplication({ signal })]);

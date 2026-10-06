@@ -51,6 +51,8 @@ test('Discord production has no per-bot result-file Gate', async (t) => {
     botId,
     config: { botId },
     token: 'host-only',
+    externalConsumer: async () => ({ accepted: true }),
+    externalSourceFiles: () => true,
   });
 
   const production = await createProductionController(ctx, {
@@ -58,6 +60,8 @@ test('Discord production has no per-bot result-file Gate', async (t) => {
   }, internals);
   await createRuntime('discord_enabled');
   await createRuntime('discord_not_listed');
+  assert.equal(runtimes[0].externalSourceFiles(), true);
+  assert.equal(typeof runtimes[0].externalConsumer, 'function');
   assert.equal(Object.hasOwn(runtimes[0], 'outboundArtifactsEnabled'), false);
   assert.equal(Object.hasOwn(runtimes[1], 'outboundArtifactsEnabled'), false);
   await production.close();

@@ -6,6 +6,7 @@ const PUBLIC_THREAD = 11;
 const TEXT_CHANNEL = 0;
 const VIEW = 1n << 10n;
 const SEND = 1n << 11n;
+const ATTACH = 1n << 15n;
 const HISTORY = 1n << 16n;
 const THREAD_SEND = 1n << 38n;
 const ADMIN = 1n << 3n;
@@ -62,7 +63,7 @@ function nativeFailure(error, missing) {
 }
 
 /** Only one guild text channel and its existing public threads; no channel creation. */
-export async function inspectDiscordSourceChannel(api, channelId, account, signal, { forReply = false, forHistory = false } = {}) {
+export async function inspectDiscordSourceChannel(api, channelId, account, signal, { forReply = false, forHistory = false, forFileReply = false } = {}) {
   if (!discordSnowflake(channelId)) throw discordRefusal('stale-route');
   signal?.throwIfAborted();
   try {
@@ -81,7 +82,7 @@ export async function inspectDiscordSourceChannel(api, channelId, account, signa
     ]);
     if (guild?.id !== channel.guild_id) throw discordRefusal('stale-route');
     const permissions = discordChannelPermissions(guild, member, parent, account.userId);
-    const required = VIEW | (forHistory ? HISTORY : 0n) | (forReply ? HISTORY | (isThread ? THREAD_SEND : SEND) : 0n);
+    const required = (forFileReply ? ATTACH : 0n) | VIEW | (forHistory ? HISTORY : 0n) | (forReply ? HISTORY | (isThread ? THREAD_SEND : SEND) : 0n);
     if ((permissions & required) !== required) throw discordRefusal('reply-permission-denied');
     if (forReply && member.communication_disabled_until && Date.parse(member.communication_disabled_until) > Date.now())
       throw discordRefusal('reply-permission-denied');
@@ -127,11 +128,11 @@ function normalizeDiscordHumanText(message, { botId, account, channel, eventId }
   };
 }
 
-export async function qualifyDiscordReply(api, account, route, signal) {
+export async function qualifyDiscordReply(api, account, route, signal, permissions = { forReply: true }) {
   if (!route || !discordSnowflake(route.messageId) || !discordSnowflake(route.actorId)
     || !discordSnowflake(route.conversationId) || route.rootId !== undefined || route.parentId !== undefined
     || (route.threadId !== undefined && !discordSnowflake(route.threadId))) throw discordRefusal('stale-route');
-  const channel = await inspectDiscordSourceChannel(api, route.threadId ?? route.conversationId, account, signal, { forReply: true });
+  const channel = await inspectDiscordSourceChannel(api, route.threadId ?? route.conversationId, account, signal, permissions);
   if (channel.conversationId !== route.conversationId || channel.threadId !== route.threadId)
     throw discordRefusal('stale-route');
   let source;
@@ -141,7 +142,7 @@ export async function qualifyDiscordReply(api, account, route, signal) {
     || source.author?.id !== route.actorId || source.author.bot === true || source.webhook_id
     || ![0, 19].includes(source.type)) throw discordRefusal('stale-route');
   signal?.throwIfAborted();
-  return { channel, route: { ...route } };
+  return { channel, route: { ...route }, source };
 }
 
 export async function sendDiscordReply(api, account, route, text, { signal, beforeSend, assertCurrent = () => {}, receipt = false } = {}) {

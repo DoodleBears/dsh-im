@@ -4,6 +4,7 @@ import { DiscordApi } from '../../../src/channels/discord/discord-api.mjs';
 import { DiscordRuntime } from '../../../src/channels/discord/discord-runtime.mjs';
 import { DiscordController } from '../../../src/channels/discord/discord-controller.mjs';
 import { DiscordConfigStore, deriveDiscordBotIdentity } from '../../../src/channels/discord/config-store.mjs';
+import { TokenBotController } from '../../../src/channels/shared/token-bot-controller.mjs';
 import { ExclusiveInboundConsumers } from '../../../src/channels/shared/exclusive-inbound-consumers.mjs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -175,15 +176,18 @@ test('controller persists exclusive ownership, refuses conflicting/lost consumer
   const path = join(directory, 'config.json'); const store = await new DiscordConfigStore(path).load();
   const refs = deriveDiscordBotIdentity(ids.bot); const values = new Map([[refs.tokenRef, 'test-token']]);
   await store.save({ ...refs, platformId: ids.bot, name: 'QA Bot' });
-  let callback; let starts = 0; const modes = [];
+  let callback; let fileOptIn; let starts = 0; const modes = [];
   const controller = new DiscordController({ configStore: store,
     credentials: { resolve: async ref => values.has(ref) ? { value: values.get(ref) } : undefined,
       set: async (ref, value) => values.set(ref, value), unset: async ref => values.delete(ref) },
     createApi: () => identityApi, inspectToken: async () => ({ platformId: ids.bot, name: 'QA Bot' }),
-    createRuntime: async ({ config, externalConsumer }) => {
-      callback = externalConsumer; modes.push(config.consumerMode);
+    createRuntime: async ({ config, externalConsumer, externalSourceFiles }) => {
+      callback = externalConsumer; fileOptIn = externalSourceFiles; modes.push(config.consumerMode);
       return { status: { ready: true }, start: async () => { starts++; }, stop: async () => {},
         qualifyReplyChecked: async route => route, replyChecked: async () => ({ sent: true }),
+        externalFileChecked: async (route, file, { signal }) => (async function* () {
+          signal.throwIfAborted(); yield Buffer.from('first'); signal.throwIfAborted(); yield Buffer.from('second');
+        })(),
         historyChecked: async (route, query, { signal }) => {
           signal.throwIfAborted(); return { route, query };
         } };
@@ -196,6 +200,8 @@ test('controller persists exclusive ownership, refuses conflicting/lost consumer
     const dispose = await controller.consumeInbound(refs.botId, { expectedFingerprint: account.fingerprint,
       onEvent: async () => ({ accepted: true }) });
     assert.equal(store.get(refs.botId).consumerMode, 'external-consumer');
+    assert.equal(fileOptIn(), false);
+    await assert.rejects(controller.externalFileChecked(refs.botId, {}, {}, { expectedFingerprint: account.fingerprint }), { code: 'capability-unavailable' });
     const route = { messageId: ids.message, actorId: ids.actor, conversationId: ids.channel };
     const query = { scope: 'group', limit: 2 };
     assert.deepEqual(await controller.historyChecked(refs.botId, route, query,
@@ -209,6 +215,14 @@ test('controller persists exclusive ownership, refuses conflicting/lost consumer
     await assert.rejects(controller.replyChecked(refs.botId, {}, 'QA', { expectedFingerprint: account.fingerprint }), { code: 'consumer-unavailable' });
     await assert.rejects(controller.historyChecked(refs.botId, route, query,
       { expectedFingerprint: account.fingerprint }), { code: 'consumer-unavailable' });
+    const fileDispose = await controller.consumeInbound(refs.botId, { expectedFingerprint: account.fingerprint, sourceFiles: true,
+      onEvent: async () => ({ accepted: true }) });
+    assert.equal(fileOptIn(), true);
+    const stream = await controller.externalFileChecked(refs.botId, route, {}, { expectedFingerprint: account.fingerprint });
+    const iterator = stream[Symbol.asyncIterator]();
+    assert.equal(Buffer.from((await iterator.next()).value).toString(), 'first');
+    fileDispose(); assert.equal(fileOptIn(), false);
+    await assert.rejects(iterator.next(), { code: 'consumer-unavailable' });
     await controller.bindCredentials({ token: 'rotated-test-token' });
     assert.equal(modes.at(-1), 'external-consumer');
     assert.equal((await new DiscordConfigStore(path).load()).get(refs.botId).consumerMode, 'external-consumer');
@@ -232,4 +246,46 @@ test('explicit external-only Profile connects a new identity without a standalon
     assert.deepEqual(modes, ['external-consumer']);
     assert.equal((await controller.describeDeliveryAccount(deriveDiscordBotIdentity(ids.bot).botId)).connected, true);
   } finally { await controller.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+
+test('Gateway attachment admission requires opted-in mention; rejects unsupported source without standalone work', async () => {
+  const f = fixture(true); let socket; let optIn = true; const received = []; const failures = [];
+  f.message.attachments = [{ id: ids.sent, filename: 'source.txt', size: 3, url: 'https://cdn.discordapp.com/private-signed', content_type: 'text/plain' }];
+  const runtime = new DiscordRuntime({ config: { botId: 'discord-qa', platformId: ids.bot, consumerMode: 'external-consumer' },
+    token: 'test-private-token', harness: { ensureRunning: async () => true }, state: {}, externalSourceFiles: () => optIn,
+    externalConsumer: async evidence => { received.push(evidence); return { accepted: true }; },
+    createApi: () => ({ ...f.api, ...identityApi, getGatewayBot: async () => ({ url: 'wss://gateway.discord.gg' }) }),
+    createWebSocket: () => { socket = new Socket(); queueMicrotask(() => socket.packet({ op: 10, d: { heartbeat_interval: 45000 } })); return socket; },
+    logger: { warn(...args) { failures.push(args); }, error(...args) { failures.push(args); } }, connectTimeoutMs: 200 });
+  const dispatch = async message => { socket.packet({ op: 0, t: 'MESSAGE_CREATE', s: 42, d: message }); await flush(); };
+  try {
+    await runtime.start(); assert.equal(socket.sent[0].d.intents, (1 << 0) | (1 << 9));
+    await dispatch(f.message); assert.equal(received.length, 1);
+    assert.equal(received[0].attachments[0].resourceKey, ids.sent);
+    assert.equal(received[0].reply.threadId, ids.thread);
+    assert.equal(JSON.stringify(received[0]).includes('signed'), false);
+    for (const value of [{ ...f.message, mentions: [] }, { ...f.message, author: { id: ids.actor, bot: true } },
+      { ...f.message, webhook_id: ids.bot }, { ...f.message, attachments: [f.message.attachments[0], f.message.attachments[0]] }]) await dispatch(value);
+    assert.equal(received.length, 1); assert.ok(failures.length > 0);
+    optIn = false; await dispatch(f.message);
+    assert.equal(received.length, 2); assert.equal(received[1].attachments, undefined);
+    await assert.rejects(runtime.externalFileChecked(received[0].reply, received[0].attachments[0]), { code: 'capability-unavailable' });
+  } finally { await runtime.stop(); }
+});
+
+
+test('shared Token controller refuses file opt-in when another provider lacks the file capability', async () => {
+  const config = { botId: 'token-qa', tokenRef: 'token-ref' }; let starts = 0;
+  const controller = new TokenBotController({ descriptor: { key: 'test', label: 'Test', connectionLabel: 'Test' },
+    credentials: { resolve: async () => ({ value: 'token' }), set: async () => {}, unset: async () => {} },
+    configStore: { get: () => config, list: () => [config], save: async value => value, remove: async () => {} },
+    inspectToken: async () => ({}), deriveIdentity: () => ({}), maskPlatformId: value => value,
+    createRuntime: async () => { starts++; }, checkedDelivery: { capabilities: ['exclusive-text-consumer'], inspectAccount: async () => account } });
+  try {
+    await assert.rejects(controller.consumeInbound('token-qa', { expectedFingerprint: account.fingerprint, sourceFiles: true,
+      onEvent: async () => ({ accepted: true }) }), { code: 'capability-unavailable' });
+    await assert.rejects(controller.externalFileChecked('token-qa', {}, {}, { expectedFingerprint: account.fingerprint }), { code: 'capability-unavailable' });
+    assert.equal(starts, 0);
+  } finally { await controller.close(); }
 });
