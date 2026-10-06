@@ -597,7 +597,7 @@ export class MultiBotDshFeishuController {
     });
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, onEcho } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, sourceImages = false, onEcho } = {}) {
     this.#assertOpen();
     return this.#withBotTransition(botId, async () => {
       this.#assertOpen();
@@ -606,7 +606,7 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       if (account.fingerprint !== expectedFingerprint)
         throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, onEcho });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, sourceImages, onEcho });
       try {
         const saved = await this.#configStore.saveBot({ ...config, consumerMode: 'external-consumer' });
         const resolved = await this.#credentials.resolve(saved.secretRef);
