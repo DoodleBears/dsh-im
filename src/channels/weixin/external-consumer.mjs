@@ -20,7 +20,7 @@ export function pairedWeixinAccount(config, token) {
 }
 
 /** Paired-owner text and opt-in native files/images. No group, mention, or thread is invented. */
-export function normalizeWeixinExternalText(message, { botId, account, sourceFiles = false, sourceImages = false, sourceVoiceTranscripts = false, sourceVoiceAudio = false, sourceVideos = false }) {
+export function normalizeWeixinExternalText(message, { botId, account, sourceFiles = false, sourceImages = false, sourceVoiceTranscripts = false, sourceVoiceAudio = false, sourceVideos = false, sourceQuotes = false }) {
   if (message?.message_type !== 1 || message.from_user_id !== account.ownerUserId || message.group_id) return null;
   if (message.to_user_id !== account.accountId) throw weixinRefusal('account-changed');
   if (!Array.isArray(message.item_list) || !message.item_list.length
@@ -100,10 +100,11 @@ export function normalizeWeixinExternalText(message, { botId, account, sourceFil
     messageId, resourceKey, name: nativeFile.file_name,
     ...(size > 0 ? { sizeBytes: size } : {}), mediaType: nativeVideo ? 'video/unknown' : image ? 'image/unknown' : 'application/octet-stream',
   })]) : undefined;
+  const quote = sourceQuotes ? weixinNativeQuote(message) : undefined;
   return Object.freeze({ version: 1, channel: 'weixin', botId, fingerprint: account.fingerprint,
     eventId: messageId, messageId, actor: Object.freeze({ kind: 'user', id: account.ownerUserId }),
     conversation: Object.freeze({ kind: 'dm', id: conversationId }), mentions: Object.freeze([]),
-    mentionedAccount: false, at: at.toISOString(), text, ...(voice ? { voice } : {}), ...(video ? { video } : {}), ...(attachments ? { attachments } : {}),
+    mentionedAccount: false, at: at.toISOString(), text, ...(voice ? { voice } : {}), ...(video ? { video } : {}), ...(quote ? { quote } : {}), ...(attachments ? { attachments } : {}),
     reply: Object.freeze({ messageId, conversationId, actorId: account.ownerUserId }),
     replay: Object.freeze({ kind: 'provider-redelivery', resumeCursor: false, gapPossible: true }) });
 }
@@ -115,4 +116,45 @@ export function checkedWeixinRoute(route, account, source) {
     || source.actorId !== route.actorId || source.messageId !== route.messageId
     || source.expiresAt <= Date.now() || !continuation(source.contextToken)) throw weixinRefusal('stale-route');
   return { messageId: route.messageId, conversationId: route.conversationId, actorId: route.actorId };
+}
+
+
+/** One-level native quote evidence only. No Session lookup, title-to-body promotion,
+ * thread fabrication, media credentials or client-acknowledgement resolution. */
+export function weixinNativeQuote(message) {
+  const references = (message?.item_list ?? []).filter(item => item?.ref_msg !== undefined);
+  if (!references.length) return undefined;
+  if (references.length !== 1) throw weixinRefusal('invalid-inbound');
+  const ref = references[0].ref_msg;
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref)) throw weixinRefusal('invalid-inbound');
+  const quote = {};
+  const nativeId = value => {
+    if (typeof value === 'number' && !Number.isSafeInteger(value)) throw weixinRefusal('invalid-inbound');
+    const result = typeof value === 'number' ? String(value) : value;
+    if (!id(result)) throw weixinRefusal('invalid-inbound');
+    return result;
+  };
+  const text = value => {
+    if (typeof value !== 'string' || value.length > 16000) throw weixinRefusal('invalid-inbound');
+    return value;
+  };
+  if (ref.svr_id !== undefined) quote.serverMessageId = nativeId(ref.svr_id);
+  if (ref.title !== undefined) quote.summary = text(ref.title);
+  const item = ref.message_item;
+  if (item !== undefined && (!item || typeof item !== 'object' || Array.isArray(item))) throw weixinRefusal('invalid-inbound');
+  if (item?.msg_id !== undefined) quote.itemId = nativeId(item.msg_id);
+  const embedded = item?.text_item?.text ?? item?.voice_item?.text;
+  if (embedded !== undefined) quote.text = text(embedded);
+  const kind = [[2, 'image'], [3, 'audio'], [4, 'file'], [5, 'video']].find(([type]) => item?.type === type);
+  if (kind) quote.attachmentKind = kind[1];
+  if (ref.partial_text !== undefined) {
+    const partial = ref.partial_text;
+    if (!partial || typeof partial !== 'object' || Array.isArray(partial)
+      || !Number.isSafeInteger(partial.startindex) || partial.startindex < 0
+      || !Number.isSafeInteger(partial.endindex) || partial.endindex < partial.startindex
+      || typeof partial.quotemd5 !== 'string' || partial.quotemd5.length > 128) throw weixinRefusal('invalid-inbound');
+    quote.partial = { start: text(partial.start), end: text(partial.end),
+      startIndex: partial.startindex, endIndex: partial.endindex, digest: partial.quotemd5 };
+  }
+  return Object.freeze(quote);
 }

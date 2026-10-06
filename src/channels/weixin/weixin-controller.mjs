@@ -165,17 +165,17 @@ export class WeixinController {
         capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'reply-text-checked',
           'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked',
           'source-file-checked', 'reply-file-checked', 'reply-file-fence-checked',
-          'source-image-checked', 'reply-image-fence-checked', 'source-voice-transcript-checked', 'source-voice-audio-checked', 'source-video-checked', 'reply-video-fence-checked'] };
+          'source-image-checked', 'reply-image-fence-checked', 'source-voice-transcript-checked', 'source-voice-audio-checked', 'source-video-checked', 'reply-video-fence-checked', 'source-quote-checked'] };
     });
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, sourceImages = false, sourceVoiceTranscripts = false, sourceVoiceAudio = false, sourceVideos = false } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, sourceImages = false, sourceVoiceTranscripts = false, sourceVoiceAudio = false, sourceVideos = false, sourceQuotes = false } = {}) {
     return this.#withBotTransition(botId, async () => {
       const config = this.#configStore.get(botId);
       if (!config) throw weixinRefusal('unknown-bot');
       const account = await this.#deliveryAccount(config, signal);
       if (account.fingerprint !== expectedFingerprint) throw weixinRefusal('account-changed');
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, sourceImages, sourceVoiceTranscripts, sourceVoiceAudio, sourceVideos });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, sourceImages, sourceVoiceTranscripts, sourceVoiceAudio, sourceVideos, sourceQuotes });
       try {
         const saved = await this.#configStore.save({ ...config, consumerMode: 'external-consumer' });
         await this.#startRuntime(saved, await this.#resolveToken(saved.tokenRef));
@@ -680,6 +680,7 @@ export class WeixinController {
             sourceImages: this.#inboundConsumers.acceptsImages(config.botId),
             sourceVoiceTranscripts: this.#inboundConsumers.acceptsVoiceTranscripts(config.botId),
             sourceVoiceAudio: this.#inboundConsumers.acceptsVoiceAudio(config.botId),
+            sourceQuotes: this.#inboundConsumers.acceptsQuotes(config.botId),
             sourceVideos: this.#inboundConsumers.acceptsVideos(config.botId) });
           if (!event) return { accepted: true, ignored: true };
           await state.rememberExternalReplySource({ messageId: event.messageId, actorId: event.actor.id,

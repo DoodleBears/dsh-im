@@ -501,7 +501,7 @@ async function requestJson(fetchImpl, {
       // lexemes before numeric precision is lost; other protocol values keep
       // their original types (ret/errcode and timestamps are not message IDs).
       return JSON.parse(await response.text(), (key, value, context) => {
-        if ((key === 'message_id' || key === 'msg_id') && typeof value === 'number') {
+        if ((key === 'message_id' || key === 'msg_id' || key === 'svr_id') && typeof value === 'number') {
           if (!context?.source || !/^\d+$/.test(context.source)) {
             throw new TypeError('Invalid native Weixin message ID');
           }
