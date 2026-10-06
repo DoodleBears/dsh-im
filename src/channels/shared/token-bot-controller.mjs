@@ -280,7 +280,7 @@ export class TokenBotController {
     });
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, ordinaryText = false } = {}) {
     return this.#withBotTransition(botId, async () => {
       const config = this.#configStore.get(botId);
       if (!config) throw Object.assign(new Error('unknown-bot'), { code: 'unknown-bot' });
@@ -288,7 +288,9 @@ export class TokenBotController {
       if (account.fingerprint !== expectedFingerprint) throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
       if (sourceFiles && !this.#checkedDelivery?.capabilities?.includes('source-file-checked'))
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles });
+      if (ordinaryText && !this.#checkedDelivery?.capabilities?.includes('ordinary-text-consumer'))
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, ordinaryText });
       try {
         const saved = await this.#configStore.save({ ...config, consumerMode: 'external-consumer' });
         if (saved.consumerMode !== 'external-consumer') throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
@@ -475,7 +477,8 @@ export class TokenBotController {
     if (this.#closed) throw new Error(`${this.#descriptor.label} controller is closed`);
     const runtime = await atConnectionStage('runtime.prepare', () => this.#createRuntime({ botId: config.botId, config, token,
       ...(this.#checkedDelivery ? { externalConsumer: (event, signal) => this.#inboundConsumers.accept(config.botId, event, signal),
-        externalSourceFiles: () => this.#inboundConsumers.acceptsFiles(config.botId) } : {}) }));
+        externalSourceFiles: () => this.#inboundConsumers.acceptsFiles(config.botId),
+        externalOrdinaryText: () => this.#inboundConsumers.acceptsOrdinary(config.botId) } : {}) }));
     if (!runtime || typeof runtime.start !== 'function' || typeof runtime.stop !== 'function') {
       throw new TypeError(`createRuntime returned an invalid ${this.#descriptor.label} runtime`);
     }

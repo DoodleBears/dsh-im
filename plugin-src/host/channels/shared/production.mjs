@@ -158,7 +158,7 @@ export async function createTokenProductionController(ctx, config, internals, de
       botWorkspaceFor: (botId) => workspaces.workspaceFor(botId),
       defaultWorkspace,
     } : {}),
-    createRuntime: async ({ botId, config: botConfig, token, credential, createTransport, externalConsumer, externalSourceFiles }) => {
+    createRuntime: async ({ botId, config: botConfig, token, credential, createTransport, externalConsumer, externalSourceFiles, externalOrdinaryText }) => {
       const state = await stateFor(botId);
       await ensureWorkspace(botId, botConfig);
       const workspaceScope = createBotWorkspaceScope(harness, {
@@ -173,7 +173,7 @@ export async function createTokenProductionController(ctx, config, internals, de
         ...channelRuntimeOptions,
         config: botConfig,
         token,
-        ...(externalConsumer ? { externalConsumer, externalSourceFiles } : {}),
+        ...(externalConsumer ? { externalConsumer, externalSourceFiles, externalOrdinaryText } : {}),
         // The mailbox may authenticate with an OAuth pair instead of a password.
         ...(credential ? { credential } : {}),
         // A transport that rotates its tokens needs them written back.
