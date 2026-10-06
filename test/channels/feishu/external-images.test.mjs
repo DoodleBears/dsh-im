@@ -53,3 +53,20 @@ test('native posts retain verified group mentions and reject unsupported mixed e
   assert.equal(normalizeExternalMedia(source, identity).mentionedAccount, true);
   assert.throws(() => normalizeExternalMedia(payload('post', { content: [[{tag:'img',image_key:'one'}, {tag:'media',file_key:'unsupported'}]] }), identity), { code:'invalid-inbound' });
 });
+
+
+test('native file messages retain one exact file, unknown metadata, and checked original association', async () => {
+  const event = normalizeExternalMedia(payload('file', { file_key: 'original-file', file_name: '验收.txt' }), identity);
+  assert.equal(event.attachments.length, 1); assert.equal(event.attachments[0].name, '验收.txt');
+  assert.equal(event.attachments[0].sizeBytes, undefined); assert.equal(event.attachments[0].mediaType, undefined); assert.equal(event.contentParts, undefined);
+  let key = 'original-file'; let downloads = 0;
+  const client = { im: { v1: {
+    message: { get: async () => ({ data: { items: [{ message_id: 'message', chat_id: 'chat', msg_type: 'file', sender: { sender_type: 'user', id_type: 'open_id', id: 'human' }, body: { content: JSON.stringify({ file_key: key, file_name: '验收.txt' }) } }] } }) },
+    messageResource: { get: async input => { downloads++; assert.deepEqual(input.path, { message_id: 'message', file_key: 'original-file' }); assert.equal(input.params.type, 'file'); return { getReadableStream: () => Readable.from([Buffer.from('original bytes')]) }; } },
+  } } };
+  const ctx = { signal: new AbortController().signal, assertCurrent() {} };
+  const stream = await readExternalFile(client, event.reply, event.attachments[0], ctx); const chunks = []; for await (const c of stream) chunks.push(c);
+  assert.equal(Buffer.concat(chunks).toString(), 'original bytes'); key = 'changed';
+  await assert.rejects(readExternalFile(client, event.reply, event.attachments[0], ctx), { code: 'stale-route' }); assert.equal(downloads, 1);
+  assert.throws(() => normalizeExternalMedia(payload('file', { file_key: '', file_name: 'bad' }), identity), { code: 'invalid-inbound' });
+});

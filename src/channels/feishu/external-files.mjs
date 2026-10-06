@@ -19,6 +19,20 @@ export async function checkedReplySource(client, route, signal) {
   return source;
 }
 
+export function nativeFileContent(message, conversationId) {
+  if ((message.message_type ?? message.msg_type) !== 'file') return undefined;
+  let content;
+  try { content = JSON.parse(message.content ?? message.body?.content); } catch { throw failure('invalid-inbound'); }
+  const valid = value => typeof value === 'string' && value.length > 0 && value.length <= 512;
+  if (!valid(message.message_id) || !valid(conversationId) || !valid(content?.file_key) || !valid(content?.file_name)) throw failure('invalid-inbound');
+  const attachment = Object.freeze({
+    id: createHash('sha256').update(JSON.stringify([conversationId, message.message_id, content.file_key])).digest('hex'),
+    messageId: message.message_id, resourceKey: content.file_key, name: content.file_name,
+  });
+  // Native file messages contain one resource. No invented mixed-item order or MIME/size.
+  return { text: '[File] ' + attachment.name, attachments: [attachment] };
+}
+
 async function parentFile(client, route, signal) {
   if (!route.parentId || route.parentId === route.messageId) return undefined;
   signal?.throwIfAborted();
@@ -51,7 +65,7 @@ export async function readExternalFile(client, route, attachment, { signal, asse
   const ownImages = nativeImageContent(source, route.conversationId);
   const current = attachment.mediaType === 'image/unknown'
     ? ownImages?.attachments.find(item => item.id === attachment.id)
-    : await parentFile(client, route, signal);
+    : nativeFileContent(source, route.conversationId)?.attachments[0] ?? await parentFile(client, route, signal);
   if (!current || JSON.stringify(current) !== JSON.stringify(attachment)) throw failure('stale-route');
   assertCurrent();
   const resource = await client.im.v1.messageResource.get({
