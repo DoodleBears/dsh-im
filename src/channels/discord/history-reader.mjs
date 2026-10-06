@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { discordRefusal, inspectDiscordSourceChannel, normalizeDiscordHistoryText,
   verifiedDiscordAccount } from './external-consumer.mjs';
+import { createDiscordNearbyReader } from './nearby-history.mjs';
 
 const epoch = 1420070400000n;
 const coverage = 'provider-visible-human-text';
@@ -10,6 +11,7 @@ const snowflake = value => typeof value === 'string' && /^[1-9][0-9]{4,19}$/.tes
 
 /** Bounded native pages; runtime-local cursors contain IDs, never text or credentials. */
 export function createDiscordHistoryReader({ now = Date.now } = {}) {
+  const nearby = createDiscordNearbyReader({ now });
   const key = randomBytes(32);
   const sign = body => createHmac('sha256', key).update(body).digest('base64url');
   const encode = (binding, before) => {
@@ -38,9 +40,10 @@ export function createDiscordHistoryReader({ now = Date.now } = {}) {
     const checked = async operation => { check(); const result = await operation(); check(); return result; };
     try {
       check();
-      if (!query || !['group', 'thread'].includes(query.scope)
+      if (!query || !['group', 'thread', 'nearby'].includes(query.scope)
         || !Number.isInteger(query.limit) || query.limit < 1 || query.limit > 20
-        || query.beforeCount !== undefined || query.afterCount !== undefined)
+        || (query.scope !== 'nearby' && (query.beforeCount !== undefined || query.afterCount !== undefined))
+        || ![query.beforeCount ?? 10, query.afterCount ?? 5].every(n => Number.isInteger(n) && n >= 0 && n <= 20))
         throw discordRefusal('invalid-history-query');
       if (!route || !snowflake(route.messageId) || !snowflake(route.actorId)
         || !snowflake(route.conversationId) || route.rootId !== undefined || route.parentId !== undefined
@@ -50,10 +53,12 @@ export function createDiscordHistoryReader({ now = Date.now } = {}) {
         conversationId: route.conversationId, ...(route.threadId ? { threadId: route.threadId } : {}) };
       const binding = createHash('sha256').update(JSON.stringify({ botId: identity.botId,
         fingerprint: identity.account.fingerprint, route: sourceRoute,
-        scope: query.scope, limit: query.limit })).digest('hex');
-      const before = query.cursor === undefined
+        scope: query.scope, limit: query.limit,
+        ...(query.scope === 'nearby' ? { beforeCount: query.beforeCount ?? 10, afterCount: query.afterCount ?? 5 } : {}) })).digest('hex');
+      const state = query.scope === 'nearby' ? nearby.prepare(binding, route, query) : undefined;
+      const before = state ? undefined : query.cursor === undefined
         ? String((BigInt(now()) - epoch + 1n) << 22n) : decode(query.cursor, binding);
-      if (!snowflake(before)) throw discordRefusal('history-unavailable');
+      if (!state && !snowflake(before)) throw discordRefusal('history-unavailable');
       // HTTP content censorship is independent of the Gateway identify mask. Refuse even on
       // an empty/mention-only page when the native App cannot expose ordinary human content.
       const user = await checked(() => api.getCurrentUser({ signal }));
@@ -72,24 +77,42 @@ export function createDiscordHistoryReader({ now = Date.now } = {}) {
         || (source.guild_id !== undefined && source.guild_id !== sourceChannel.guildId)
         || source.author?.id !== route.actorId || source.author.bot === true || source.webhook_id
         || ![0, 19].includes(source.type)) throw discordRefusal('stale-route');
-      const channel = query.scope === 'thread' ? sourceChannel : await checked(() =>
+      const channel = query.scope === 'thread' || query.scope === 'nearby' ? sourceChannel : await checked(() =>
         inspectDiscordSourceChannel(api, route.conversationId, current, signal, { forHistory: true }));
       if (channel.guildId !== sourceChannel.guildId || channel.conversationId !== route.conversationId)
         throw discordRefusal('stale-route');
-      const messages = await checked(() => api.getMessages({ channelId: channel.channelId,
-        before, limit: query.limit, signal }));
-      if (!Array.isArray(messages) || messages.length > query.limit) throw discordRefusal('history-unavailable');
-      let last = before;
-      const events = [];
-      for (const message of messages) {
-        if (!snowflake(message?.id) || BigInt(message.id) >= BigInt(last)
-          || message.channel_id !== channel.channelId
-          || (message.guild_id !== undefined && message.guild_id !== channel.guildId))
-          throw discordRefusal('stale-route');
-        last = message.id;
-        const event = normalizeDiscordHistoryText({ ...message, guild_id: channel.guildId },
-          { ...identity, channel, eventId: `history:${channel.channelId}:${message.id}` });
-        if (event) events.push(event);
+      const validate = message => {
+        if (!snowflake(message?.id) || message.channel_id !== channel.channelId
+          || (message.guild_id !== undefined && message.guild_id !== channel.guildId)) throw discordRefusal('stale-route');
+      };
+      const normalize = message => { validate(message); return normalizeDiscordHistoryText({ ...message, guild_id: channel.guildId },
+        { ...identity, channel, eventId: `history:${channel.channelId}:${message.id}` }); };
+      const page = async (boundary, limit) => {
+        const messages = await checked(() => api.getMessages({ channelId: channel.channelId, before: boundary, limit, signal }));
+        if (!Array.isArray(messages) || messages.length > limit) throw discordRefusal('history-unavailable');
+        let last = boundary;
+        for (const message of messages) { validate(message);
+          if (BigInt(message.id) >= BigInt(last)) throw discordRefusal('stale-route');
+          last = message.id;
+        }
+        return messages;
+      };
+      let result;
+      if (state) result = await nearby.read({ binding, state, query, route, source, page, normalize,
+        message: async id => {
+          let value;
+          try { value = await checked(() => api.getMessage({ channelId: channel.channelId, messageId: id, signal })); }
+          catch (error) { if (error?.status === 404) return null; throw error; }
+          validate(value);
+          if (value.id !== id) throw discordRefusal('stale-route');
+          return value;
+        } });
+      else {
+        const messages = await page(before, query.limit);
+        const events = messages.map(normalize).filter(Boolean);
+        const hasMore = messages.length === query.limit;
+        result = { version: 1, scope: query.scope, events, omitted: messages.length - events.length,
+          hasMore, ...(hasMore ? { nextCursor: encode(binding, messages.at(-1).id) } : {}), coverage };
       }
       // Recheck permission after the HTTP page: Discord can return 200 with no messages
       // on loss of READ_MESSAGE_HISTORY, or censor content on loss of the App flag.
@@ -103,9 +126,7 @@ export function createDiscordHistoryReader({ now = Date.now } = {}) {
       if (finalChannel.guildId !== channel.guildId || finalChannel.conversationId !== channel.conversationId
         || finalChannel.threadId !== channel.threadId) throw discordRefusal('stale-route');
       check();
-      const hasMore = messages.length === query.limit;
-      return { version: 1, scope: query.scope, events, omitted: messages.length - events.length,
-        hasMore, ...(hasMore ? { nextCursor: encode(binding, last) } : {}), coverage };
+      return result;
     } catch (error) {
       check();
       if (['invalid-history-query', 'stale-route', 'account-changed', 'account-unverified',

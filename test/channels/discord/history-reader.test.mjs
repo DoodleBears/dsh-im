@@ -143,9 +143,9 @@ test('cancellation or runtime stop during the request cannot return content', as
   }
 });
 
-test('unsupported nearby, invalid bounds and missing thread do not issue native requests', async () => {
+test('invalid bounds and missing thread do not issue native requests', async () => {
   const f = fixture(); const reader = createDiscordHistoryReader();
-  for (const q of [{ ...query, scope: 'nearby' }, { ...query, limit: 21 },
+  for (const q of [{ ...query, scope: 'unknown' }, { ...query, limit: 21 },
     { ...query, beforeCount: 0 }, { ...query, cursor: '' }])
     await assert.rejects(read(reader, f, q), { code: 'invalid-history-query' });
   await assert.rejects(read(reader, f, { ...query, scope: 'thread' }), { code: 'thread-unavailable' });
