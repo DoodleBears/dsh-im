@@ -501,7 +501,7 @@ async function requestJson(fetchImpl, {
       // lexemes before numeric precision is lost; other protocol values keep
       // their original types (ret/errcode and timestamps are not message IDs).
       return JSON.parse(await response.text(), (key, value, context) => {
-        if ((key === 'message_id' || key === 'msg_id') && typeof value === 'number') {
+        if ((key === 'message_id' || key === 'msg_id' || key === 'svr_id') && typeof value === 'number') {
           if (!context?.source || !/^\d+$/.test(context.source)) {
             throw new TypeError('Invalid native Weixin message ID');
           }
@@ -666,6 +666,12 @@ export function createWeixinApi({ fetchImpl = fetch, uploadFetchImpl = fetchImpl
       return extractWeixinImages(message, { fetchImpl });
     },
 
+    inboundVideos(message) {
+      return extractWeixinFiles({ item_list: (message?.item_list ?? [])
+        .filter(item => item?.type === 5 && item.video_item?.media)
+        .map(item => ({ file_item: { media: item.video_item.media, file_name: 'video.mp4' } })) }, { fetchImpl });
+    },
+
     inboundVoice(message) {
       return extractWeixinFiles({ item_list: (message?.item_list ?? [])
         .filter(item => item?.type === 3 && item.voice_item?.media)
@@ -827,6 +833,15 @@ export function createWeixinApi({ fetchImpl = fetch, uploadFetchImpl = fetchImpl
             file_name: file.fileName,
             len: String(file.bytes.byteLength),
           },
+        }),
+      });
+    },
+
+    async sendVideo(request) {
+      return sendArtifact(request, {
+        mediaType: 2,
+        createItem: ({ media, ciphertextSize }) => ({
+          type: 5, video_item: { media, video_size: ciphertextSize },
         }),
       });
     },

@@ -1,4 +1,5 @@
 import { detectedImageMediaType } from '../shared/image-prompt.mjs';
+import { detectedVideoMediaType } from '../shared/video-media.mjs';
 import { weixinRefusal } from './external-consumer.mjs';
 
 export const WEIXIN_EXTERNAL_FILE_LIMIT = 25 * 1024 * 1024;
@@ -6,18 +7,19 @@ export const WEIXIN_EXTERNAL_FILE_LIMIT = 25 * 1024 * 1024;
 /** A source-scoped file ticket is private state, not a model-readable download URL. */
 export function privateWeixinFile(message, event) {
   if (!event.attachments?.length) return undefined;
-  const native = message.item_list.find(item => item.type === 4 || item.type === 2 || item.type === 3);
+  const native = message.item_list.find(item => item.type === 4 || item.type === 2 || item.type === 3 || item.type === 5);
   const image = native?.type === 2;
   const voice = native?.type === 3;
-  const file = voice ? native.voice_item : image ? native.image_item : native?.file_item;
+  const video = native?.type === 5;
+  const file = video ? native.video_item : voice ? native.voice_item : image ? native.image_item : native?.file_item;
   const media = file?.media;
   if (!media || typeof media !== 'object'
     || (!(image && typeof file.aeskey === 'string' && /^[a-fA-F0-9]{32}$/.test(file.aeskey))
       && (typeof media.aes_key !== 'string' || !media.aes_key || media.aes_key.length > 128))
     || ![media.encrypt_query_param, media.full_url].some(value => typeof value === 'string' && value.length > 0 && value.length <= 16384))
     throw weixinRefusal('resource-unavailable');
-  return { attachment: event.attachments[0], ...(voice ? { kind: 'voice' } : image ? { kind: 'image' } : {}), item: {
-    ...(image ? (typeof file.aeskey === 'string' ? { aeskey: file.aeskey } : {}) : { file_name: voice ? event.attachments[0].name : file.file_name }),
+  return { attachment: event.attachments[0], ...(video ? { kind: 'video' } : voice ? { kind: 'voice' } : image ? { kind: 'image' } : {}), item: {
+    ...(image ? (typeof file.aeskey === 'string' ? { aeskey: file.aeskey } : {}) : { file_name: video || voice ? event.attachments[0].name : file.file_name }),
     ...(file.len === undefined ? {} : { len: String(file.len) }),
     media: { aes_key: media.aes_key, encrypt_type: media.encrypt_type,
       ...(typeof media.encrypt_query_param === 'string' && media.encrypt_query_param.length <= 16384
@@ -35,7 +37,10 @@ export async function readWeixinExternalFile(api, source, attachment, { signal, 
   if (attachment.sizeBytes > WEIXIN_EXTERNAL_FILE_LIMIT) throw weixinRefusal('artifact-too-large');
   const image = saved.kind === 'image';
   const voice = saved.kind === 'voice';
-  const file = voice
+  const video = saved.kind === 'video';
+  const file = video
+    ? api.inboundVideos({ item_list: [{ type: 5, video_item: saved.item }] })[0]
+    : voice
     ? api.inboundVoice({ item_list: [{ type: 3, voice_item: saved.item }] })[0]
     : image
     ? api.inboundImages({ item_list: [{ type: 2, image_item: saved.item }] })[0]
@@ -59,7 +64,9 @@ export async function replyWeixinExternalFile(api, request, file, { signal, asse
   try {
     const image = typeof file.mediaType === 'string' && file.mediaType.startsWith('image/');
     if (image && file.mediaType !== detectedImageMediaType(file.bytes)) throw weixinRefusal('bad-request');
-    const send = image ? api.sendImage : api.sendFile;
+    const video = typeof file.mediaType === 'string' && file.mediaType.startsWith('video/');
+    if (video && file.mediaType !== detectedVideoMediaType(file.bytes)) throw weixinRefusal('bad-request');
+    const send = video ? api.sendVideo : image ? api.sendImage : api.sendFile;
     if (typeof send !== 'function') throw weixinRefusal('capability-unavailable');
     const result = await send({ ...request, signal,
       file: { artifactId: file.id, fileName: file.name, bytes: Buffer.from(file.bytes) },

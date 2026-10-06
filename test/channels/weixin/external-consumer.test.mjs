@@ -109,3 +109,23 @@ test('controller releases its transition before callbacks, and consumer disposal
   assert.equal(reloaded.get(config.botId).consumerMode, 'external-consumer');
   await controller.close();
 });
+
+test('native quote opt-in preserves server/item IDs, embedded body, summary and partial evidence without media secrets', () => {
+  const ref = { svr_id: '18446744073709551615', title: 'display summary',
+    message_item: { type: 1, msg_id: 'v1:18446744073709551614', text_item: { text: 'actual original' },
+      ref_msg: { title: 'nested quote is not copied' }, context_token: 'private' },
+    partial_text: { start: 'actual', end: 'original', startindex: 0, endindex: 15, quotemd5: 'native-digest' } };
+  const native = { ...message, item_list: [{ type: 1, text_item: { text: 'follow up' }, ref_msg: ref }] };
+  assert.equal(normalizeWeixinExternalText(native, { botId: config.botId, account }).quote, undefined);
+  const event = normalizeWeixinExternalText(native, { botId: config.botId, account, sourceQuotes: true });
+  assert.deepEqual(event.quote, { serverMessageId: ref.svr_id, itemId: ref.message_item.msg_id,
+    text: 'actual original', summary: 'display summary', partial: { start: 'actual', end: 'original', startIndex: 0, endIndex: 15, digest: 'native-digest' } });
+  assert.ok(!JSON.stringify(event).includes('private'));
+  assert.equal(event.reply.threadId, undefined);
+  assert.throws(() => normalizeWeixinExternalText({ ...native, item_list: [{ ...native.item_list[0], ref_msg: { svr_id: Number(ref.svr_id) } }] },
+    { botId: config.botId, account, sourceQuotes: true }), { code: 'invalid-inbound' });
+  const only = normalizeWeixinExternalText({ ...native, item_list: [{ ...native.item_list[0], ref_msg: { svr_id: ref.svr_id, title: 'summary only' } }] },
+    { botId: config.botId, account, sourceQuotes: true });
+  assert.equal(only.quote.text, undefined);
+  assert.equal(only.quote.summary, 'summary only');
+});
