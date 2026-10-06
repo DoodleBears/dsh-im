@@ -1446,3 +1446,33 @@ test('releasing the exclusive consumer cancels a pending history read', async ()
  const pending=fx.controller.historyChecked(existing.id,{}, {},options);await started;dispose();release();
  await assert.rejects(pending,{code:'consumer-unavailable'});await fx.controller.close();
 });
+
+
+test('checked live names reach a text-only consumer before durable acceptance', async () => {
+  const existing = bot('bot_named', 'named');
+  const fx = fixture({ bots: [existing], secrets: { [existing.secretRef]: 'local-secret' },
+    verifyApp: async () => ({ openId: existing.botOpenId, name: 'Verified' }) });
+  await fx.controller.initialize();
+  const info = await fx.controller.describeDeliveryAccount(existing.id);
+  const seen = [];
+  await fx.controller.consumeInbound(existing.id, { expectedFingerprint: info.account.fingerprint,
+    onEvent: async value => { seen.push(value); return { accepted: true }; } });
+  const runtime = fx.runtimes.get(existing.id).at(-1);
+  let lookups = 0;
+  runtime.enrichExternalNames = async evidence => {
+    lookups++; return { ...evidence, actor: { ...evidence.actor, name: 'Native QA Human' } };
+  };
+  runtime.enrichExternal = () => { throw new Error('file enrichment is not authorized'); };
+  const input = { event_id: 'event', app_id: existing.appId,
+    sender: { sender_type: 'user', sender_id: { open_id: 'human' } },
+    message: { message_id: 'message', chat_id: 'chat', chat_type: 'group', message_type: 'text',
+      mentions: [{ id: { open_id: existing.botOpenId }, key: '@_user_1', name: 'QA Bot' }],
+      create_time: '1790787600000', content: JSON.stringify({ text: '@_user_1 original' }) } };
+  await runtime.acceptExternal(input);
+  assert.equal(lookups, 1); assert.equal(seen.length, 1);
+  assert.equal(seen[0].actor.name, 'Native QA Human');
+  assert.equal(seen[0].actor.id, 'human'); assert.equal(seen[0].text, '@_user_1 original');
+  assert.equal(seen[0].fingerprint, info.account.fingerprint);
+  assert.equal(seen[0].mentionedAccount, true);
+  await fx.controller.close();
+});
