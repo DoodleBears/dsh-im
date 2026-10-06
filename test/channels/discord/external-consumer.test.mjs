@@ -9,7 +9,7 @@ import { ExclusiveInboundConsumers } from '../../../src/channels/shared/exclusiv
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { verifiedDiscordAccount, normalizeDiscordExternalText, discordChannelPermissions,
+import { verifiedDiscordAccount, discordMessageContentAllowed, normalizeDiscordExternalText, discordChannelPermissions,
   inspectDiscordSourceChannel, qualifyDiscordReply, sendDiscordReply } from '../../../src/channels/discord/external-consumer.mjs';
 
 const ids = { bot: '111111111111111111', app: '222222222222222222', guild: '333333333333333333',
@@ -176,13 +176,13 @@ test('controller persists exclusive ownership, refuses conflicting/lost consumer
   const path = join(directory, 'config.json'); const store = await new DiscordConfigStore(path).load();
   const refs = deriveDiscordBotIdentity(ids.bot); const values = new Map([[refs.tokenRef, 'test-token']]);
   await store.save({ ...refs, platformId: ids.bot, name: 'QA Bot' });
-  let callback; let fileOptIn; let starts = 0; const modes = [];
+  let callback; let fileOptIn; let ordinaryOptIn; let starts = 0; const modes = [];
   const controller = new DiscordController({ configStore: store,
     credentials: { resolve: async ref => values.has(ref) ? { value: values.get(ref) } : undefined,
       set: async (ref, value) => values.set(ref, value), unset: async ref => values.delete(ref) },
     createApi: () => identityApi, inspectToken: async () => ({ platformId: ids.bot, name: 'QA Bot' }),
-    createRuntime: async ({ config, externalConsumer, externalSourceFiles }) => {
-      callback = externalConsumer; fileOptIn = externalSourceFiles; modes.push(config.consumerMode);
+    createRuntime: async ({ config, externalConsumer, externalSourceFiles, externalOrdinaryText }) => {
+      callback = externalConsumer; fileOptIn = externalSourceFiles; ordinaryOptIn = externalOrdinaryText; modes.push(config.consumerMode);
       return { status: { ready: true }, start: async () => { starts++; }, stop: async () => {},
         qualifyReplyChecked: async route => route, replyChecked: async () => ({ sent: true }),
         externalFileChecked: async (route, file, { signal }) => (async function* () {
@@ -197,10 +197,12 @@ test('controller persists exclusive ownership, refuses conflicting/lost consumer
     assert.equal(description.account.fingerprint, account.fingerprint);
     assert.equal(description.capabilities.includes('history-text-checked'), true);
     assert.equal(description.capabilities.includes('thread-history-text-checked'), true);
+    assert.equal(description.capabilities.includes('ordinary-text-consumer'), true);
     const dispose = await controller.consumeInbound(refs.botId, { expectedFingerprint: account.fingerprint,
       onEvent: async () => ({ accepted: true }) });
     assert.equal(store.get(refs.botId).consumerMode, 'external-consumer');
     assert.equal(fileOptIn(), false);
+    assert.equal(ordinaryOptIn(), false);
     await assert.rejects(controller.externalFileChecked(refs.botId, {}, {}, { expectedFingerprint: account.fingerprint }), { code: 'capability-unavailable' });
     const route = { messageId: ids.message, actorId: ids.actor, conversationId: ids.channel };
     const query = { scope: 'group', limit: 2 };
@@ -215,13 +217,15 @@ test('controller persists exclusive ownership, refuses conflicting/lost consumer
     await assert.rejects(controller.replyChecked(refs.botId, {}, 'QA', { expectedFingerprint: account.fingerprint }), { code: 'consumer-unavailable' });
     await assert.rejects(controller.historyChecked(refs.botId, route, query,
       { expectedFingerprint: account.fingerprint }), { code: 'consumer-unavailable' });
-    const fileDispose = await controller.consumeInbound(refs.botId, { expectedFingerprint: account.fingerprint, sourceFiles: true,
+    const fileDispose = await controller.consumeInbound(refs.botId, { expectedFingerprint: account.fingerprint, sourceFiles: true, ordinaryText: true,
       onEvent: async () => ({ accepted: true }) });
     assert.equal(fileOptIn(), true);
+    assert.equal(ordinaryOptIn(), true);
     const stream = await controller.externalFileChecked(refs.botId, route, {}, { expectedFingerprint: account.fingerprint });
     const iterator = stream[Symbol.asyncIterator]();
     assert.equal(Buffer.from((await iterator.next()).value).toString(), 'first');
     fileDispose(); assert.equal(fileOptIn(), false);
+    assert.equal(ordinaryOptIn(), false);
     await assert.rejects(iterator.next(), { code: 'consumer-unavailable' });
     await controller.bindCredentials({ token: 'rotated-test-token' });
     assert.equal(modes.at(-1), 'external-consumer');
@@ -286,6 +290,114 @@ test('shared Token controller refuses file opt-in when another provider lacks th
     await assert.rejects(controller.consumeInbound('token-qa', { expectedFingerprint: account.fingerprint, sourceFiles: true,
       onEvent: async () => ({ accepted: true }) }), { code: 'capability-unavailable' });
     await assert.rejects(controller.externalFileChecked('token-qa', {}, {}, { expectedFingerprint: account.fingerprint }), { code: 'capability-unavailable' });
+    await assert.rejects(controller.consumeInbound('token-qa', { expectedFingerprint: account.fingerprint, ordinaryText: true,
+      onEvent: async () => ({ accepted: true }) }), { code: 'capability-unavailable' });
     assert.equal(starts, 0);
   } finally { await controller.close(); }
+});
+
+test('Message Content approval uses native exact flags and never infers permission from missing/malformed values', () => {
+  for (const bit of [18, 19]) {
+    assert.equal(discordMessageContentAllowed({ flags: 1 << bit }), true);
+    assert.equal(discordMessageContentAllowed({ flags: 0, flags_new: String((1n << 60n) | (1n << BigInt(bit))) }), true);
+  }
+  for (const app of [{}, { flags: 0 }, { flags: 1 << 15 }, { flags: -1 }, { flags: '524288' },
+    { flags: 1.1 }, { flags: 1 << 19, flags_new: 'bad' }, { flags_new: '-1' }, { flags_new: '0' }])
+    assert.equal(discordMessageContentAllowed(app), false);
+});
+
+function ordinaryRuntimeFixture({ enabled = true, optedIn = true, thread = true } = {}) {
+  const f = fixture(thread); let socket; let ordinary = optedIn; let applicationReads = 0;
+  const received = []; const failures = [];
+  let application = { id: ids.app, bot: { id: ids.bot, bot: true }, flags: enabled ? 1 << 19 : 0 };
+  const api = { ...f.api, ...identityApi, getGatewayBot: async () => ({ url: 'wss://gateway.discord.gg' }),
+    getCurrentApplication: async () => { applicationReads++; return application; } };
+  const runtime = new DiscordRuntime({ config: { botId: 'discord-qa', platformId: ids.bot, consumerMode: 'external-consumer' },
+    token: 'test-private-token', harness: { ensureRunning: async () => true, createSession: async () => assert.fail('standalone') }, state: {},
+    externalSourceFiles: () => true, externalOrdinaryText: () => ordinary,
+    externalConsumer: async (evidence, signal) => { signal.throwIfAborted(); received.push(evidence); return { accepted: true }; },
+    createApi: () => api,
+    createWebSocket: () => { socket = new Socket(); queueMicrotask(() => socket.packet({ op: 10, d: { heartbeat_interval: 45000 } })); return socket; },
+    logger: { warn(...args) { failures.push(args); }, error(...args) { failures.push(args); } }, connectTimeoutMs: 200 });
+  return { ...f, api, runtime, received, failures,
+    ordinaryMessage: { ...f.message, content: 'ordinary Human text', mentions: [] },
+    get intents() { return socket.sent[0].d.intents; },
+    get applicationReads() { return applicationReads; },
+    setOptIn(value) { ordinary = value; },
+    setApplication(value) { application = value; },
+    async dispatch(message) { socket.packet({ op: 0, t: 'MESSAGE_CREATE', s: 42, d: message }); await flush(); } };
+}
+
+test('ordinary Gateway requires consumer opt-in AND native approval; OFF retains mention replies without privileged intent', async () => {
+  for (const enabled of [false, true]) for (const optedIn of [false, true]) {
+    const f = ordinaryRuntimeFixture({ enabled, optedIn });
+    try {
+      await f.runtime.start();
+      assert.equal(f.intents, (1 << 0) | (1 << 9) | (enabled && optedIn ? 1 << 15 : 0));
+      await f.dispatch(f.ordinaryMessage);
+      assert.equal(f.received.length, enabled && optedIn ? 1 : 0);
+      if (f.received.length) {
+        assert.equal(f.received[0].mentionedAccount, false);
+        assert.equal(f.received[0].reply.threadId, ids.thread);
+        assert.equal(f.received[0].reply.conversationId, ids.channel);
+        assert.equal(f.received[0].actor.id, ids.actor);
+      }
+      await f.dispatch(f.message);
+      assert.equal(f.received.at(-1).mentionedAccount, true);
+      const receipt = await f.runtime.replyChecked(f.received.at(-1).reply, 'checked reply', { beforeSend: () => true, receipt: true });
+      assert.equal(receipt.receipt.messageId, ids.sent);
+      assert.equal(f.sends.length, 1);
+    } finally { await f.runtime.stop(); }
+  }
+});
+
+test('ordinary channel text omits attachment resources and does not admit bot/webhook/empty/unsupported Human events', async () => {
+  const f = ordinaryRuntimeFixture({ thread: false });
+  try {
+    await f.runtime.start();
+    await f.dispatch({ ...f.ordinaryMessage, attachments: [{ id: ids.sent, filename: 'ordinary.txt', size: 3, url: 'private-url' }] });
+    assert.equal(f.received.length, 1);
+    assert.equal(f.received[0].attachments, undefined);
+    assert.equal(f.received[0].reply.threadId, undefined);
+    assert.equal(JSON.stringify(f.received[0]).includes('private-url'), false);
+    for (const message of [{ ...f.ordinaryMessage, content: '' }, { ...f.ordinaryMessage, content: '  ' },
+      { ...f.ordinaryMessage, mentions: null }, { ...f.ordinaryMessage, author: { id: ids.bot, bot: true } },
+      { ...f.ordinaryMessage, author: { id: ids.bot } }, { ...f.ordinaryMessage, webhook_id: ids.actor },
+      { ...f.ordinaryMessage, type: 7 }, { ...f.ordinaryMessage, guild_id: undefined },
+      { ...f.ordinaryMessage, guild_id: ids.actor }, { ...f.ordinaryMessage, timestamp: 'invalid' }]) await f.dispatch(message);
+    assert.equal(f.received.length, 1);
+    f.parent.type = 12; await f.dispatch(f.ordinaryMessage); assert.equal(f.received.length, 1);
+    f.parent.type = 0; f.guild.roles[0].permissions = '0';
+    await f.dispatch(f.ordinaryMessage); assert.equal(f.received.length, 1);
+  } finally { await f.runtime.stop(); }
+});
+
+test('native revocation/identity change and consumer opt-out stop ordinary intake with no fallback', async () => {
+  const f = ordinaryRuntimeFixture();
+  try {
+    await f.runtime.start();
+    f.setApplication({ id: ids.app, bot: { id: ids.bot }, flags: 0 });
+    await f.dispatch(f.ordinaryMessage); assert.equal(f.received.length, 0);
+    f.setApplication({ id: ids.actor, bot: { id: ids.bot }, flags: 1 << 19 });
+    await f.dispatch(f.ordinaryMessage); assert.equal(f.received.length, 0);
+    assert.ok(f.failures.some(row => row.some(value => String(value).includes('account-changed'))));
+    f.setApplication({ id: ids.app, bot: { id: ids.bot }, flags: 1 << 19 });
+    f.setOptIn(false); const reads = f.applicationReads;
+    await f.dispatch(f.ordinaryMessage); assert.equal(f.received.length, 0); assert.equal(f.applicationReads, reads);
+    f.setOptIn(true); const original = f.api.getChannel;
+    f.api.getChannel = async args => { const channel = await original(args); f.setOptIn(false); return channel; };
+    await f.dispatch(f.ordinaryMessage); assert.equal(f.received.length, 0);
+  } finally { await f.runtime.stop(); }
+});
+
+test('ordinary native preflight cancelled by runtime disposal never reaches the exclusive consumer', async () => {
+  const f = ordinaryRuntimeFixture(); let unblock; let started;
+  const entered = new Promise(resolve => { started = resolve; });
+  try {
+    await f.runtime.start();
+    f.api.getCurrentApplication = async () => { started(); return new Promise(resolve => { unblock = resolve; }); };
+    await f.dispatch(f.ordinaryMessage); await entered;
+    await f.runtime.stop(); unblock({ id: ids.app, bot: { id: ids.bot }, flags: 1 << 19 }); await flush();
+    assert.equal(f.received.length, 0);
+  } finally { await f.runtime.stop(); }
 });

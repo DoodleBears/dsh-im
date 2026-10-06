@@ -92,8 +92,20 @@ export async function inspectDiscordSourceChannel(api, channelId, account, signa
   } catch (error) { throw nativeFailure(error, 'source-not-found'); }
 }
 
-export function normalizeDiscordExternalText(message, { botId, account, channel, eventId }) {
-  return normalizeDiscordHumanText(message, { botId, account, channel, eventId }, true);
+export function discordMessageContentAllowed(application) {
+  let flags;
+  if (application?.flags_new !== undefined) {
+    if (typeof application.flags_new !== 'string' || !/^[0-9]{1,128}$/.test(application.flags_new)) return false;
+    flags = BigInt(application.flags_new);
+  } else {
+    if (!Number.isSafeInteger(application?.flags) || application.flags < 0) return false;
+    flags = BigInt(application.flags);
+  }
+  return (flags & ((1n << 18n) | (1n << 19n))) !== 0n;
+}
+
+export function normalizeDiscordExternalText(message, { botId, account, channel, eventId, ordinaryText = false }) {
+  return normalizeDiscordHumanText(message, { botId, account, channel, eventId }, ordinaryText !== true);
 }
 
 /** History visibility never relaxes the mention-only live admission predicate. */
