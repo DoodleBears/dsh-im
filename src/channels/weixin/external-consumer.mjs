@@ -60,7 +60,7 @@ export function normalizeWeixinExternalText(message, { botId, account, sourceFil
     }
     if (files[0].msg_id !== undefined && !id(files[0].msg_id)) throw weixinRefusal('invalid-inbound');
     video = Object.freeze({
-      ...(nativeVideo.video_size === undefined ? {} : { ciphertextSizeBytes: nativeVideo.video_size }),
+      ...(nativeVideo.video_size === undefined ? {} : { reportedSizeBytes: nativeVideo.video_size }),
       ...(nativeVideo.play_length === undefined ? {} : { playLength: nativeVideo.play_length }),
       ...(files[0].msg_id === undefined ? {} : { itemId: files[0].msg_id }),
     });

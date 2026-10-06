@@ -19,7 +19,7 @@ test('native video opt-in preserves safe metadata without inventing plaintext si
   assert.equal(event.text, '[Video]');
   assert.equal(event.attachments[0].mediaType, 'video/unknown');
   assert.equal(event.attachments[0].sizeBytes, undefined);
-  assert.deepEqual(event.video, { ciphertextSizeBytes: 48, playLength: 7000, itemId: 'native-item' });
+  assert.deepEqual(event.video, { reportedSizeBytes: 48, playLength: 7000, itemId: 'native-item' });
   for (const value of ['private-context', 'private-ticket', 'private-thumb', key.toString('base64')]) assert.ok(!JSON.stringify(event).includes(value));
   assert.equal(eventOf({ ...message, from_user_id: 'stranger' }), null);
   assert.equal(eventOf({ ...message, group_id: 'group' }), null);
@@ -28,7 +28,7 @@ test('native video opt-in preserves safe metadata without inventing plaintext si
   assert.equal(eventOf({ ...message, message_state: 1 }), null);
 });
 
-test('video decryption uses the private source and current fence, not ciphertext size as plaintext size', async () => {
+test('video decryption uses the private source and current fence, not reported size as actual size', async () => {
   const event = eventOf(); const source = { file: privateWeixinFile(message, event) };
   const cipher = createCipheriv('aes-128-ecb', key, null);
   const encrypted = Buffer.concat([cipher.update(mp4), cipher.final()]);
