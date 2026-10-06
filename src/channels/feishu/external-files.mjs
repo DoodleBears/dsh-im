@@ -1,3 +1,4 @@
+import { nativeImageContent } from './external-images.mjs';
 import { createHash } from 'node:crypto';
 import { VerifiedFeishuChannel } from './feishu-channel.mjs';
 
@@ -40,18 +41,21 @@ async function parentFile(client, route, signal) {
 }
 
 export async function externalAttachments(client, evidence, signal) {
-  if (!evidence.mentionedAccount || !evidence.reply.parentId) return evidence;
+  if (evidence.attachments?.length || !evidence.mentionedAccount || !evidence.reply.parentId) return evidence;
   const file = await parentFile(client, evidence.reply, signal);
   return file ? Object.freeze({ ...evidence, attachments: Object.freeze([file]) }) : evidence;
 }
 
 export async function readExternalFile(client, route, attachment, { signal, assertCurrent }) {
-  await checkedReplySource(client, route, signal);
-  const current = await parentFile(client, route, signal);
+  const source = await checkedReplySource(client, route, signal);
+  const ownImages = nativeImageContent(source, route.conversationId);
+  const current = attachment.mediaType === 'image/unknown'
+    ? ownImages?.attachments.find(item => item.id === attachment.id)
+    : await parentFile(client, route, signal);
   if (!current || JSON.stringify(current) !== JSON.stringify(attachment)) throw failure('stale-route');
   assertCurrent();
   const resource = await client.im.v1.messageResource.get({
-    path: { message_id: current.messageId, file_key: current.resourceKey }, params: { type: 'file' },
+    path: { message_id: current.messageId, file_key: current.resourceKey }, params: { type: current.mediaType === 'image/unknown' ? 'image' : 'file' },
   });
   signal?.throwIfAborted();
   assertCurrent();

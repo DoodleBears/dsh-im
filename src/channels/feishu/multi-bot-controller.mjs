@@ -1,4 +1,4 @@
-import { ExclusiveInboundConsumers, normalizeExternalText, normalizeOwnTextEcho } from './external-consumer.mjs';
+import { ExclusiveInboundConsumers, normalizeExternalMedia, normalizeOwnTextEcho } from './external-consumer.mjs';
 import { atConnectionStage, createConnectionDiagnostics } from '../shared/connection-error.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { connectionTestMessage } from '../shared/connection-test.mjs';
@@ -593,7 +593,7 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'feishu', account,
         connected: isConnected(connectionStatus(this.#runtimes.get(botId))),
-        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'source-image-checked', 'reply-file-checked'] };
     });
   }
 
@@ -1464,8 +1464,9 @@ export class MultiBotDshFeishuController {
         signal?.throwIfAborted();
         const echo = normalizeOwnTextEcho(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
         if (echo) return this.#inboundConsumers.accept(config.id, echo, signal, true);
-        const evidence = normalizeExternalText(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
+        const evidence = normalizeExternalMedia(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
         if (evidence === null) return { accepted: true, ignored: true };
+        if (evidence.attachments?.length && !this.#inboundConsumers.acceptsImages(config.id)) return { accepted: true, ignored: true };
         const enriched = this.#inboundConsumers.acceptsFiles(config.id) && typeof runtime.enrichExternal === 'function' ? await runtime.enrichExternal(evidence, { signal }) : evidence;
         return this.#inboundConsumers.accept(config.id, enriched, signal);
       }),
