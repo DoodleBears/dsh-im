@@ -170,6 +170,32 @@ test('QQ sends quote context to Harness but does not execute quoted commands', a
   assert.deepEqual(prompt.at(-1), { type: 'text', text: '这条指令是什么意思？' });
 });
 
+test('QQ executes plain /clear through the fast command path and preserves its Session binding', async () => {
+  const fixture = stateFixture([['c2c:owner-openid', 'session-clear']]);
+  const sent = [];
+  const calls = [];
+  const bridge = new QqHarnessBridge({
+    bot: { sendText: async (_target, text) => sent.push(text) },
+    ownerUserOpenid: 'owner-openid',
+    harness: {
+      executeCommand: async (...args) => {
+        calls.push(args);
+        return { commandId: 'clear-qq', result: { kind: 'success' } };
+      },
+      ask: async () => assert.fail('plain /clear must not reach the model'),
+    },
+    state: fixture.state,
+  });
+
+  await bridge.accept(message({ messageId: 'qq-clear-fast', content: '/clear' }));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'session-clear');
+  assert.equal(calls[0][1], '/clear');
+  assert.match(sent[0], /上下文已清空/);
+  assert.equal(fixture.state.sessionFor('c2c:owner-openid'), 'session-clear');
+});
+
 async function committedArtifact(t, fileName, content, suffix) {
   const workspace = await mkdtemp(join(tmpdir(), `dsh-im-qq-artifact-${suffix}-`));
   t.after(() => rm(workspace, { recursive: true, force: true }));

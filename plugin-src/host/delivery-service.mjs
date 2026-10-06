@@ -35,6 +35,17 @@ const DELIVERY_ERROR_CODES = new Set([
   'send-result-unknown',
   'session-sync-unavailable',
   'cancelled',
+  'provider-unavailable',
+  'consumer-unavailable',
+  'consumer-conflict',
+  'ingress-not-accepted',
+  'invalid-inbound',
+  'stale-route',
+  'reply-result-unknown',
+  'history-permission-denied',
+  'history-unavailable',
+  'thread-unavailable',
+  'untrusted-source',
 ]);
 
 const SESSION_SYNC_METHODS = Object.freeze([
@@ -134,11 +145,13 @@ export class DeliveryService {
 
   registerAdapter(value) {
     const adapter = validateAdapter(value);
-    const registration = Object.freeze({ adapter });
+    this.#adapters.get(adapter.channel)?.controller.abort(deliveryError('provider-unavailable'));
+    const registration = Object.freeze({ adapter, controller: new AbortController() });
     this.#adapters.set(adapter.channel, registration);
     return () => {
       if (this.#adapters.get(adapter.channel) !== registration) return false;
       this.#adapters.delete(adapter.channel);
+      registration.controller.abort(deliveryError('provider-unavailable'));
       return true;
     };
   }
@@ -368,6 +381,64 @@ export class DeliveryService {
       this.#assertRegistered(registration);
       return account;
     } catch (error) { throw publicOperationError(error); }
+  }
+
+  async consumeInbound(botId, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '') || typeof options.onEvent !== 'function')
+      throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (typeof registration.adapter.consumeInbound !== 'function' || typeof options.onEvent !== 'function')
+      throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    const dispose = await registration.adapter.consumeInbound(id, {
+      ...options,
+      signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal,
+      onEvent: async (evidence, context) => {
+        this.#assertRegistered(registration);
+        const result = await options.onEvent(evidence, context);
+        this.#assertRegistered(registration);
+        return result;
+      },
+    });
+    try { this.#assertRegistered(registration); } catch (error) { dispose(); throw error; }
+    return dispose;
+  }
+
+  async historyChecked(botId, route, query, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')) throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (typeof registration.adapter.historyChecked !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    const signal = options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal;
+    try {
+      const result = await registration.adapter.historyChecked(id, structuredClone(route), structuredClone(query), { ...options, signal });
+      this.#assertRegistered(registration);
+      cancellation(options.signal);
+      return result;
+    } catch (error) {
+      this.#assertRegistered(registration);
+      if (signal.aborted || error?.name === 'AbortError') throw deliveryError('cancelled');
+      throw publicOperationError(error, 'history-unavailable');
+    }
+  }
+
+  async replyChecked(botId, route, text, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')
+      || typeof text !== 'string' || !text.trim() || text.length > 4000)
+      throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (typeof registration.adapter.replyChecked !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    try { return await registration.adapter.replyChecked(id, structuredClone(route), text, {
+      ...options, signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal,
+    }); }
+    catch (error) { throw publicOperationError(error); }
   }
 
   async sendChecked(botId, targetId, text, { expectedFingerprint, expectedTargetDigest, signal, format = 'plain', receipt = false } = {}) {

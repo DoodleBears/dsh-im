@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PluginConfigStore } from '../../../src/channels/feishu/plugin-config-store.mjs';
 import { MultiBotDshFeishuController } from '../../../src/channels/feishu/multi-bot-controller.mjs';
 import { normalizeFeishuVoiceConfig } from '../../../src/channels/feishu/voice-config.mjs';
 
@@ -49,6 +53,7 @@ function bot(id, suffix = id) {
 
 function fixture({
   bots = [],
+  configStore: suppliedStore,
   secrets = {},
   createBotIds = [],
   failResolveRefs = new Set(),
@@ -59,7 +64,7 @@ function fixture({
   credentialSet,
   deleteState,
 } = {}) {
-  const configStore = new MemoryConfigStore(bots);
+  const configStore = suppliedStore ?? new MemoryConfigStore(bots);
   const values = new Map(Object.entries(secrets));
   const unsetCalls = [];
   const registrationRuns = [];
@@ -95,7 +100,8 @@ function fixture({
       },
     },
     configStore,
-    createRuntime: async ({ botId, config, appSecret, repair }) => {
+    createRuntime: async ({ botId, config, appSecret, repair, acceptExternal }) => {
+      const lifetime = new AbortController();
       const status = {
         ready: false,
         feishuLongConnectionState: 'idle',
@@ -113,6 +119,7 @@ function fixture({
         responseModes: [],
         voiceCalls: [],
         repair,
+        acceptExternal: (event, { signal } = {}) => acceptExternal(event, { signal: signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal }),
         get status() { return structuredClone(status); },
         async start() {
           runtime.starts += 1;
@@ -122,6 +129,7 @@ function fixture({
           status.harnessReachable = true;
         },
         async stop() {
+          lifetime.abort(Object.assign(new Error('runtime-stopped'), { code: 'consumer-unavailable' }));
           runtime.stops += 1;
           status.ready = false;
           status.feishuLongConnectionState = 'idle';
@@ -1343,4 +1351,251 @@ test('delivery account fingerprint is authenticated and checked inside the sendi
   fx.values.delete(existing.secretRef);
   await assert.rejects(fx.controller.describeDeliveryAccount(existing.id), {code: 'account-unverified'});
   await fx.controller.close();
+});
+
+
+test('external account consumption persists exclusive mode and never restores standalone after consumer loss or restart', async () => {
+  const existing = bot('bot_external', 'external');
+  const options = { bots: [existing], secrets: { [existing.secretRef]: 'local-secret' },
+    verifyApp: async () => ({ openId: existing.botOpenId, name: 'Verified' }) };
+  const fx = fixture(options);
+  await fx.controller.initialize();
+  const info = await fx.controller.describeDeliveryAccount(existing.id);
+  let calls = 0;
+  const dispose = await fx.controller.consumeInbound(existing.id, {
+    expectedFingerprint: info.account.fingerprint,
+    onEvent: async evidence => { calls++; assert.equal(evidence.fingerprint, info.account.fingerprint); assert.equal(evidence.conversation.kind, 'group'); assert.equal(evidence.mentionedAccount, true); return { accepted: true }; },
+  });
+  const runtime = fx.runtimes.get(existing.id).at(-1);
+  assert.equal(runtime.config.consumerMode, 'external-consumer');
+  const input = { event_id: 'event', app_id: existing.appId,
+    sender: { sender_type: 'user', sender_id: { open_id: 'human' } },
+    message: { message_id: 'message', chat_id: 'chat', chat_type: 'group', message_type: 'text',
+      mentions: [{ id: { open_id: existing.botOpenId }, key: '@_user_1' }],
+      thread_id: 'work-topic', root_id: 'root', parent_id: 'parent',
+      create_time: '1790787600000', content: JSON.stringify({ text: 'hello' }) } };
+  await runtime.acceptExternal(input);
+  assert.equal(calls, 1);
+  await assert.rejects(fx.controller.consumeInbound(existing.id, {
+    expectedFingerprint: info.account.fingerprint, onEvent: async () => ({ accepted: true }),
+  }), { code: 'consumer-conflict' });
+  dispose();
+  await assert.rejects(runtime.acceptExternal(input), { code: 'consumer-unavailable' });
+  assert.equal(fx.configStore.getBot(existing.id).consumerMode, 'external-consumer');
+  await fx.controller.close();
+  const restarted = fixture({ ...options, bots: fx.configStore.list() });
+  await restarted.controller.initialize();
+  const restoredRuntime = restarted.runtimes.get(existing.id).at(-1);
+  assert.equal(restoredRuntime.config.consumerMode, 'external-consumer');
+  await assert.rejects(restoredRuntime.acceptExternal(input), { code: 'consumer-unavailable' });
+  await restarted.controller.close();
+});
+
+
+for (const operation of ['consumeInbound', 'replyChecked', 'historyChecked']) {
+  test(`${operation} refuses a Host close during account verification before changing mode or sending`, async () => {
+    const existing = bot('bot_closing_checked', 'closing_checked');
+    let entered;
+    const verifying = new Promise(resolve => { entered = resolve; });
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let blocked = false;
+    const fx = fixture({ bots: [existing], secrets: { [existing.secretRef]: 'local-secret' },
+      verifyApp: async () => {
+        if (blocked) { entered(); await gate; }
+        return { openId: existing.botOpenId };
+      } });
+    await fx.controller.initialize();
+    const info = await fx.controller.describeDeliveryAccount(existing.id);
+    blocked = true;
+    const options = { expectedFingerprint: info.account.fingerprint,
+      onEvent: async () => ({ accepted: true }) };
+    const pending = operation === 'consumeInbound'
+      ? fx.controller.consumeInbound(existing.id, options)
+      : operation === 'replyChecked' ? fx.controller.replyChecked(existing.id, {}, 'hello', options)
+      : fx.controller.historyChecked(existing.id, {}, {}, options);
+    const refused = assert.rejects(pending, { code: 'capability-unavailable' });
+    await verifying;
+    const closing = fx.controller.close();
+    release();
+    await refused;
+    await closing;
+    assert.equal(fx.configStore.getBot(existing.id).consumerMode, undefined);
+    assert.equal(fx.runtimes.get(existing.id).length, 1);
+    assert.equal(fx.controller.status().totals.connected, 0);
+  });
+}
+
+test('history requires current verified account and live exclusive consumer lease', async () => {
+ const existing=bot('bot_history');
+ const fx=fixture({bots:[existing],secrets:{[existing.secretRef]:'local-secret'},verifyApp:async()=>({openId:existing.botOpenId})});
+ await fx.controller.initialize();
+ const account=await fx.controller.describeDeliveryAccount(existing.id);
+ assert.ok(account.capabilities.includes('history-text-checked'));
+ const options={expectedFingerprint:account.account.fingerprint};
+ await assert.rejects(fx.controller.historyChecked(existing.id,{}, {},options),{code:'capability-unavailable'});
+ const dispose=await fx.controller.consumeInbound(existing.id,{...options,onEvent:async()=>({accepted:true})});
+ const runtime=fx.runtimes.get(existing.id).at(-1);let calls=0;
+ runtime.historyChecked=async(identity,route,query,context)=>{calls++;assert.equal(identity.fingerprint,options.expectedFingerprint);context.signal.throwIfAborted();return {events:[]};};
+ assert.deepEqual(await fx.controller.historyChecked(existing.id,{}, {},options),{events:[]});
+ await assert.rejects(fx.controller.historyChecked(existing.id,{}, {},{expectedFingerprint:'b'.repeat(64)}),{code:'account-changed'});
+ dispose();await assert.rejects(fx.controller.historyChecked(existing.id,{}, {},options),{code:'consumer-unavailable'});
+ assert.equal(calls,1);await fx.controller.close();
+});
+
+test('releasing the exclusive consumer cancels a pending history read', async () => {
+ const existing=bot('bot_history_release');
+ const fx=fixture({bots:[existing],secrets:{[existing.secretRef]:'local-secret'},verifyApp:async()=>({openId:existing.botOpenId})});
+ await fx.controller.initialize();const account=await fx.controller.describeDeliveryAccount(existing.id);
+ const options={expectedFingerprint:account.account.fingerprint};
+ const dispose=await fx.controller.consumeInbound(existing.id,{...options,onEvent:async()=>({accepted:true})});
+ let entered,release;const started=new Promise(resolve=>{entered=resolve;});const gate=new Promise(resolve=>{release=resolve;});
+ fx.runtimes.get(existing.id).at(-1).historyChecked=async()=>{entered();await gate;return {events:['must not escape']};};
+ const pending=fx.controller.historyChecked(existing.id,{}, {},options);await started;dispose();release();
+ await assert.rejects(pending,{code:'consumer-unavailable'});await fx.controller.close();
+});
+
+
+test('external callback awaits checked history without deadlocking acknowledgement or later operations', async () => {
+  const existing = bot('bot_nested_history', 'nested_history');
+  const fx = fixture({ bots: [existing], secrets: { [existing.secretRef]: 'fixture-secret' },
+    verifyApp: async () => ({ openId: existing.botOpenId }) });
+  await fx.controller.initialize();
+  const account = await fx.controller.describeDeliveryAccount(existing.id);
+  let reads = 0;
+  const dispose = await fx.controller.consumeInbound(existing.id, { expectedFingerprint: account.account.fingerprint,
+    onEvent: async (event, { signal }) => {
+      const page = await fx.controller.historyChecked(existing.id, event.reply, { scope: 'thread', limit: 1 },
+        { expectedFingerprint: account.account.fingerprint, signal });
+      assert.equal(page.events[0].text, 'context'); return { accepted: true };
+    } });
+  const runtime = fx.runtimes.get(existing.id).at(-1);
+  runtime.historyChecked = async (_, route, __, { signal }) => {
+    signal.throwIfAborted(); reads++; assert.equal(route.threadId, 'topic');
+    return { events: [{ text: 'context' }] };
+  };
+  const incoming = runtime.acceptExternal({ event_id: 'event', app_id: existing.appId,
+    sender: { sender_type: 'user', sender_id: { open_id: 'human' } },
+    message: { message_id: 'source', chat_id: 'group', chat_type: 'group', message_type: 'text', thread_id: 'topic',
+      create_time: '1790787600000', content: JSON.stringify({ text: 'read context' }) } });
+  let timer;
+  try {
+    await Promise.race([incoming, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('callback history deadlocked')), 300); })]);
+    assert.equal(reads, 1);
+    await fx.controller.disconnectBot(existing.id);
+    assert.equal(fx.controller.status().totals.connected, 0);
+  } finally {
+    clearTimeout(timer); dispose(); await incoming.catch(() => {}); await fx.controller.close();
+  }
+});
+
+
+function externalInput(existing) {
+  return { event_id: 'external-event', app_id: existing.appId,
+    sender: { sender_type: 'user', sender_id: { open_id: 'human' } },
+    message: { message_id: 'external-message', chat_id: 'group', chat_type: 'group', message_type: 'text',
+      thread_id: 'topic', root_id: 'root', parent_id: 'parent',
+      mentions: [{ id: { open_id: existing.botOpenId }, key: '@_user_1' }],
+      create_time: '1790787600000', content: JSON.stringify({ text: 'hello' }) } };
+}
+
+async function persistentExternalFixture(t, overrides = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-external-regression-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const existing = bot('bot_external_feedback', 'external_feedback');
+  const store = await new PluginConfigStore(join(directory, 'config.json')).load();
+  await store.saveBot(existing);
+  const fx = fixture({ configStore: store, secrets: { [existing.secretRef]: 'fixture-secret' },
+    verifyApp: async () => ({ openId: existing.botOpenId, name: 'Verified' }), ...overrides });
+  await fx.controller.initialize();
+  t.after(() => fx.controller.close());
+  const info = await fx.controller.describeDeliveryAccount(existing.id);
+  return { ...fx, existing, fingerprint: info.account.fingerprint };
+}
+
+function deferred() {
+  let resolve; const promise = new Promise(r => { resolve = r; });
+  return { promise, resolve };
+}
+const bounded = async (promise, message) => {
+  let timer;
+  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), 300); })]); }
+  finally { clearTimeout(timer); }
+};
+
+test('external takeover survives an overlapping credential rebind in the durable config and replacement runtime', async t => {
+  const writing = deferred(), release = deferred();
+  const fx = await persistentExternalFixture(t, { credentialSet: async ({ ref, value, values }) => {
+    writing.resolve(); await release.promise; values.set(ref, value);
+  } });
+  const binding = fx.controller.bindCredentials({ appId: fx.existing.appId, appSecret: 'new-fixture-secret' });
+  await writing.promise;
+  let calls = 0;
+  const takeover = fx.controller.consumeInbound(fx.existing.id, { expectedFingerprint: fx.fingerprint,
+    onEvent: async () => { calls++; return { accepted: true }; } });
+  // Old code can finish takeover before the earlier bind; corrected serialization
+  // waits for bind. Exercise either ordering without leaving a blocked test behind.
+  await bounded(takeover, 'takeover serialized behind credential save').catch(() => {});
+  release.resolve();
+  const [, dispose] = await Promise.all([binding, takeover]);
+  t.after(dispose);
+  assert.equal(fx.configStore.getBot(fx.existing.id).consumerMode, 'external-consumer');
+  const runtime = fx.runtimes.get(fx.existing.id).at(-1);
+  assert.equal(runtime.config.consumerMode, 'external-consumer');
+  await runtime.acceptExternal(externalInput(fx.existing));
+  assert.equal(calls, 1);
+});
+
+test('external intake survives presentation settings but still refuses changed identity and ownership', async t => {
+  const fx = await persistentExternalFixture(t);
+  let calls = 0;
+  const dispose = await fx.controller.consumeInbound(fx.existing.id, { expectedFingerprint: fx.fingerprint,
+    onEvent: async () => { calls++; return { accepted: true }; } });
+  t.after(dispose);
+  const runtime = fx.runtimes.get(fx.existing.id).at(-1);
+  await runtime.acceptExternal(externalInput(fx.existing));
+  await fx.controller.updateStepPush(fx.existing.id, true);
+  await runtime.acceptExternal(externalInput(fx.existing));
+  assert.equal(calls, 2);
+  await fx.configStore.saveBot({ ...fx.configStore.getBot(fx.existing.id), ownerOpenIds: ['another-owner'] });
+  await assert.rejects(runtime.acceptExternal(externalInput(fx.existing)), { code: 'account-changed' });
+  assert.equal(calls, 2);
+});
+
+test('disconnect cancels an outstanding consumer callback before waiting for application work', async t => {
+  const fx = await persistentExternalFixture(t);
+  const entered = deferred(), completed = deferred(), aborted = deferred();
+  const dispose = await fx.controller.consumeInbound(fx.existing.id, { expectedFingerprint: fx.fingerprint,
+    onEvent: async (_, { signal }) => {
+      signal.addEventListener('abort', () => { aborted.resolve(); completed.resolve(); }, { once: true });
+      entered.resolve(); await completed.promise; return { accepted: true };
+    } });
+  t.after(dispose);
+  const runtime = fx.runtimes.get(fx.existing.id).at(-1);
+  const incoming = runtime.acceptExternal(externalInput(fx.existing));
+  const refused = assert.rejects(incoming, { code: 'consumer-unavailable' });
+  await entered.promise;
+  const disconnect = fx.controller.disconnectBot(fx.existing.id);
+  try { await bounded(aborted.promise, 'disconnect did not cancel callback'); }
+  finally { completed.resolve(); await disconnect; await Promise.allSettled([refused]); }
+  assert.equal(fx.controller.status().totals.connected, 0);
+  assert.equal(fx.configStore.getBot(fx.existing.id).consumerMode, 'external-consumer');
+});
+
+
+test('external callback can await a checked original-route reply without owning the bot queue', async t => {
+  const fx = await persistentExternalFixture(t);
+  let calls = 0;
+  const dispose = await fx.controller.consumeInbound(fx.existing.id, { expectedFingerprint: fx.fingerprint,
+    onEvent: async (event, { signal }) => {
+      await fx.controller.replyChecked(fx.existing.id, event.reply, 'ack', { expectedFingerprint: fx.fingerprint, signal });
+      return { accepted: true };
+    } });
+  t.after(dispose);
+  const runtime = fx.runtimes.get(fx.existing.id).at(-1);
+  runtime.replyChecked = async route => { calls++; assert.equal(route.messageId, 'external-message'); return { sent: true }; };
+  const incoming = runtime.acceptExternal(externalInput(fx.existing));
+  try { await bounded(incoming, 'callback checked reply deadlocked'); }
+  finally { dispose(); await incoming.catch(() => {}); }
+  assert.equal(calls, 1);
 });

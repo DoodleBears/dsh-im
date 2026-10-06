@@ -601,6 +601,7 @@ export class QqHarnessBridge {
     }
     const commandRunner = explicitMenu || numericMenu
       ? () => this.#runMenuCommand(message, menuInput, key)
+      : isClearCommand(commandText) ? runClearCommand
       : isHistoryCommand(commandText) ? runHistoryCommand
       : isPermissionCommand(commandText) ? runPermissionCommand
       : hasQqFileAttachments(message) ? null : isControlCommand(commandText)
@@ -846,6 +847,7 @@ export class QqHarnessBridge {
       hasFiles: hasQqFileAttachments(message),
       pendingInteraction: this.#pendingInteractions.has(key)
         || this.#approvals.hasPending(key),
+      busy: this.#queues.has(key),
       control: { owner: this, key },
       deferredDelivery: this.#deferred,
       enhancement: captureContextEnhancementSource(

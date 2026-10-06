@@ -393,6 +393,65 @@ test('checked receipt requires capability and exact frozen group correspondence,
   assert.equal(calls, 2);
 });
 
+test('consumer replacement aborts the old account lease and stale dispose cannot remove its successor', async () => {
+  const fx = checkedFixture();
+  let lease;
+  fx.adapter.consumeInbound = async (_id, options) => {
+    lease = options;
+    return () => {};
+  };
+  const oldDispose = fx.service.registerAdapter(fx.adapter);
+  await fx.service.consumeInbound('bot_one', { expectedFingerprint: fx.fingerprint, onEvent: async () => ({ accepted: true }) });
+  fx.service.registerAdapter(fx.adapter);
+  assert.equal(lease.signal.aborted, true);
+  assert.equal(oldDispose(), false);
+  await assert.rejects(lease.onEvent({}, {}), { code: 'capability-unavailable' });
+  assert.equal((await fx.service.describeBot('bot_one')).account.fingerprint, fx.fingerprint);
+});
+
+test('a reply waiting for provider preflight cannot send after its Registration disappears', async () => {
+  const fx = checkedFixture();
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  let resume;
+  const ready = new Promise(resolve => { resume = resolve; });
+  let sends = 0;
+  fx.adapter.replyChecked = async (_id, _route, _text, options) => {
+    entered(); await ready;
+    options.signal.throwIfAborted();
+    sends++;
+    return { sent: true };
+  };
+  const dispose = fx.service.registerAdapter(fx.adapter);
+  const result = fx.service.replyChecked('bot_one', { messageId: 'message' }, 'hello', { expectedFingerprint: fx.fingerprint });
+  await started;
+  dispose(); resume();
+  await assert.rejects(result, { code: 'provider-unavailable' });
+  assert.equal(sends, 0);
+});
+
+test('optional checked history refuses legacy adapters and preserves public read refusals', async () => {
+ const fx=checkedFixture();fx.service.registerAdapter(fx.adapter);
+ await assert.rejects(fx.service.historyChecked('bot_one',{}, {}, {expectedFingerprint:fx.fingerprint}),{code:'capability-unavailable'});
+ for(const code of ['history-permission-denied','stale-route','thread-unavailable','untrusted-source']) {
+  fx.adapter.historyChecked=async()=>{throw Object.assign(new Error('refused'),{code});};
+  await assert.rejects(fx.service.historyChecked('bot_one',{}, {}, {expectedFingerprint:fx.fingerprint}),{code});
+ }
+});
+
+test('checked history discards an in-flight result after provider replacement or caller cancellation', async () => {
+ for(const cancel of [false,true]) {
+  const fx=checkedFixture();fx.service.registerAdapter(fx.adapter);let entered,release;
+  const started=new Promise(resolve=>{entered=resolve;});const gate=new Promise(resolve=>{release=resolve;});
+  fx.adapter.historyChecked=async()=>{entered();await gate;return {events:['must not escape']};};
+  const abort=new AbortController();
+  const pending=fx.service.historyChecked('bot_one',{}, {}, {expectedFingerprint:fx.fingerprint,signal:abort.signal});
+  await started;
+  if(cancel)abort.abort();else fx.service.registerAdapter(fx.adapter);
+  release();await assert.rejects(pending,{code:cancel?'cancelled':'capability-unavailable'});
+ }
+});
+
 function approvalAdapter(channel, keys, { present = async () => true } = {}) {
   const botId = `bot_${channel.replaceAll('-', '_')}`;
   const adapter = memoryAdapter({ channel, botId });

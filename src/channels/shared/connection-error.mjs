@@ -62,6 +62,7 @@ export function extractConnectionEvidence(error) {
       ...(reasons.length > 1 ? { reasons } : {}),
       httpStatus: errors.find(e => e.httpStatus !== undefined)?.httpStatus,
       providerCode: errors.find(e => e.providerCode !== undefined)?.providerCode,
+      method: first('method'), transport: first('transport'),
       durationMs: first('durationMs'), timeoutMs: first('timeoutMs'), host: first('host'), truncated,
     }),
   };

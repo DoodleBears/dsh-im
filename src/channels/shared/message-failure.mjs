@@ -218,7 +218,7 @@ export function classifyMessageFailure(error, {
     : businessCode;
   if (code === 'REQUEST_TIMEOUT' || code === 'NETWORK_ERROR') details.hint = connectionHint(details);
   return Object.freeze({
-    ...(code === 'INTERNAL_UNKNOWN' || details.reason !== 'unknown' || details.httpStatus || details.providerCode ? { details } : {}),
+    ...(code === 'INTERNAL_UNKNOWN' || details.reason !== 'unknown' || details.httpStatus || details.providerCode || details.method ? { details } : {}),
     code,
     reason: safeReason ?? safeFailureReason(error?.code) ?? code,
     message: typeof userMessage === 'string' && userMessage.trim()

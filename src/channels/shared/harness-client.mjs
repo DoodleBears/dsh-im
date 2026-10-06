@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 import { adoptRegisteredWorkspaceSession } from './harness-session-binding.mjs';
 import { sameWorkspacePath } from './default-workspace.mjs';
@@ -1013,6 +1014,12 @@ export class HarnessClient {
   }
 
   async rpc(method, payload = {}, timeoutMs = 30_000, options = {}) {
+    const startedAt = performance.now();
+    const withDiagnostics = error => Object.assign(error, {
+      durationMs: Math.round(performance.now() - startedAt),
+      timeoutMs,
+      transport: this.#apiProxy ? 'host-api' : 'http',
+    });
     const rpcId = options.rpcId ?? `${this.#rpcIdPrefix}-${randomUUID()}`;
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const signal = options.signal
@@ -1051,24 +1058,24 @@ export class HarnessClient {
       // Preserve an explicit caller cancellation; it is control flow, not a
       // Harness availability diagnosis.
       if (options.signal?.aborted) throw error;
-      if (error instanceof HarnessTransportError) throw error;
-      throw new HarnessTransportError(
+      if (error instanceof HarnessTransportError) throw withDiagnostics(error);
+      throw withDiagnostics(new HarnessTransportError(
         timeoutSignal.aborted ? 'harness-timeout' : 'harness-connect-failed',
         method,
         { cause: error },
-      );
+      ));
     }
     if (body?.type !== 'server-response' || body?.rpcId !== rpcId) {
-      throw new HarnessTransportError('harness-response-invalid', method, {
+      throw withDiagnostics(new HarnessTransportError('harness-response-invalid', method, {
         cause: new Error(`Harness returned an invalid response for ${method}`),
-      });
+      }));
     }
     if (!body.result || typeof body.result !== 'object' || typeof body.result.ok !== 'boolean') {
-      throw new HarnessTransportError('harness-response-invalid', method, {
+      throw withDiagnostics(new HarnessTransportError('harness-response-invalid', method, {
         cause: new Error(`Harness returned an invalid result for ${method}`),
-      });
+      }));
     }
-    if (!body.result?.ok) throw new HarnessRpcError(method, body.result?.error);
+    if (!body.result?.ok) throw withDiagnostics(new HarnessRpcError(method, body.result?.error));
     return body.result.value;
   }
 

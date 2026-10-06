@@ -314,6 +314,44 @@ test('Feishu executes /compact for the bound Session without prompting the model
   assert.deepEqual(sent, ['暂无可压缩的历史记录。']);
 });
 
+test('Feishu rejects /clear with an embedded image before Harness execution', async () => {
+  const fixture = stateFixture([['p2p:ou_user', 'session-clear-image']]);
+  const sent = [];
+  let executed = 0;
+  let asked = 0;
+  const bridge = new FeishuHarnessBridge({
+    client: textClient(async ({ text }) => sent.push(text)),
+    channel: {},
+    harness: {
+      executeCommand: async () => {
+        executed += 1;
+        return { result: { kind: 'success' } };
+      },
+      ask: async () => {
+        asked += 1;
+        return '不应调用';
+      },
+    },
+    state: fixture.state,
+    status: bridgeStatus(),
+    allowedSenderOpenIds: new Set(['ou_user']),
+  });
+
+  await bridge.accept(event('clear-feishu-image', '', {
+    message_type: 'post',
+    content: JSON.stringify({ content: [
+      [{ tag: 'text', text: '/clear' }],
+      [{ tag: 'img', image_key: 'clear-image' }],
+    ] }),
+  }));
+  await bridge.waitForIdle();
+
+  assert.equal(executed, 0);
+  assert.equal(asked, 0);
+  assert.match(sent.at(-1), /用法.*不可附带/);
+  assert.equal(fixture.state.sessionFor('p2p:ou_user'), 'session-clear-image');
+});
+
 test('Feishu lists models and presets without prompting and advertises fast commands', async () => {
   const fixture = stateFixture();
   const sent = [];

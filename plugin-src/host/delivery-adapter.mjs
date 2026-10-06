@@ -245,6 +245,21 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
   };
   return Object.freeze({
     channel,
+    consumeInbound: (botId, options) => {
+      if (typeof coreController.consumeInbound !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.consumeInbound(botId, options);
+    },
+    historyChecked: (botId, route, query, options) => {
+      if (typeof coreController.historyChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.historyChecked(botId, route, query, options);
+    },
+    replyChecked: (botId, route, text, options) => {
+      if (typeof coreController.replyChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.replyChecked(botId, route, text, options);
+    },
     describeAccount: (botId) => {
       if (typeof coreController.describeDeliveryAccount !== 'function') {
         const error = new Error('Verified account capability unavailable');

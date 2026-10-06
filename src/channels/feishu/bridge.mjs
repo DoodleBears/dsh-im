@@ -1693,7 +1693,8 @@ export class FeishuHarnessBridge {
     // 命令识别对 text 与纯文本 post 一视同仁：post 富文本若仅含单个
     // 文本段落（如复制粘贴的 /new），同样按命令处理；带图片/文件不认。
     // accept() 侧已用 nonEmptyString(content) 判定，两侧保持一致。
-    const commandText = !hasImages && !hasFiles && text ? text.trim() : null;
+    const rawCommandText = text ? text.trim() : '';
+    const commandText = !hasImages && !hasFiles && text ? rawCommandText : null;
     if (!text && !hasImages && !hasFiles && !hasReply) {
       // An "@bot" with nothing else carries no instruction to parse, and the
       // menu card is what the reader is reaching for — answer it the way `/m`
@@ -1753,8 +1754,8 @@ export class FeishuHarnessBridge {
       }
       return;
     }
-    if (isClearCommand(commandText)) {
-      const clearCommand = await runClearCommand(commandText, this.#harness, this.#state, key, {
+    if (isClearCommand(rawCommandText)) {
+      const clearCommand = await runClearCommand(rawCommandText, this.#harness, this.#state, key, {
         signal: this.#signal,
         hasImages,
         hasFiles,
