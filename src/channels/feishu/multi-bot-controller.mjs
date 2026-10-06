@@ -1466,7 +1466,8 @@ export class MultiBotDshFeishuController {
         if (echo) return this.#inboundConsumers.accept(config.id, echo, signal, true);
         const evidence = normalizeExternalText(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
         if (evidence === null) return { accepted: true, ignored: true };
-        const enriched = this.#inboundConsumers.acceptsFiles(config.id) && typeof runtime.enrichExternal === 'function' ? await runtime.enrichExternal(evidence, { signal }) : evidence;
+        const named = typeof runtime.enrichExternalNames === 'function' ? await runtime.enrichExternalNames(evidence, { signal }) : evidence;
+        const enriched = this.#inboundConsumers.acceptsFiles(config.id) && typeof runtime.enrichExternal === 'function' ? await runtime.enrichExternal(named, { signal }) : named;
         return this.#inboundConsumers.accept(config.id, enriched, signal);
       }),
     }));
