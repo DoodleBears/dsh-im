@@ -1384,6 +1384,56 @@ test('external account consumption persists exclusive mode and never restores st
   await restarted.controller.close();
 });
 
+for (const sourceImages of [undefined, false, true]) {
+  test(`native image posts reach the exclusive consumer only with sourceImages=${sourceImages}`, async () => {
+    const existing = bot('bot_images', 'images');
+    const fx = fixture({
+      bots: [existing],
+      secrets: { [existing.secretRef]: 'local-secret' },
+      verifyApp: async () => ({ openId: existing.botOpenId, name: 'Verified' }),
+    });
+    await fx.controller.initialize();
+    try {
+      const info = await fx.controller.describeDeliveryAccount(existing.id);
+      assert.ok(info.capabilities.includes('source-image-checked'));
+      const received = [];
+      await fx.controller.consumeInbound(existing.id, {
+        expectedFingerprint: info.account.fingerprint,
+        ...(sourceImages === undefined ? {} : { sourceImages }),
+        onEvent: async evidence => { received.push(evidence); return { accepted: true }; },
+      });
+      const runtime = fx.runtimes.get(existing.id).at(-1);
+      const input = {
+        event_id: 'native-post-event', app_id: existing.appId,
+        sender: { sender_type: 'user', sender_id: { open_id: 'human' } },
+        message: {
+          message_id: 'native-post', chat_id: 'chat', chat_type: 'group', message_type: 'post',
+          mentions: [{ id: { open_id: existing.botOpenId }, key: '@_user_1' }],
+          create_time: '1791308000000',
+          content: JSON.stringify({ content: [[
+            { tag: 'at', user_id: existing.botOpenId },
+            { tag: 'text', text: 'before' }, { tag: 'img', image_key: 'image-a' },
+            { tag: 'text', text: 'middle' }, { tag: 'img', image_key: 'image-b' },
+            { tag: 'text', text: 'after' },
+          ]] }),
+        },
+      };
+      const result = await runtime.acceptExternal(input);
+      assert.equal(result.accepted, true);
+      assert.equal(received.length, sourceImages === true ? 1 : 0);
+      if (sourceImages === true) {
+        assert.equal(received[0].mentionedAccount, true);
+        assert.equal(received[0].messageId, 'native-post');
+        assert.deepEqual(received[0].attachments.map(item => item.resourceKey), ['image-a', 'image-b']);
+        assert.deepEqual(received[0].contentParts.map(item => item.kind),
+          ['text', 'text', 'attachment', 'text', 'attachment', 'text']);
+      } else assert.equal(result.ignored, true);
+    } finally {
+      await fx.controller.close();
+    }
+  });
+}
+
 for (const operation of ['historyChecked']) {
   test(`${operation} refuses a Host close during account verification before changing mode or sending`, async () => {
     const existing = bot('bot_closing_checked', 'closing_checked');
