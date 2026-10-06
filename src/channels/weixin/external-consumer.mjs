@@ -20,11 +20,11 @@ export function pairedWeixinAccount(config, token) {
 }
 
 /** Paired-owner text and opt-in native files/images. No group, mention, or thread is invented. */
-export function normalizeWeixinExternalText(message, { botId, account, sourceFiles = false, sourceImages = false, sourceVoiceTranscripts = false, sourceVoiceAudio = false }) {
+export function normalizeWeixinExternalText(message, { botId, account, sourceFiles = false, sourceImages = false, sourceVoiceTranscripts = false, sourceVoiceAudio = false, sourceVideos = false }) {
   if (message?.message_type !== 1 || message.from_user_id !== account.ownerUserId || message.group_id) return null;
   if (message.to_user_id !== account.accountId) throw weixinRefusal('account-changed');
   if (!Array.isArray(message.item_list) || !message.item_list.length
-    || message.item_list.some(item => item?.type !== 1 && !(sourceFiles && item?.type === 4) && !(sourceImages && item?.type === 2) && !((sourceVoiceTranscripts || sourceVoiceAudio) && item?.type === 3))) return null;
+    || message.item_list.some(item => item?.type !== 1 && !(sourceFiles && item?.type === 4) && !(sourceImages && item?.type === 2) && !(sourceVideos && item?.type === 5) && !((sourceVoiceTranscripts || sourceVoiceAudio) && item?.type === 3))) return null;
   const messageId = weixinMessageId(message);
   const voiceItems = message.item_list.filter(item => item?.type === 3);
   let voice;
@@ -50,15 +50,29 @@ export function normalizeWeixinExternalText(message, { botId, account, sourceFil
       ...(native.sample_rate === undefined ? {} : { sampleRate: native.sample_rate }),
       ...(native.bits_per_sample === undefined ? {} : { bitsPerSample: native.bits_per_sample }) });
   }
-  const files = message.item_list.filter(item => item?.type === 4 || item?.type === 2);
+  const files = message.item_list.filter(item => item?.type === 4 || item?.type === 2 || item?.type === 5);
+  const nativeVideo = files[0]?.type === 5 ? files[0].video_item : undefined;
+  let video;
+  if (files[0]?.type === 5) {
+    if (!nativeVideo || typeof nativeVideo !== 'object' || files[0].is_completed === false || message.message_state === 1) return null;
+    for (const key of ['video_size', 'play_length']) {
+      if (nativeVideo[key] !== undefined && (!Number.isSafeInteger(nativeVideo[key]) || nativeVideo[key] < 0)) throw weixinRefusal('invalid-inbound');
+    }
+    if (files[0].msg_id !== undefined && !id(files[0].msg_id)) throw weixinRefusal('invalid-inbound');
+    video = Object.freeze({
+      ...(nativeVideo.video_size === undefined ? {} : { ciphertextSizeBytes: nativeVideo.video_size }),
+      ...(nativeVideo.play_length === undefined ? {} : { playLength: nativeVideo.play_length }),
+      ...(files[0].msg_id === undefined ? {} : { itemId: files[0].msg_id }),
+    });
+  }
   const image = files[0]?.type === 2 ? files[0].image_item : undefined;
   if (files[0]?.type === 2 && (!image || typeof image !== 'object')) throw weixinRefusal('resource-unavailable');
   if (files.length > 1) throw weixinRefusal('resource-unavailable');
-  const nativeFile = image ? { file_name: 'image', image: true } : files[0]?.file_item;
+  const nativeFile = nativeVideo ? { file_name: 'video.mp4', video: true } : image ? { file_name: 'image', image: true } : files[0]?.file_item;
   if (files.length && (!nativeFile || !id(nativeFile.file_name)
     || /[\x00-\x1f\x7f/\\]/.test(nativeFile.file_name))) throw weixinRefusal('resource-unavailable');
   const text = voice ? (transcript || '[WeChat voice message: platform did not provide a transcript]')
-    : extractWeixinText(message) || (nativeFile ? (image ? '[Image]' : `[File: ${nativeFile.file_name}]`) : '');
+    : extractWeixinText(message) || (nativeFile ? (nativeVideo ? '[Video]' : image ? '[Image]' : `[File: ${nativeFile.file_name}]`) : '');
   const time = typeof message.create_time_ms === 'string' ? Number(message.create_time_ms) : message.create_time_ms;
   if (!messageId || !/^\d+$/.test(messageId) || !text?.trim() || text.length > 16000
     || !Number.isSafeInteger(time) || time <= 0 || !continuation(message.context_token)) throw weixinRefusal('invalid-inbound');
@@ -66,7 +80,7 @@ export function normalizeWeixinExternalText(message, { botId, account, sourceFil
   if (!Number.isFinite(at.getTime())) throw weixinRefusal('invalid-inbound');
   const conversationId = account.ownerUserId;
   const resourceKey = nativeFile ? createHash('sha256').update(JSON.stringify([
-    account.fingerprint, conversationId, messageId, nativeFile.file_name, nativeFile.len ?? null, ...(image ? ['image'] : []),
+    account.fingerprint, conversationId, messageId, nativeFile.file_name, nativeFile.len ?? null, ...(nativeVideo ? ['video', video] : image ? ['image'] : []),
   ])).digest('hex') : undefined;
   const size = nativeFile?.len === undefined ? undefined : Number(nativeFile.len);
   if (nativeFile?.len !== undefined && (!/^\d+$/.test(String(nativeFile.len))
@@ -84,12 +98,12 @@ export function normalizeWeixinExternalText(message, { botId, account, sourceFil
   const attachments = voiceAttachment ? Object.freeze([voiceAttachment]) : nativeFile ? Object.freeze([Object.freeze({
     id: createHash('sha256').update(JSON.stringify([account.fingerprint, conversationId, messageId, resourceKey])).digest('hex'),
     messageId, resourceKey, name: nativeFile.file_name,
-    ...(size > 0 ? { sizeBytes: size } : {}), mediaType: image ? 'image/unknown' : 'application/octet-stream',
+    ...(size > 0 ? { sizeBytes: size } : {}), mediaType: nativeVideo ? 'video/unknown' : image ? 'image/unknown' : 'application/octet-stream',
   })]) : undefined;
   return Object.freeze({ version: 1, channel: 'weixin', botId, fingerprint: account.fingerprint,
     eventId: messageId, messageId, actor: Object.freeze({ kind: 'user', id: account.ownerUserId }),
     conversation: Object.freeze({ kind: 'dm', id: conversationId }), mentions: Object.freeze([]),
-    mentionedAccount: false, at: at.toISOString(), text, ...(voice ? { voice } : {}), ...(attachments ? { attachments } : {}),
+    mentionedAccount: false, at: at.toISOString(), text, ...(voice ? { voice } : {}), ...(video ? { video } : {}), ...(attachments ? { attachments } : {}),
     reply: Object.freeze({ messageId, conversationId, actorId: account.ownerUserId }),
     replay: Object.freeze({ kind: 'provider-redelivery', resumeCursor: false, gapPossible: true }) });
 }

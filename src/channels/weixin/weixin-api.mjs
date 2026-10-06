@@ -666,6 +666,12 @@ export function createWeixinApi({ fetchImpl = fetch, uploadFetchImpl = fetchImpl
       return extractWeixinImages(message, { fetchImpl });
     },
 
+    inboundVideos(message) {
+      return extractWeixinFiles({ item_list: (message?.item_list ?? [])
+        .filter(item => item?.type === 5 && item.video_item?.media)
+        .map(item => ({ file_item: { media: item.video_item.media, file_name: 'video.mp4' } })) }, { fetchImpl });
+    },
+
     inboundVoice(message) {
       return extractWeixinFiles({ item_list: (message?.item_list ?? [])
         .filter(item => item?.type === 3 && item.voice_item?.media)
@@ -827,6 +833,15 @@ export function createWeixinApi({ fetchImpl = fetch, uploadFetchImpl = fetchImpl
             file_name: file.fileName,
             len: String(file.bytes.byteLength),
           },
+        }),
+      });
+    },
+
+    async sendVideo(request) {
+      return sendArtifact(request, {
+        mediaType: 2,
+        createItem: ({ media, ciphertextSize }) => ({
+          type: 5, video_item: { media, video_size: ciphertextSize },
         }),
       });
     },
