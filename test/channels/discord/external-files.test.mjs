@@ -162,3 +162,19 @@ test('checked multipart native API keeps true reference failure, disables mentio
     file: { fileName: f.file.name, bytes }, retry: false, failIfNotExists: true }), { code: 'artifact-rate-limited' });
   assert.equal(calls, 1);
 });
+
+
+test('revocation cancels an in-flight stalled CDN reader, and raw body errors do not expose signed URLs', async () => {
+  const f = fixture(); const input = { url: f.source.attachments[0].url, channelId: id.thread, attachmentId: id.attachment, fileName: 'input.txt' };
+  let cancelled = false;
+  const api = new DiscordApi({ token, fetchImpl: async () => new Response(new ReadableStream({ cancel() { cancelled = true; } })) });
+  const controller = new AbortController();
+  const downloaded = await api.downloadFileStream({ ...input, signal: controller.signal });
+  const next = downloaded.stream[Symbol.asyncIterator]().next(); controller.abort();
+  await assert.rejects(next, { name: 'AbortError' }); assert.equal(cancelled, true);
+  const failed = new DiscordApi({ token, fetchImpl: async () => new Response(new ReadableStream({
+    start(controller) { controller.error(new Error(input.url)); }
+  })) });
+  const stream = (await failed.downloadFileStream(input)).stream;
+  await assert.rejects(collect(stream), error => error.code === 'resource-unavailable' && !error.message.includes('https'));
+});

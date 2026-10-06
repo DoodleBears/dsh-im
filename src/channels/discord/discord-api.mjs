@@ -268,7 +268,17 @@ export class DiscordApi {
     }
     const length = response.headers.get('content-length');
     const reader = response.body.getReader();
-    const cancel = () => reader.cancel().catch(() => undefined);
+    let closed = false;
+    const cancel = async () => {
+      if (closed) return;
+      closed = true;
+      downloadSignal.removeEventListener('abort', onAbort);
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    };
+    const onAbort = () => { void cancel(); };
+    downloadSignal.addEventListener('abort', onAbort, { once: true });
+    if (downloadSignal.aborted) void cancel();
     return { length, cancel, stream: (async function* () {
       try {
         while (true) {
@@ -278,10 +288,8 @@ export class DiscordApi {
           if (result.done) break;
           yield result.value;
         }
-      } finally {
-        await reader.cancel().catch(() => undefined);
-        reader.releaseLock();
-      }
+      } catch { downloadSignal.throwIfAborted(); throw refused(); }
+      finally { await cancel(); }
     })() };
   }
 
