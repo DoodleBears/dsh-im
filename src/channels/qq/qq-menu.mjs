@@ -122,7 +122,7 @@ export async function qqMenuView(name, harness, state, key, { signal, busy = fal
       columns: 3, entries: name === 'status' ? [back()] : [
         section(t('💬 会话选择'), 'sessions'), section(t('📁 工作区'), 'workspaces'), section(t('🤖 模式／预设'), 'presets'),
         section(t('🧠 模型'), 'models'), command(t('🆕 新会话'), '/new'), section(t('📋 会话列表'), 'sessions'),
-        command(t('⏹ 停止'), '/stop'), command(t('📐 压缩'), '/compact'), section(t('💬 补充指令'), 'steer'),
+        command(t('⏹ 停止'), '/stop'), command(t('📐 压缩'), '/compact'), command(t('🧹 清空上下文'), '/clear'), section(t('💬 补充指令'), 'steer'),
         { label: t('切换归档显示'), action: { kind: 'archive', include: !archived } },
         section(t('📊 状态'), 'status'), section(t('📖 帮助'), 'help'),
       ] };
@@ -163,7 +163,7 @@ export async function qqMenuView(name, harness, state, key, { signal, busy = fal
     t('发送 /m 打开助手中心，点击按钮或回复当前列表的数字选择。'),
     t('设置：会话、工作区、模式／预设、模型。'),
     t('会话：新会话、会话列表、归档显示切换。'),
-    t('任务：停止、压缩、快捷或自定义补充指令。'),
+    t('任务：停止、压缩、清空上下文、快捷或自定义补充指令。'),
     t('信息：状态、帮助。'),
     t('菜单有效期为 15 分钟；发送普通消息会退出数字选择。'),
     t('回答问题、审批和批量输入时，数字优先用于当前交互。'),

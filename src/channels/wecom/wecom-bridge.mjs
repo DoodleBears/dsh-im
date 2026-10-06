@@ -20,6 +20,7 @@ import {
   isBatchInputCommand,
 } from '../shared/batch-input.mjs';
 import { runCompactCommand } from '../shared/compact-command.mjs';
+import { isClearCommand, runClearCommand } from '../shared/clear-command.mjs';
 import { isHistoryCommand, runHistoryCommand } from '../shared/history-command.mjs';
 import {
   isControlCommand,
@@ -82,6 +83,7 @@ function helpText() {
     t('/menu 或 /m  打开可点击的功能菜单'),
     t('/new  开启一个全新会话'),
     t('/compact  压缩当前会话的较早上下文'),
+    t('/clear  清空当前会话上下文（保留 Session 绑定和历史记录）'),
     t('/history [数量]  查看最近历史消息（默认 3 条，最多 5 条）'),
     t('/workspace 工作区序号或绝对路径  切换工作区'),
     t('/workspacelist  列出工作区绝对路径'),
@@ -870,6 +872,7 @@ export class WecomHarnessBridge {
       return { message: t('已开启新会话。请发送你的问题。') };
     }
     return await runWorkspaceCommand(text, this.#harness, key)
+      ?? await runClearCommand(text, this.#harness, this.#state, key, options)
       ?? await runCompactCommand(text, this.#harness, this.#state, key, options);
   }
 
@@ -951,7 +954,8 @@ export class WecomHarnessBridge {
     const menuCommand = !hasInboundImages(commandMessage) && !hasInboundFiles(commandMessage)
       && (parseWecomMenu(commandText) || ['/help', '/status', '/new'].includes(commandText.toLowerCase())
         || this.#cardFrames.has(frame));
-    const commandRunner = isHistoryCommand(commandText) ? runHistoryCommand
+    const commandRunner = isClearCommand(commandText) ? runClearCommand
+      : isHistoryCommand(commandText) ? runHistoryCommand
       : hasInboundFiles(commandMessage) ? null : isControlCommand(commandText)
       ? runControlCommand
       : (isModelCommand(commandText)
@@ -1176,6 +1180,7 @@ export class WecomHarnessBridge {
       hasFiles: hasInboundFiles(message),
       pendingInteraction: this.#pendingInteractions.has(key)
         || this.#approvals.hasPending(key),
+      busy: this.#queues.has(key) || this.#batchInputs.status(key).phase !== 'idle',
       control: { owner: this, key },
       deferredDelivery: this.#deferred,
       enhancement: captureContextEnhancementSource(

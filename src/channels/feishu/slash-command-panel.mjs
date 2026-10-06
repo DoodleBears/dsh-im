@@ -30,6 +30,7 @@ export const SLASH_COMMAND_MANIFEST = Object.freeze([
   { command: 'help', icon: 'promptword_outlined', default: '查看帮助', en_us: 'Show help' },
   { command: 'status', icon: 'ai-functions_outlined', default: '查看机器人状态', en_us: 'Show bot status' },
   { command: 'compact', icon: 'ai-block_outlined', default: '压缩当前会话上下文', en_us: 'Compact the current session' },
+  { command: 'clear', icon: 'clear_outlined', default: '清空当前会话上下文', en_us: 'Clear the current session context' },
   { command: 'sessionlist', icon: 'chat-ai_outlined', default: '列出会话', en_us: 'List sessions' },
   { command: 'workspacelist', icon: 'folder_outlined', default: '列出工作区', en_us: 'List workspaces' },
   { command: 'workspaces', icon: 'folder_outlined', default: '列出工作区', en_us: 'List workspaces' },

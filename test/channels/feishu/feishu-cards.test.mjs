@@ -90,7 +90,7 @@ test('menu exposes the increased command set and keeps permission completion num
   ));
   assert.deepEqual(actions, [
     'presets', 'models', 'new', 'sessions', 'workspaces',
-    'stop', 'compact', 'archive_toggle', 'status', 'help',
+    'stop', 'compact', 'clear', 'archive_toggle', 'status', 'help',
   ]);
   // 补全权限不占位按钮：仅通过数字兜底「5🔧」触发（见 bridge）
   assert.equal(actions.includes('repair'), false);

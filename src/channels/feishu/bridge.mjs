@@ -43,6 +43,7 @@ import {
   isBatchInputCommand,
 } from '../shared/batch-input.mjs';
 import { runCompactCommand } from '../shared/compact-command.mjs';
+import { isClearCommand, runClearCommand } from '../shared/clear-command.mjs';
 import { isHistoryCommand, runHistoryCommand } from '../shared/history-command.mjs';
 import {
   isControlCommand,
@@ -178,7 +179,7 @@ const REPAIR_URL_HOSTS = new Set([
 
 const ARCHIVED_COMMAND = /^\/archived(?:\s+(on|off))?$/i;
 /** Matches fast card commands that should not be queued behind a running task. */
-const CARD_COMMAND = /^\/(?:m(?:enu)?|new|help|status|compact|(?:sessionlist|sessions)(?:\s|$)|workspacelist|workspaces|wsl|watchlist|archived(?:\s+(on|off))?)$/i;
+const CARD_COMMAND = /^\/(?:m(?:enu)?|new|help|status|compact|clear|(?:sessionlist|sessions)(?:\s|$)|workspacelist|workspaces|wsl|watchlist|archived(?:\s+(on|off))?)$/i;
 
 // ── Step push (分步直推) limits ──────────────────────────────────────────────
 /** Feishu allows 5 msg/s per chat; step push stays well below that. */
@@ -1600,6 +1601,7 @@ export class FeishuHarnessBridge {
         deferredDelivery: this.#deferred,
         hasFiles: hasInboundFiles(message),
         pendingInteraction: this.#hasPendingInteraction(key),
+        busy: this.#queues.has(key),
         control: { owner: this, key },
         enhancement: captureContextEnhancementSource(
           this.#contextEnhancement,
@@ -1691,7 +1693,8 @@ export class FeishuHarnessBridge {
     // 命令识别对 text 与纯文本 post 一视同仁：post 富文本若仅含单个
     // 文本段落（如复制粘贴的 /new），同样按命令处理；带图片/文件不认。
     // accept() 侧已用 nonEmptyString(content) 判定，两侧保持一致。
-    const commandText = !hasImages && !hasFiles && text ? text.trim() : null;
+    const rawCommandText = text ? text.trim() : '';
+    const commandText = !hasImages && !hasFiles && text ? rawCommandText : null;
     if (!text && !hasImages && !hasFiles && !hasReply) {
       // An "@bot" with nothing else carries no instruction to parse, and the
       // menu card is what the reader is reaching for — answer it the way `/m`
@@ -1748,6 +1751,19 @@ export class FeishuHarnessBridge {
       const compactCommand = await runCompactCommand(commandText, this.#harness, this.#state, key, { signal: this.#signal });
       if (compactCommand) {
         await this.#send(event.message.chat_id, compactCommand.message, { replyTo: event.message.message_id });
+      }
+      return;
+    }
+    if (isClearCommand(rawCommandText)) {
+      const clearCommand = await runClearCommand(rawCommandText, this.#harness, this.#state, key, {
+        signal: this.#signal,
+        hasImages,
+        hasFiles,
+        pendingInteraction: this.#hasPendingInteraction(key),
+        busy: this.#queues.has(key),
+      });
+      if (clearCommand) {
+        await this.#send(event.message.chat_id, clearCommand.message, { replyTo: event.message.message_id });
       }
       return;
     }
@@ -2742,6 +2758,10 @@ export class FeishuHarnessBridge {
       await this.#handleCompact(key, chatId, messageId);
       return;
     }
+    if (action === 'clear') {
+      await this.#handleClear(key, chatId, messageId);
+      return;
+    }
     if (action === 'stop') {
       await this.#handleStop(key, chatId, messageId);
       return;
@@ -3511,6 +3531,22 @@ export class FeishuHarnessBridge {
       await this.#send(chatId, result?.message || t('上下文压缩失败。'), { replyTo });
     } catch (error) {
       await this.#sendFailure(chatId, error, { logLabel: 'compact', replyTo });
+    }
+  }
+
+  /** Run /clear while retaining the current Session binding. */
+  async #handleClear(key, chatId, replyTo = null) {
+    try {
+      const result = await runClearCommand(
+        '/clear', this.#harness, this.#state, key, {
+          signal: this.#signal,
+          pendingInteraction: this.#hasPendingInteraction(key),
+          busy: this.#queues.has(key),
+        },
+      );
+      await this.#send(chatId, result?.message || t('清空当前会话上下文失败，当前会话未修改，请稍后重试。'), { replyTo });
+    } catch (error) {
+      await this.#sendFailure(chatId, error, { logLabel: 'clear', replyTo });
     }
   }
 

@@ -11,6 +11,7 @@ import {
   isBatchInputCommand,
 } from '../shared/batch-input.mjs';
 import { runCompactCommand } from '../shared/compact-command.mjs';
+import { isClearCommand, runClearCommand } from '../shared/clear-command.mjs';
 import { isHistoryCommand, runHistoryCommand } from '../shared/history-command.mjs';
 import {
   isControlCommand,
@@ -75,6 +76,7 @@ const HELP_TEXT = () => [
   t('直接发送文字或图片即可继续当前会话。'),
   t('/new  开启一个全新会话'),
   t('/compact  压缩当前会话的较早上下文'),
+  t('/clear  清空当前会话上下文（保留 Session 绑定和历史记录）'),
   t('/history [数量]  查看最近历史消息（默认 3 条，最多 5 条）'),
   t('/workspace 工作区序号或绝对路径  切换工作区'),
   t('/workspacelist  列出工作区绝对路径'),
@@ -311,7 +313,8 @@ export class WecomAppBridge {
         return this.#finishBatchResult(messageId, key, sender, result);
       }
     }
-    const commandRunner = isHistoryCommand(commandText) ? runHistoryCommand
+    const commandRunner = isClearCommand(commandText) ? runClearCommand
+      : isHistoryCommand(commandText) ? runHistoryCommand
       : isControlCommand(commandText)
       ? runControlCommand
       : (isModelCommand(commandText)
@@ -501,6 +504,7 @@ export class WecomAppBridge {
       hasFiles: false,
       pendingInteraction: this.#pendingInteractions.has(key)
         || this.#approvals.hasPending(key),
+      busy: this.#queues.has(key) || this.#batchInputs.status(key).phase !== 'idle',
       control: { owner: this, key },
       deferredDelivery: this.#deferred,
       enhancement: captureContextEnhancementSource(

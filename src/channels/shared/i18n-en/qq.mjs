@@ -29,7 +29,8 @@ export default {
   '发送 /m 打开助手中心，点击按钮或回复当前列表的数字选择。': 'Send /m to open the assistant menu. Click a button or reply with a number from the current list.',
   '设置：会话、工作区、模式／预设、模型。': 'Settings: session, workspace, mode / preset, model.',
   '会话：新会话、会话列表、归档显示切换。': 'Sessions: new session, session list, show or hide archived sessions.',
-  '任务：停止、压缩、快捷或自定义补充指令。': 'Tasks: stop, compact, quick or custom steering instructions.',
+  '任务：停止、压缩、清空上下文、快捷或自定义补充指令。':
+    'Tasks: stop, compact, clear context, quick or custom steering instructions.',
   '信息：状态、帮助。': 'Information: status, help.',
   '菜单有效期为 15 分钟；发送普通消息会退出数字选择。': 'Menus expire after 15 minutes. Sending an ordinary message exits number selection.',
   '回答问题、审批和批量输入时，数字优先用于当前交互。': 'During questions, approvals and batch input, numbers belong to that interaction.',

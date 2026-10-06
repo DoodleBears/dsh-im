@@ -5,7 +5,7 @@ import { t } from '../shared/i18n.mjs';
 export const DINGTALK_MENU_TEMPLATE_ID = '9ca31362-e5b3-409c-a694-6993706a6004.schema';
 export const DINGTALK_CARD_TOPIC = '/v1.0/card/instances/callback';
 export const DINGTALK_MENU_BUTTONS = Object.freeze({
-  new: '/new', history: '/history', stop: '/stop', compact: '/compact',
+  new: '/new', history: '/history', stop: '/stop', compact: '/compact', clear: '/clear',
   status: '/status', help: '/help',
 });
 
