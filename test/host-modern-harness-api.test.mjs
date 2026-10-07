@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { harnessConnection } from '../plugin-src/host/harness-connection.mjs';
 import { modernHarnessApi } from '../plugin-src/host/modern-harness-api.mjs';
+import { HarnessApprovalQueue } from '../src/channels/shared/harness-approval.mjs';
 import { HarnessClient, HarnessRpcError } from '../src/channels/shared/harness-client.mjs';
 import { classifyMessageFailure } from '../src/channels/shared/message-failure.mjs';
 
@@ -1131,6 +1132,33 @@ test('IM withdrawal leaves Web usable, and both unavailable finishes without app
   assert.equal(await f.result, 'allowed-once');
   const unavailable = competitiveApprovalFixture({ native: Promise.resolve('unavailable'), deliver: () => false });
   assert.equal(await unavailable.result, 'unavailable');
+});
+
+test('an expired IM approval settles the shared Web approval instead of leaving Web waiting', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const settle = async () => {
+    for (let index = 0; index < 20; index += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
+  const sent = [];
+  const queue = new HarnessApprovalQueue({ logger: { warn() {}, error() {} } });
+  let answerWeb;
+  const f = competitiveApprovalFixture({
+    native: new Promise((resolve) => { answerWeb = resolve; }),
+    deliver: ({ interaction }) => queue.handleRequested(interaction, {
+      key: 'direct:actor', actor: 'actor', send: async (text) => { sent.push(text); },
+    }),
+  });
+  await f.completion;
+  await settle();
+  assert.equal(queue.hasPending('direct:actor'), true);
+
+  t.mock.timers.tick(60 * 60_000);
+  await settle();
+  assert.equal(queue.hasPending('direct:actor'), false);
+  assert.equal(f.nativeSignal().aborted, true, 'the Web presentation must be retired too');
+  answerWeb('allowed-once');
+  assert.equal(await f.result, 'rejected');
+  assert.equal(sent.at(-1), '审批已超时，已自动拒绝此次操作。');
 });
 
 test('turn cancellation retires both presentations and refuses a late decision', async () => {

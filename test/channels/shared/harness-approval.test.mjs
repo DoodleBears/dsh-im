@@ -973,3 +973,280 @@ test('synced approval uses the existing actor check and retires on a Web result'
   assert.equal(responses, 0);
   assert.match(notices.at(-1), /已拒绝/);
 });
+
+test('expires a displayed approval, releases the interaction, and reports the timeout', async () => {
+  const queue = new HarnessApprovalQueue({
+    approvalTimeoutMs: 25,
+    logger: { warn() {}, error() {} },
+  });
+  const sent = [];
+  const responses = [];
+  const context = {
+    key: 'direct:actor-a',
+    actor: 'actor-a',
+    send: async (text) => sent.push(text),
+  };
+  await queue.handleRequested(interaction({
+    id: 'timed-out',
+    toolName: 'bash',
+    respond: async (result) => responses.push(result),
+  }), context);
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(queue.hasPending(context.key), false);
+  assert.deepEqual(responses.map(({ value }) => value.outcome), ['rejected']);
+  assert.equal(sent.at(-1), '审批已超时，已自动拒绝此次操作。');
+  assert.equal(await queue.submitByApprovalId('timed-out', 'allowed-once', { actor: 'actor-a' }), false);
+});
+
+test('a timeout retires only its item and promotes the next queued approval once', async () => {
+  const queue = new HarnessApprovalQueue({
+    approvalTimeoutMs: 25,
+    logger: { warn() {}, error() {} },
+  });
+  const sent = [];
+  const responses = [];
+  const context = {
+    key: 'direct:actor-a',
+    actor: 'actor-a',
+    send: async (text) => sent.push(text),
+  };
+  await queue.handleRequested(interaction({
+    id: 'timed-out-first',
+    toolName: 'first-tool',
+    respond: async (result) => responses.push(result),
+  }), context);
+  await queue.handleRequested(interaction({
+    id: 'timed-out-second',
+    toolName: 'second-tool',
+    respond: async (result) => responses.push(result),
+  }), context);
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(responses.map(({ value }) => value.approvalId), [
+    'timed-out-first',
+    'timed-out-second',
+  ]);
+  assert.equal(sent.filter((text) => text === '审批已超时，已自动拒绝此次操作。').length, 2);
+  assert.equal(queue.hasPending(context.key), false);
+});
+
+test('a duplicate reply racing timeout cannot submit or duplicate the timeout notice', async () => {
+  const queue = new HarnessApprovalQueue({
+    approvalTimeoutMs: 25,
+    logger: { warn() {}, error() {} },
+  });
+  const sent = [];
+  const responses = [];
+  const context = {
+    key: 'direct:actor-a',
+    actor: 'actor-a',
+    send: async (text) => sent.push(text),
+  };
+  await queue.handleRequested(interaction({
+    id: 'timed-out-race',
+    toolName: 'bash',
+    respond: async (result) => responses.push(result),
+  }), context);
+
+  const replies = await Promise.all([
+    new Promise((resolve) => setTimeout(() => resolve(
+      queue.claimReply({ ...context, text: '批准' }).process(),
+    ), 30)),
+    new Promise((resolve) => setTimeout(() => resolve(
+      queue.claimReply({ ...context, text: '批准' }).process(),
+    ), 40)),
+  ]);
+  await Promise.all(replies);
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].value.outcome, 'rejected');
+  assert.equal(sent.filter((text) => text === '审批已超时，已自动拒绝此次操作。').length, 1);
+});
+
+async function settleTimers() {
+  for (let index = 0; index < 20; index += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+test('a submission that fails after the deadline still expires the approval', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const queue = new HarnessApprovalQueue({ logger: { warn() {}, error() {} } });
+  const sent = [];
+  const responses = [];
+  const submission = deferred();
+  const context = {
+    key: 'direct:actor-a',
+    actor: 'actor-a',
+    send: async (text) => { sent.push(text); },
+  };
+  await queue.handleRequested(interaction({
+    id: 'slow-submit',
+    toolName: 'bash',
+    respond: async (result) => {
+      responses.push(result.value.outcome);
+      if (responses.length === 1) {
+        await submission.promise;
+        throw new Error('HTTP 503');
+      }
+    },
+  }), context);
+
+  const reply = queue.claimReply({ ...context, text: '批准' }).process();
+  await settleTimers();
+  t.mock.timers.tick(60 * 60_000);
+  await settleTimers();
+  assert.equal(queue.hasPending(context.key), true, 'an in-flight decision must not be overridden');
+  submission.resolve();
+  await reply;
+  await settleTimers();
+
+  assert.equal(queue.hasPending(context.key), false);
+  assert.deepEqual(responses, ['allowed-once', 'rejected']);
+  assert.equal(sent.at(-1), '审批已超时，已自动拒绝此次操作。');
+  assert.equal(sent.includes('审批提交失败，请重新回复「批准」或「拒绝」。'), false);
+});
+
+test('a submission that succeeds across the deadline keeps the submitted decision', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const queue = new HarnessApprovalQueue({ logger: { warn() {}, error() {} } });
+  const sent = [];
+  const responses = [];
+  const submission = deferred();
+  const context = {
+    key: 'direct:actor-a',
+    actor: 'actor-a',
+    send: async (text) => { sent.push(text); },
+  };
+  await queue.handleRequested(interaction({
+    id: 'slow-success',
+    toolName: 'bash',
+    respond: async (result) => {
+      responses.push(result.value.outcome);
+      await submission.promise;
+    },
+  }), context);
+
+  const reply = queue.claimReply({ ...context, text: '批准' }).process();
+  await settleTimers();
+  t.mock.timers.tick(60 * 60_000);
+  submission.resolve();
+  await reply;
+  await settleTimers();
+
+  assert.equal(queue.hasPending(context.key), false);
+  assert.deepEqual(responses, ['allowed-once']);
+  assert.equal(sent.at(-1), '已批准，仅对本次操作有效。');
+});
+
+test('an unconfirmed timeout release keeps retry state and does not claim cancellation', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const queue = new HarnessApprovalQueue({ logger: { warn() {}, error() {} } });
+  const sent = [];
+  const responses = [];
+  let failures = 2;
+  const context = {
+    key: 'direct:actor-a',
+    actor: 'actor-a',
+    send: async (text) => { sent.push(text); },
+  };
+  await queue.handleRequested(interaction({
+    id: 'release-503',
+    toolName: 'bash',
+    respond: async (result) => {
+      responses.push(result.value.outcome);
+      if (failures > 0) {
+        failures -= 1;
+        throw Object.assign(new Error('HTTP 503'), { status: 503 });
+      }
+    },
+  }), context);
+
+  t.mock.timers.tick(60 * 60_000);
+  await settleTimers();
+  assert.deepEqual(responses, ['rejected']);
+  assert.equal(queue.hasPending(context.key), true);
+  assert.equal(sent.includes('审批已超时，已自动拒绝此次操作。'), false);
+  assert.equal(sent.at(-1), '审批已超时，正在自动拒绝，但暂未得到确认，稍后会自动重试。');
+
+  await queue.claimReply({ ...context, text: '批准' }).process();
+  assert.equal(sent.at(-1), '审批已超时，正在自动拒绝，但暂未得到确认，稍后会自动重试。');
+  assert.equal(await queue.submitByApprovalId('release-503', 'allowed-once', { actor: 'actor-a' }), false);
+
+  t.mock.timers.tick(30_000);
+  await settleTimers();
+  assert.deepEqual(responses, ['rejected', 'rejected']);
+  assert.equal(queue.hasPending(context.key), true);
+  t.mock.timers.tick(60_000);
+  await settleTimers();
+  assert.deepEqual(responses, ['rejected', 'rejected', 'rejected']);
+  assert.equal(queue.hasPending(context.key), false);
+  assert.equal(sent.filter((text) => text.startsWith('审批已超时，正在自动拒绝')).length, 2);
+  assert.equal(sent.at(-1), '审批已超时，已自动拒绝此次操作。');
+});
+
+test('an unconfirmed timeout release is finished by a later host resolution', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const queue = new HarnessApprovalQueue({ logger: { warn() {}, error() {} } });
+  const sent = [];
+  let attempts = 0;
+  const context = {
+    key: 'direct:actor-a',
+    actor: 'actor-a',
+    send: async (text) => { sent.push(text); },
+  };
+  await queue.handleRequested(interaction({
+    id: 'release-then-resolved',
+    toolName: 'bash',
+    respond: async () => {
+      attempts += 1;
+      throw new Error('HTTP 503');
+    },
+  }), context);
+
+  t.mock.timers.tick(60 * 60_000);
+  await settleTimers();
+  assert.equal(queue.hasPending(context.key), true);
+  await queue.handleResolved({ kind: 'approval', interactionId: 'release-then-resolved', outcome: 'rejected' });
+  assert.equal(queue.hasPending(context.key), false);
+  assert.equal(sent.at(-1), '审批已超时，已自动拒绝此次操作。');
+  t.mock.timers.tick(60 * 60_000);
+  await settleTimers();
+  assert.equal(attempts, 1);
+});
+
+test('a timeout waits for the previous confirmation before presenting later approvals', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const queue = new HarnessApprovalQueue({ logger: { warn() {}, error() {} } });
+  const entries = [];
+  const confirmation = deferred();
+  const context = {
+    key: 'direct:actor-a',
+    actor: 'actor-a',
+    send: async (text) => {
+      entries.push(text);
+      if (text === '已批准，仅对本次操作有效。') await confirmation.promise;
+    },
+  };
+  const responses = [];
+  const respond = async (result) => { responses.push([result.value.approvalId, result.value.outcome]); };
+  await queue.handleRequested(interaction({ id: 'a', toolName: 'tool-a', respond }), context);
+  await queue.handleRequested(interaction({ id: 'b', toolName: 'tool-b', respond }), context);
+
+  const reply = queue.claimReply({ ...context, text: '批准' }).process();
+  await settleTimers();
+  t.mock.timers.tick(30 * 60_000);
+  await queue.handleRequested(interaction({ id: 'c', toolName: 'tool-c', respond }), context);
+  t.mock.timers.tick(30 * 60_000);
+  await settleTimers();
+  assert.equal(entries.some((text) => text.includes('tool-c')), false,
+    'C must not be shown before the confirmation for A completes');
+
+  confirmation.resolve();
+  await reply;
+  await settleTimers();
+  const confirmed = entries.indexOf('已批准，仅对本次操作有效。');
+  const presentedC = entries.findIndex((text) => text.includes('tool-c'));
+  assert.ok(confirmed !== -1 && presentedC > confirmed);
+  assert.equal(entries.some((text) => text.includes('tool-b')), false);
+  assert.deepEqual(responses, [['a', 'allowed-once'], ['b', 'rejected']]);
+  assert.equal(queue.hasPending(context.key), true);
+});

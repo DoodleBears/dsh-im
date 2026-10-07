@@ -19,6 +19,11 @@ const APPROVAL_UNAVAILABLE_TEXT = '机器人端无法处理这次审批，请到
 const APPROVAL_PROMPT = '请精准回复「批准」或「拒绝」（也支持：同意 / 不同意 / yes / no）。';
 const APPROVAL_AFTER_QUESTION_PROMPT = '请先完成当前问题，再精准回复「批准」或「拒绝」。';
 const APPROVAL_RESOLVED_TEXT = '该审批已处理，无需再次回复。';
+const APPROVAL_TIMEOUT_TEXT = '审批已超时，已自动拒绝此次操作。';
+const APPROVAL_TIMEOUT_UNCONFIRMED_TEXT = '审批已超时，正在自动拒绝，但暂未得到确认，稍后会自动重试。';
+const DEFAULT_APPROVAL_TIMEOUT_MS = 60 * 60_000;
+const EXPIRY_RETRY_BASE_MS = 30_000;
+const EXPIRY_RETRY_MAX_MS = 5 * 60_000;
 const RESOLVED_ROUTE_TTL_MS = 5 * 60_000;
 const MAX_RESOLVED_ROUTES = 2_048;
 
@@ -102,6 +107,7 @@ function approvalResult(pending, outcome) {
 }
 
 function approvalOutcomeText(outcome) {
+  if (outcome === 'expired') return t(APPROVAL_TIMEOUT_TEXT);
   if (outcome === 'unavailable') return t(APPROVAL_UNAVAILABLE_TEXT);
   if (outcome === 'allowed-once') return t('已批准，仅对本次操作有效。');
   if (outcome === 'rejected') return t('已拒绝此次操作。');
@@ -114,10 +120,14 @@ export class HarnessApprovalQueue {
   #byId = new Map();
   #routes = new Map();
   #resolvedRoutes = new Map();
+  #approvalTimeoutMs;
 
-  constructor({ label = 'IM', logger = console } = {}) {
+  constructor({ label = 'IM', logger = console, approvalTimeoutMs = DEFAULT_APPROVAL_TIMEOUT_MS } = {}) {
     this.#label = label;
     this.#logger = logger;
+    this.#approvalTimeoutMs = Number.isFinite(approvalTimeoutMs) && approvalTimeoutMs > 0
+      ? approvalTimeoutMs
+      : DEFAULT_APPROVAL_TIMEOUT_MS;
   }
 
   hasPending(key) {
@@ -184,6 +194,10 @@ export class HarnessApprovalQueue {
             }
             await pending.activationTask?.catch(() => undefined);
             await pending.presentationTask?.catch(() => undefined);
+            if (!pending.inactive && pending.expiring) {
+              await send(t(APPROVAL_TIMEOUT_UNCONFIRMED_TEXT));
+              return;
+            }
             if (pending.inactive || pending.resolving) {
               await send(t(APPROVAL_RESOLVED_TEXT));
               return;
@@ -338,11 +352,22 @@ export class HarnessApprovalQueue {
       closedOutcome: null,
       resolutionNotified: false,
       activationTask: null,
+      timeoutTimer: null,
+      expired: false,
+      expiring: false,
+      expiryAttempts: 0,
+      expiryNoticeSent: false,
     };
     this.#byId.set(approvalId, pending);
     const route = this.#routes.get(key) ?? { items: [] };
     route.items.push(pending);
     this.#routes.set(key, route);
+    pending.timeoutTimer = setTimeout(() => {
+      void this.#expire(pending).catch((error) => {
+        this.#logger.warn?.(`[dsh-im:${this.#label}] failed to expire an approval:`, error);
+      });
+    }, this.#approvalTimeoutMs);
+    pending.timeoutTimer.unref?.();
     if (route.items[0] === pending) await this.#present(pending);
     return true;
   }
@@ -377,13 +402,15 @@ export class HarnessApprovalQueue {
     const shouldNotify = pending.presented || presentationTask;
     const send = pending.send;
     const next = this.#remove(pending);
+    // The host reports our own timeout rejection as a plain rejection.
+    const outcome = pending.expiring && resolution.outcome === 'rejected' ? 'expired' : resolution.outcome;
     await this.#transition(next, async () => {
       let delivered = pending.presented;
       if (presentationTask) {
         delivered = await presentationTask.then(() => true, () => false);
       }
       if (shouldNotify && delivered) {
-        await this.#notifyResolved(pending, resolution.outcome, send);
+        await this.#notifyResolved(pending, outcome, send);
       }
     });
     return true;
@@ -453,6 +480,70 @@ export class HarnessApprovalQueue {
     }
   }
 
+  async #expire(pending) {
+    pending.timeoutTimer = null;
+    pending.expired = true;
+    // An in-flight decision wins; #submit expires the approval if it fails.
+    if (pending.inactive || pending.resolving || pending.submitting) return;
+    pending.resolving = true;
+    pending.expiring = true;
+    // Keep the route barrier: an earlier confirmation must finish before a
+    // later approval can be presented.
+    await pending.activationTask?.catch(() => undefined);
+    if (pending.inactive || this.#byId.get(pending.approvalId) !== pending) return;
+    await this.#releaseExpired(pending);
+  }
+
+  async #releaseExpired(pending) {
+    pending.timeoutTimer = null;
+    if (pending.inactive) return;
+    let outcome = 'expired';
+    try {
+      // Reject rather than withdraw: a withdrawal only retires the IM side and
+      // would leave a shared Web approval waiting without a bound.
+      await pending.interaction.respond(
+        approvalResult(pending, 'rejected'),
+        { signal: AbortSignal.timeout(5_000) },
+      );
+    } catch (error) {
+      if (error?.code !== 'interaction-not-pending') {
+        if (pending.inactive) return;
+        this.#logger.warn?.(`[dsh-im:${this.#label}] failed to release an expired approval:`, error);
+        this.#retryExpiry(pending);
+        if (!pending.expiryNoticeSent && pending.presented) {
+          pending.expiryNoticeSent = true;
+          await pending.send(t(APPROVAL_TIMEOUT_UNCONFIRMED_TEXT)).catch(() => undefined);
+        }
+        return;
+      }
+      outcome = 'resolved';
+    }
+    if (pending.inactive) return;
+    const presentationTask = pending.presentationTask;
+    const shouldNotify = pending.presented || presentationTask;
+    const send = pending.send;
+    const next = this.#remove(pending);
+    pending.closedOutcome = outcome;
+    await this.#transition(next, async () => {
+      let delivered = pending.presented;
+      if (presentationTask) {
+        delivered = await presentationTask.then(() => true, () => false);
+      }
+      if (shouldNotify && delivered) await this.#notifyResolved(pending, outcome, send);
+    });
+  }
+
+  #retryExpiry(pending) {
+    const delay = Math.min(EXPIRY_RETRY_BASE_MS * 2 ** pending.expiryAttempts, EXPIRY_RETRY_MAX_MS);
+    pending.expiryAttempts += 1;
+    pending.timeoutTimer = setTimeout(() => {
+      void this.#releaseExpired(pending).catch((error) => {
+        this.#logger.warn?.(`[dsh-im:${this.#label}] failed to expire an approval:`, error);
+      });
+    }, delay);
+    pending.timeoutTimer.unref?.();
+  }
+
   async #submit(pending, outcome) {
     pending.submitting = true;
     try {
@@ -478,6 +569,11 @@ export class HarnessApprovalQueue {
       if (pending.inactive) return;
       pending.submitting = false;
       this.#logger.error?.(`[dsh-im:${this.#label}] failed to submit an approval:`, error);
+      // The deadline passed while this decision was in flight.
+      if (pending.expired) {
+        await this.#expire(pending);
+        return;
+      }
       await pending.send(t('审批提交失败，请重新回复「批准」或「拒绝」。')).catch(() => undefined);
       return;
     }
@@ -536,6 +632,10 @@ export class HarnessApprovalQueue {
   #remove(pending) {
     if (pending.inactive) return null;
     pending.inactive = true;
+    if (pending.timeoutTimer) {
+      clearTimeout(pending.timeoutTimer);
+      pending.timeoutTimer = null;
+    }
     this.#rememberResolvedRoute(pending.key);
     this.#byId.delete(pending.approvalId);
     const route = this.#routes.get(pending.key);
