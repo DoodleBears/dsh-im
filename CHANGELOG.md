@@ -21,6 +21,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- Feishu/Lark 独占外部文本接收在原消息、发送人和话题路由核验后补充原生发送人名称；可选名称读取最多等待 1.5 秒，权限缺失、名称缺失或查询失败保留 ID 回退和原收件行为，取消或连接替换仍拒绝过期交付。此候选修复未发布，真实 BotHarness 验收单独记录于 BotHarness/BotHarness#1070。
+  Feishu/Lark exclusive external text intake enriches the native sender name after checking the exact message, sender and topic route. Optional reads wait at most 1.5 seconds; unavailable permissions, names or lookups preserve ID fallback and intake, while cancellation or connection replacement still refuses stale delivery. This candidate fix is unreleased; real BotHarness qualification is tracked separately in BotHarness/BotHarness#1070.
+
 - 修复 Host 语言设置在未注入的 Context 中读取时报错，以及新版 DSH 切换界面语言后 IM 回复和命令菜单未同步的问题。兼容新旧 settings API，渠道启动前等待语言初始化，settings 服务撤销时清理监听并回退到镜像语言。感谢 [@resetsix](https://github.com/resetsix)（[#288](https://github.com/xmanrui/dsh-im/pull/288)，修复 [#287](https://github.com/xmanrui/dsh-im/issues/287)）。
   Fixed Host language settings being read from a Context without injection, and IM replies and command menus not following interface-language changes in newer DSH versions. Supports both settings APIs, waits for language initialization before channels start, and cleans up observers and falls back to the mirrored language when the settings service is withdrawn. Thanks to [@resetsix](https://github.com/resetsix) ([#288](https://github.com/xmanrui/dsh-im/pull/288), fixes [#287](https://github.com/xmanrui/dsh-im/issues/287)).
 
