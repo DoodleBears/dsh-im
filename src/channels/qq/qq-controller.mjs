@@ -334,7 +334,12 @@ export class QqController {
   }
 
   async #checkedRuntime(botId, expectedFingerprint, signal) {
-    const account = await this.#deliveryAccount(botId, signal);
+    let account;
+    try { account = await this.#deliveryAccount(botId, signal); }
+    catch (error) {
+      if (signal?.aborted || error?.name === 'AbortError') throw qqRefusal('cancelled');
+      throw error;
+    }
     if (account.fingerprint !== expectedFingerprint) throw qqRefusal('account-changed');
     const runtime = this.#runtimes.get(botId);
     if (this.#configStore.get(botId)?.consumerMode !== 'external-consumer') throw qqRefusal('capability-unavailable');
