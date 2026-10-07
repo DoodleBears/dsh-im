@@ -176,14 +176,15 @@ export class DiscordApi {
     );
   }
 
-  createMessage({ channelId, content, replyToMessageId, signal, retry = true, failIfNotExists = false }) {
+  createMessage({ channelId, content, replyToMessageId, mentionUserIds = [], signal, retry = true, failIfNotExists = false }) {
+    const users = mentionUserIds.map(id => snowflake(id, 'user id'));
     return this.#request(`channels/${snowflake(channelId, 'channel id')}/messages`, {
       method: 'POST',
       signal,
       retry,
       body: {
-        content,
-        allowed_mentions: { parse: [], replied_user: false },
+        content: users.length ? `${users.map(id => `<@${id}>`).join(' ')} ${content}` : content,
+        allowed_mentions: { parse: [], replied_user: false, ...(users.length ? { users } : {}) },
         ...(replyToMessageId ? {
           message_reference: {
             message_id: snowflake(replyToMessageId, 'message id'),

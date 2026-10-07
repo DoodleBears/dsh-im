@@ -157,22 +157,35 @@ export async function qualifyDiscordReply(api, account, route, signal, permissio
   return { channel, route: { ...route }, source };
 }
 
-export async function sendDiscordReply(api, account, route, text, { signal, beforeSend, assertCurrent = () => {}, receipt = false } = {}) {
+/** Only the source author or people the source message mentions may be pinged back. */
+export function discordReplyMentions(mentionUserIds, route, source) {
+  if (mentionUserIds === undefined) return [];
+  if (!Array.isArray(mentionUserIds) || mentionUserIds.length > 20
+    || !mentionUserIds.every(discordSnowflake)) throw discordRefusal('bad-request');
+  const allowed = new Set([route.actorId, ...(Array.isArray(source?.mentions) ? source.mentions.map(user => user?.id) : [])]);
+  if (!mentionUserIds.every(id => allowed.has(id))) throw discordRefusal('bad-request');
+  return [...new Set(mentionUserIds)];
+}
+
+export async function sendDiscordReply(api, account, route, text, { signal, beforeSend, assertCurrent = () => {}, receipt = false, mentionUserIds } = {}) {
   if (typeof text !== 'string' || !text.trim() || text.length > 2000) throw discordRefusal('bad-request');
   const checked = await qualifyDiscordReply(api, account, route, signal);
+  const mentions = discordReplyMentions(mentionUserIds, route, checked.source);
+  if (mentions.length * 23 + text.length > 2000) throw discordRefusal('bad-request');
   signal?.throwIfAborted();
   assertCurrent();
   if (beforeSend && beforeSend() !== true) throw discordRefusal('stale-route');
   signal?.throwIfAborted();
-  return sendDiscordCheckedText(api, account, checked.channel, text, { signal, receipt, replyToMessageId: route.messageId });
+  return sendDiscordCheckedText(api, account, checked.channel, text, { signal, receipt, replyToMessageId: route.messageId,
+    ...(mentions.length ? { mentionUserIds: mentions } : {}) });
 }
 
-export async function sendDiscordCheckedText(api, account, channel, text, { signal, receipt = false, replyToMessageId } = {}) {
+export async function sendDiscordCheckedText(api, account, channel, text, { signal, receipt = false, replyToMessageId, mentionUserIds } = {}) {
   if (typeof text !== 'string' || !text.trim() || text.length > 2000) throw discordRefusal('bad-request');
   let sent;
   try {
     sent = await api.createMessage({ channelId: channel.channelId, content: text,
-      replyToMessageId, signal, retry: false, failIfNotExists: true });
+      replyToMessageId, ...(mentionUserIds ? { mentionUserIds } : {}), signal, retry: false, failIfNotExists: true });
   } catch (error) {
     if ([400, 401, 403, 404, 429].includes(error?.status)) throw discordRefusal('reply-permission-denied');
     throw discordRefusal('reply-result-unknown');

@@ -25,6 +25,17 @@ export function verifiedSlackAccount(identity, bot) {
   });
 }
 
+/** Only the source author or people the source message mentions may be pinged back. */
+export function slackReplyMentions(mentionUserIds, route, source) {
+  if (mentionUserIds === undefined) return [];
+  if (!Array.isArray(mentionUserIds) || mentionUserIds.length > 20
+    || !mentionUserIds.every(id => slackId(id, 'UW'))) throw slackRefusal('bad-request');
+  const mentioned = new Set([route.actorId,
+    ...(typeof source?.text === 'string' ? [...source.text.matchAll(/<@([UW][A-Z0-9]{4,30})>/g)].map(([, id]) => id) : [])]);
+  if (!mentionUserIds.every(id => mentioned.has(id))) throw slackRefusal('bad-request');
+  return [...new Set(mentionUserIds)];
+}
+
 /** Native channel and timestamp identities stay separate from event delivery IDs. */
 export function normalizeSlackExternalText(payload, { botId, account, sourceFiles = false, ordinaryText = false }) {
   if (payload?.api_app_id !== account.appId || payload?.team_id !== account.teamId)
@@ -32,20 +43,22 @@ export function normalizeSlackExternalText(payload, { botId, account, sourceFile
   const event = payload.event;
   const mention = event?.type === 'app_mention';
   const ordinary = ordinaryText && event?.type === 'message' && event.channel_type === 'channel';
-  if ((!mention && !ordinary) || event.bot_id || event.app_id || (event.subtype && !(mention && sourceFiles && event.subtype === 'file_share'))
+  const direct = event?.type === 'message' && event.channel_type === 'im' && slackId(event.channel, 'D');
+  if ((!mention && !ordinary && !direct) || event.bot_id || event.app_id
+    || (event.subtype && !((mention || direct) && sourceFiles && event.subtype === 'file_share'))
     || (ordinary && Array.isArray(event.files) && event.files.length > 0)
     || (!sourceFiles && Array.isArray(event.files) && event.files.length > 0)
     || event.user === account.userId) return null;
-  if (!slackId(event.channel, 'C') || !slackId(event.user, 'UW')
+  if (!slackId(event.channel, direct ? 'D' : 'C') || !slackId(event.user, 'UW')
     || !slackTimestamp(event.ts) || (event.thread_ts !== undefined && !slackTimestamp(event.thread_ts))
     || typeof payload.event_id !== 'string' || !/^Ev[A-Za-z0-9]{4,126}$/.test(payload.event_id)
     || typeof event.text !== 'string' || !event.text.trim() || event.text.length > 16000) throw slackRefusal('invalid-inbound');
-  const normalized = normalizeText(event, { botId, account, eventId: payload.event_id, requireMention: mention });
+  const normalized = normalizeText(event, { botId, account, eventId: payload.event_id, requireMention: mention, direct });
   // app_mention is the sole own-mention delivery path when both subscriptions overlap.
   return ordinary && normalized?.mentionedAccount ? null : normalized;
 }
 
-function normalizeText(event, { botId, account, eventId, requireMention }) {
+function normalizeText(event, { botId, account, eventId, requireMention, direct = false }) {
   const mentions = [...event.text.matchAll(/<@([UW][A-Z0-9]{4,30})>/g)]
     .map(([key, id]) => Object.freeze({ key, id,
       ...(id === account.userId && account.name ? { name: account.name } : {}) }));
@@ -58,7 +71,7 @@ function normalizeText(event, { botId, account, eventId, requireMention }) {
   return Object.freeze({ version: 1, channel: 'slack', botId, fingerprint: account.fingerprint,
     eventId: eventId, messageId: event.ts,
     actor: Object.freeze({ kind: 'user', id: event.user }),
-    conversation: Object.freeze({ kind: 'group', id: event.channel }),
+    conversation: Object.freeze({ kind: direct ? 'dm' : 'group', id: event.channel }),
     mentions: Object.freeze(mentions), mentionedAccount, at: at.toISOString(), text: event.text,
     reply: Object.freeze({ messageId: event.ts, conversationId: event.channel, actorId: event.user,
       threadId, rootId: threadId }),
@@ -76,5 +89,5 @@ export function normalizeSlackHistoryText(message, { botId, account, conversatio
     || typeof message.text !== 'string' || !message.text.trim() || message.text.length > 16000)
     return null;
   return normalizeText({ ...message, channel: conversationId }, { botId, account,
-    eventId: `history:${conversationId}:${message.ts}`, requireMention: false });
+    eventId: `history:${conversationId}:${message.ts}`, requireMention: false, direct: conversationId.startsWith('D') });
 }

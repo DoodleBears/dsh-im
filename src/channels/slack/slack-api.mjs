@@ -155,6 +155,11 @@ function requiredString(value, name) {
   return result;
 }
 
+function slackUserMention(id) {
+  if (typeof id !== 'string' || !/^[UW][A-Z0-9]{4,30}$/.test(id)) throw new TypeError('A Slack user id is required');
+  return `<@${id}>`;
+}
+
 function safeOutgoingText(value, { trim = true } = {}) {
   const raw = typeof value === 'string' ? value : '';
   const text = trim ? raw.trim() : raw;
@@ -309,14 +314,15 @@ export class SlackApi {
       : null;
   }
 
-  postMessage({ channelId, text, threadTs, signal, retry = true }) {
+  postMessage({ channelId, text, threadTs, mentionUserIds = [], signal, retry = true }) {
+    const mentions = mentionUserIds.map(id => slackUserMention(id)).join(' ');
     return this.#request('chat.postMessage', {
       tokenKind: 'bot',
       signal,
       retry,
       body: {
         channel: slackId(channelId, 'channel id'),
-        text: safeOutgoingText(text),
+        text: mentions ? `${mentions} ${safeOutgoingText(text)}` : safeOutgoingText(text),
         ...(threadTs ? { thread_ts: cleanString(threadTs) } : {}),
         mrkdwn: true,
         link_names: false,

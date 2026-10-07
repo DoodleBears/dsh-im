@@ -398,3 +398,69 @@ test('Slack report rejects private membership and treats ambiguous receipt as un
     } finally {await f.runtime.stop();}
   }
 });
+
+test('a Human DM to the app is direct intake without a mention, and its reply stays top-level', async () => {
+  const dm = payload({ type: 'message', channel_type: 'im', channel: 'D12345678', text: 'hello app' });
+  const event = normalizeSlackExternalText(dm, { botId, account });
+  assert.equal(event.conversation.kind, 'dm');
+  assert.equal(event.conversation.id, 'D12345678');
+  assert.equal(event.mentionedAccount, false);
+  assert.equal(normalizeSlackExternalText(payload(), { botId, account }).conversation.kind, 'group');
+  for (const patch of [{ bot_id: bot.id }, { user: account.userId }, { subtype: 'message_changed' }, { channel: 'C12345678' }])
+    assert.equal(normalizeSlackExternalText({ ...dm, event: { ...dm.event, ...patch } }, { botId, account }), null);
+  let conversationLookups = 0;
+  const f = await fixture(async () => ({ accepted: true }), { conversationInfo: async () => { conversationLookups++; return {}; } });
+  try {
+    Object.assign(f.source, dm.event);
+    const result = await f.runtime.replyChecked(event.reply, 'hi', { receipt: true });
+    assert.equal(f.sends.length, 1);
+    assert.equal(f.sends[0].channelId, 'D12345678');
+    assert.equal(f.sends[0].threadTs, undefined);
+    assert.equal(conversationLookups, 0);
+    assert.equal(result.sent, true);
+    const threaded = normalizeSlackExternalText(payload({ type: 'message', channel_type: 'im', channel: 'D12345678',
+      thread_ts: '1791127600.000001' }), { botId, account }).reply;
+    Object.assign(f.source, { thread_ts: '1791127600.000001' });
+    await f.runtime.replyChecked(threaded, 'in thread');
+    assert.equal(f.sends[1].threadTs, '1791127600.000001');
+  } finally { await f.runtime.stop(); }
+});
+
+test('reply mentions are limited to the source author and people the source mentions', async () => {
+  const f = await fixture(async () => ({ accepted: true }));
+  try {
+    f.source.text = `<@${identity.user_id}> ask <@U22222222>`;
+    const route = normalizeSlackExternalText(payload({ text: f.source.text }), { botId, account }).reply;
+    await f.runtime.replyChecked(route, 'done', { mentionUserIds: ['U87654321', 'U22222222'] });
+    assert.deepEqual(f.sends[0].mentionUserIds, ['U87654321', 'U22222222']);
+    await assert.rejects(f.runtime.replyChecked(route, 'no', { mentionUserIds: ['U33333333'] }), { code: 'bad-request' });
+    await assert.rejects(f.runtime.replyChecked(route, 'no', { mentionUserIds: ['<!channel>'] }), { code: 'bad-request' });
+    await f.runtime.replyChecked(route, 'plain');
+    assert.equal(f.sends.length, 2);
+    assert.equal(f.sends[1].mentionUserIds, undefined);
+  } finally { await f.runtime.stop(); }
+});
+
+test('Slack API prefixes checked user mentions while neutralizing mention markup in the text', async () => {
+  let body;
+  const api = new SlackApi({ botToken: 'xoxb-test-1234567890123456', fetchImpl: async (_url, request) => {
+    body = JSON.parse(request.body);
+    return Response.json({ ok: true, channel: 'C12345678', ts: '1791127737.000001' });
+  } });
+  await api.postMessage({ channelId: 'C12345678', text: 'hi <@U99999999> <!channel>', mentionUserIds: ['U87654321'], retry: false });
+  assert.match(body.text, /^<@U87654321> hi /);
+  assert.doesNotMatch(body.text, /<@U99999999>|<!channel>/);
+  assert.throws(() => api.postMessage({ channelId: 'C12345678', text: 'x', mentionUserIds: ['bad'] }), TypeError);
+});
+
+test('Socket intake names mentioned Humans from users.info and keeps the account mention name', async () => {
+  let received;
+  const f = await fixture(async event => { received = event; return { accepted: true }; },
+    { userInfo: async ({ userId }) => ({ id: userId, real_name: userId === 'U22222222' ? 'Mentioned Human' : 'QA Human' }) });
+  try {
+    f.socket.packet({ type: 'events_api', envelope_id: 'env-names', payload: payload({ text: `<@${identity.user_id}> ask <@U22222222>` }) });
+    await flush(); await flush();
+    assert.deepEqual(received.mentions.map(mention => mention.name), ['QA Bot', 'Mentioned Human']);
+    assert.equal(received.actor.name, 'QA Human');
+  } finally { await f.runtime.stop(); }
+});
