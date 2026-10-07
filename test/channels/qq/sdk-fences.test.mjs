@@ -96,6 +96,9 @@ test('actual QQ SDK disconnect clears receiver readiness and a native resumed ev
   assert.equal(runtime.status.error.details.stage, 'credential.verify');
   assert.equal(JSON.stringify(runtime.status.error).includes('private provider text'), false);
   rejectAccountQuery = false;
+  assert.equal((await runtime.describeDeliveryAccount()).userId, 'native-bot');
+  assert.equal(runtime.status.error, null);
+  assert.equal(runtime.status.lastError, null);
   for (const mode of ['reconnect', 'normal-close']) {
     disconnected = deferred();
     const resumed = mode === 'reconnect' ? new Promise(resolve => bot.on('resumed', resolve)) : undefined;
