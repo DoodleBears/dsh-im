@@ -504,3 +504,34 @@ test('checked report preflight is cancelled when its Registration disappears', a
   await assert.rejects(result, {code: 'provider-unavailable'});
   assert.equal(sends, 0);
 });
+
+
+test('checked question cards require the optional Lark contract and fence their current Registration', async () => {
+  const service = createDeliveryService();
+  const adapter = memoryAdapter({channel: 'feishu'});
+  let fence;
+  adapter.questionCardChecked = async (botId, route, card, options) => {
+    assert.equal(botId, 'bot_one');
+    assert.equal(options.beforeSend(), true);
+    fence = options;
+    return {sent: true, receipt: {version: 1, messageId: 'om_card', conversationId: route.conversationId}};
+  };
+  const dispose = service.registerAdapter(adapter);
+  const options = {expectedFingerprint: 'a'.repeat(64), beforeSend: () => true};
+  await assert.rejects(service.questionCardChecked('bot_one', {}, {}, {expectedFingerprint: options.expectedFingerprint}), {code: 'bad-request'});
+  const result = await service.questionCardChecked('bot_one', {conversationId: 'oc_private'}, {requestId: 'qa-question'}, options);
+  assert.equal(result.receipt.messageId, 'om_card');
+  dispose();
+  assert.equal(fence.signal.aborted, true);
+  assert.throws(() => fence.beforeSend(), {code: 'capability-unavailable'});
+  const old = createDeliveryService(); old.registerAdapter(memoryAdapter({channel: 'feishu'}));
+  await assert.rejects(old.questionCardChecked('bot_one', {}, {}, options), {code: 'capability-unavailable'});
+});
+
+test('question service failures expose only bounded public error codes', async () => {
+  const service = createDeliveryService();
+  const adapter = memoryAdapter({channel: 'feishu'});
+  adapter.questionCardChecked = async () => {throw new Error('private transport detail');};
+  service.registerAdapter(adapter);
+  await assert.rejects(service.questionCardChecked('bot_one', {}, {}, {expectedFingerprint: 'a'.repeat(64), beforeSend: () => true}), {code: 'send-result-unknown', message: 'send-result-unknown'});
+});

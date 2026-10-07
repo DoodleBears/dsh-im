@@ -1,5 +1,6 @@
 import { consumeExternalCardAction } from './external-cards.mjs';
 import { externalSenderName } from './external-names.mjs';
+import { externalQuestionCard } from './external-questions.mjs';
 import { qualifyExternalReply } from './reply-context.mjs';
 import { readExternalHistory } from './history-reader.mjs';
 import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
@@ -761,6 +762,18 @@ export class FeishuRuntime {
     assertCurrent();
     return update ? updateExternalApprovalCard(client, identity, route, card, { signal, assertCurrent, beforeSend })
       : replyExternalApprovalCard(client, route, card, { signal, assertCurrent, beforeSend });
+  }
+
+  async questionCardChecked(identity, route, card, { signal, beforeSend, update = false } = {}) {
+    const client = this.#client;
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      if (!client || this.#client !== client || this.#consumerMode !== 'external-consumer')
+        throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    };
+    assertCurrent();
+    return update ? updateExternalApprovalCard(client, identity, route, card, { signal, assertCurrent, beforeSend, render: externalQuestionCard, privateOnly: true })
+      : replyExternalApprovalCard(client, route, card, { signal, assertCurrent, beforeSend, render: externalQuestionCard, privateOnly: true });
   }
 
   async historyChecked(identity, route, query, { signal } = {}) {

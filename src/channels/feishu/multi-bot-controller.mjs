@@ -594,7 +594,7 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'feishu', account,
         connected: isConnected(connectionStatus(this.#runtimes.get(botId))),
-        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer'] };
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer', 'question-card-checked', 'question-card-update-checked', 'question-action-consumer'] };
     });
   }
 
@@ -695,6 +695,23 @@ export class MultiBotDshFeishuController {
         || typeof runtime.approvalCardChecked !== 'function') throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
       const lease = this.#inboundConsumers.signalFor(botId, expectedFingerprint);
       return runtime.approvalCardChecked({ appId: config.appId, botOpenId: config.botOpenId }, route, card,
+        { signal: signal ? AbortSignal.any([signal, lease]) : lease, beforeSend, update });
+    });
+  }
+
+  async questionCardChecked(botId, route, card, { expectedFingerprint, signal, beforeSend, update = false } = {}) {
+    this.#assertOpen();
+    return this.#withBotTransition(botId, async () => {
+      this.#assertOpen();
+      signal?.throwIfAborted();
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      if (account.fingerprint !== expectedFingerprint) throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      const runtime = this.#runtimes.get(botId);
+      if (config.consumerMode !== 'external-consumer' || !isConnected(connectionStatus(runtime))
+        || typeof runtime.questionCardChecked !== 'function') throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      const lease = this.#inboundConsumers.signalFor(botId, expectedFingerprint);
+      return runtime.questionCardChecked({ appId: config.appId, botOpenId: config.botOpenId }, route, card,
         { signal: signal ? AbortSignal.any([signal, lease]) : lease, beforeSend, update });
     });
   }
