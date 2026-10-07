@@ -1,0 +1,111 @@
+import { createHash } from 'node:crypto';
+import { ApiError } from '@tencent-connect/qqbot-nodejs/protocol';
+
+export function qqRefusal(code) { return Object.assign(new Error(code), { code }); }
+
+function nativeReplyFailure(error) {
+  if (!(error instanceof ApiError)) return qqRefusal('reply-result-unknown');
+  const code = Number(error.bizCode);
+  if ([304103, 40034005].includes(code)) return qqRefusal('reply-window-expired');
+  if (code === 40034128) return qqRefusal('reply-limit-exceeded');
+  if (error.httpStatus === 429 || code === 40034100) return qqRefusal('reply-rate-limited');
+  if ([40034101, 40034105, 40054002, 40054003, 40054016].includes(code))
+    return qqRefusal('reply-permission-denied');
+  if ([22006, 304061, 40034006, 40054007, 40054010].includes(code)) return qqRefusal('bad-request');
+  if (code === 40034024) return qqRefusal('stale-route');
+  return qqRefusal('reply-result-unknown');
+}
+
+function identifier(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 512
+    && value.trim() === value && !/[\s\u0000-\u001f]/u.test(value);
+}
+
+export function verifiedQqAccount(appId, user) {
+  if (!identifier(appId) || !identifier(user?.id) || user.bot !== true)
+    throw qqRefusal('account-unverified');
+  const identity = { provider: 'qq', appId, userId: user.id };
+  return Object.freeze({ appId, userId: user.id,
+    fingerprint: createHash('sha256').update(JSON.stringify(identity)).digest('hex'),
+    ...(typeof user.username === 'string' && user.username.trim()
+      ? { name: user.username.slice(0, 512) } : {}),
+  });
+}
+
+/** QQ group and member OpenIDs belong to this authenticated application. */
+export function normalizeQqExternalText(message, { botId, account }) {
+  if (message?.kind !== 'group' || message.rawEventType !== 'GROUP_AT_MESSAGE_CREATE'
+    || message.senderIsBot || message.senderId === account.userId
+    || message.attachments?.length || message.msgElements?.length
+    || (message.msgType !== undefined && message.msgType !== 0)) return null;
+  if (!identifier(message.messageId) || !identifier(message.senderId)
+    || !identifier(message.groupOpenid) || typeof message.content !== 'string'
+    || !message.content.trim() || message.content.length > 16000
+    || message.replyTarget?.scope !== 'group'
+    || message.replyTarget.targetId !== message.groupOpenid
+    || message.replyTarget.msgId !== message.messageId)
+    throw qqRefusal('invalid-inbound');
+  const at = new Date(message.timestamp);
+  if (!Number.isFinite(at.getTime())) throw qqRefusal('invalid-inbound');
+  return Object.freeze({ version: 1, channel: 'qq', botId, fingerprint: account.fingerprint,
+    eventId: message.messageId, messageId: message.messageId,
+    actor: { kind: 'user', id: message.senderId,
+      ...(typeof message.senderName === 'string' && message.senderName.trim()
+        ? { name: message.senderName.slice(0, 512) } : {}) },
+    conversation: { kind: 'group', id: message.groupOpenid },
+    mentions: [], mentionedAccount: true, at: at.toISOString(), text: message.content,
+    reply: { messageId: message.messageId, conversationId: message.groupOpenid, actorId: message.senderId },
+    replay: { kind: 'provider-redelivery', resumeCursor: false, gapPossible: true },
+  });
+}
+
+/** Bounded, process-local source proof, never a second durable Inbox or history. */
+export class QqExternalConsumer {
+  #bot;
+  #account;
+  #botId;
+  #accept;
+  #sources = new Map();
+  constructor({ bot, account, botId, accept }) {
+    this.#bot = bot; this.#account = account; this.#botId = botId; this.#accept = accept;
+  }
+  async accept(message, signal) {
+    const event = normalizeQqExternalText(message, { botId: this.#botId, account: this.#account });
+    if (!event) return;
+    signal.throwIfAborted();
+    const prior = this.#sources.get(event.messageId);
+    if (prior && JSON.stringify(prior.event) !== JSON.stringify(event)) throw qqRefusal('stale-route');
+    if (!prior) this.#sources.set(event.messageId, { event, attempts: 0 });
+    while (this.#sources.size > 2000) this.#sources.delete(this.#sources.keys().next().value);
+    // The external consumer acknowledges only after canonical ingestion commits.
+    return this.#accept(event, signal);
+  }
+  qualify(route, signal) {
+    signal?.throwIfAborted();
+    const source = this.#sources.get(route?.messageId);
+    if (!source) throw qqRefusal('source-not-found');
+    if (Object.keys(route).some(key => !['messageId', 'conversationId', 'actorId'].includes(key))
+      || ['messageId', 'conversationId', 'actorId'].some(key => source.event.reply[key] !== route[key]))
+      throw qqRefusal('stale-route');
+    if (Date.now() - Date.parse(source.event.at) >= 5 * 60_000) throw qqRefusal('reply-window-expired');
+    if (source.attempts >= 5) throw qqRefusal('reply-limit-exceeded');
+    return structuredClone(source.event.reply);
+  }
+  async reply(route, text, { signal, receipt = false, beforeSend, mentionUserIds } = {}) {
+    const qualified = this.qualify(route, signal);
+    if (typeof text !== 'string' || !text.trim() || text.length > 4000 || mentionUserIds?.length)
+      throw qqRefusal('bad-request');
+    if (beforeSend !== undefined && beforeSend() !== true) throw qqRefusal('cancelled');
+    signal?.throwIfAborted();
+    this.#sources.get(route.messageId).attempts++;
+    let response;
+    try {
+      response = await this.#bot.sendText({ scope: 'group', targetId: qualified.conversationId,
+        msgId: qualified.messageId }, text);
+    } catch (error) { throw nativeReplyFailure(error); }
+    // Once dispatch begins, cancellation or a missing response cannot prove non-delivery.
+    if (signal?.aborted || !identifier(response?.id)) throw qqRefusal('reply-result-unknown');
+    return { sent: true, ...(receipt ? { receipt: { version: 1, messageId: response.id,
+      conversationId: qualified.conversationId } } : {}) };
+  }
+}

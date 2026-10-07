@@ -8,6 +8,7 @@ import {
 import { t } from '../shared/i18n.mjs';
 import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
 import { createQqBridgeStatus, QqHarnessBridge } from './qq-bridge.mjs';
+import { QqExternalConsumer, qqRefusal, verifiedQqAccount } from './external-consumer.mjs';
 
 function timeoutError() {
   const error = new Error('QQ WebSocket did not become ready in time');
@@ -47,6 +48,8 @@ export class QqRuntime {
   #abortController = null;
   #runTask = null;
   #starting = null;
+  #externalConsumer;
+  #externalBridge = null;
 
   constructor({
     config,
@@ -60,6 +63,7 @@ export class QqRuntime {
     connectTimeoutMs = 20_000,
     createBot = (options) => new QQBot(options),
     typingMiddleware = typingIndicator,
+    externalConsumer,
   }) {
     if (!config || !appSecret || !harness || !state) {
       throw new TypeError('QqRuntime requires config, app secret, Harness, and state');
@@ -75,10 +79,31 @@ export class QqRuntime {
     this.#connectTimeoutMs = connectTimeoutMs;
     this.#createBot = createBot;
     this.#typingMiddleware = typingMiddleware;
+    this.#externalConsumer = externalConsumer;
   }
 
   get status() {
     return structuredClone(this.#status);
+  }
+
+  async describeDeliveryAccount(signal) {
+    signal?.throwIfAborted();
+    if (!this.#status.ready || !this.#bot) throw qqRefusal('bot-not-connected');
+    const bot = this.#bot;
+    const user = await bot.api.get('/users/@me');
+    signal?.throwIfAborted();
+    if (this.#bot !== bot || !this.#status.ready) throw qqRefusal('bot-not-connected');
+    return verifiedQqAccount(this.#config.appId, user);
+  }
+
+  qualifyReplyChecked(route, { signal } = {}) {
+    if (!this.#externalBridge) throw qqRefusal('consumer-unavailable');
+    return this.#externalBridge.qualify(route, signal);
+  }
+
+  replyChecked(route, text, options) {
+    if (!this.#externalBridge) throw qqRefusal('consumer-unavailable');
+    return this.#externalBridge.reply(route, text, options);
   }
 
   async sendConnectionTest(text) {
@@ -140,7 +165,8 @@ export class QqRuntime {
     this.#status.startedAt = new Date().toISOString();
     this.#status.qqConnectionState = 'connecting';
     this.#status.lastError = null; this.#status.error = null; this.#diagnostics.clear();
-    await atConnectionStage('harness.check', () => this.#harness.ensureRunning());
+    if (this.#config.consumerMode !== 'external-consumer')
+      await atConnectionStage('harness.check', () => this.#harness.ensureRunning());
     this.#status.harnessReachable = true;
 
     const sdkLogger = {
@@ -166,7 +192,18 @@ export class QqRuntime {
     const controller = new AbortController();
     this.#abortController = controller;
     this.#bot = bot;
-    this.#bridge = new QqHarnessBridge({
+    if (this.#config.consumerMode === 'external-consumer' && this.#externalConsumer) {
+      try {
+        const account = verifiedQqAccount(this.#config.appId, await bot.api.get('/users/@me'));
+        controller.signal.throwIfAborted();
+        this.#externalBridge = new QqExternalConsumer({ bot, account, botId: this.#config.botId,
+          accept: this.#externalConsumer });
+      } catch (error) {
+        await this.stop();
+        throw error;
+      }
+    }
+    this.#bridge = this.#config.consumerMode === 'external-consumer' ? null : new QqHarnessBridge({
       bot,
       ownerUserOpenid: this.#config.ownerUserOpenid,
       harness: this.#harness,
@@ -182,7 +219,7 @@ export class QqRuntime {
     // tags. Parse them into readable text so the Harness sees what the sender
     // actually meant instead of an unusable markup fragment.
     bot.use(contentSanitizer({ parseFaceTags: true }));
-    bot.use?.(this.#typingMiddleware({
+    if (this.#config.consumerMode !== 'external-consumer') bot.use?.(this.#typingMiddleware({
       keepAlive: true,
       predicate: (ctx) => {
         const message = ctx?.message;
@@ -224,10 +261,12 @@ export class QqRuntime {
         this.#logger.warn?.(`[dsh-im:qq] bot ${this.#config.botId} connection error:`, extractConnectionEvidence(error).details);
       }
     };
-    const onMessage = (_ctx, message) => {
-      const task = this.#bridge?.accept(message);
+    const onMessage = async (_ctx, message) => {
+      const task = this.#config.consumerMode === 'external-consumer'
+        ? this.#externalBridge?.accept(message, controller.signal)
+        : this.#bridge?.accept(message);
       if (!task) return;
-      void task.catch((error) => {
+      return task.catch((error) => {
         if (controller.signal.aborted) return;
         this.#logger.error?.(
           `[dsh-im:qq] bot ${this.#config.botId} message handling failed:`,
@@ -285,6 +324,7 @@ export class QqRuntime {
     this.#abortController = null;
     this.#bot = null;
     this.#bridge = null;
+    this.#externalBridge = null;
     this.#runTask = null;
     try {
       bot?.stop();
