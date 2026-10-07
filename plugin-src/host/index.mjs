@@ -97,6 +97,7 @@ export function createImHostPlugin(internals = {}) {
           approvalCardVersion: 1,
           approvalCardChecked: (botId, route, card, options) => deliveryService.approvalCardChecked(botId, route, card, options),
           receiptVersion: 1,
+          postFenceVersion: 1,
           echoVersion: 1,
           replyContextVersion: 1,
           replyReceiptVersion: 1,

@@ -44,6 +44,8 @@ function normalizeContextTokens(value) {
       seq: sequence(entry.seq),
       messageTimeMs: timestamp(entry.messageTimeMs),
       receivedAt: timestamp(entry.receivedAt),
+      ...(typeof entry.fingerprint === 'string' && /^[a-f0-9]{64}$/.test(entry.fingerprint)
+        ? { fingerprint: entry.fingerprint, expiresAt: timestamp(entry.expiresAt) } : {}),
     };
   }
   return { credentialHash: value.credentialHash, users };
@@ -100,6 +102,7 @@ function normalizeState(value) {
   return {
     version: 1,
     sessions,
+    externalReplySources: Object.fromEntries(Object.entries(value.externalReplySources ?? {}).filter(([key, entry]) => /^\d+$/.test(key) && entry?.messageId === key && entry.expiresAt > Date.now()).slice(-1000)),
     ...(value.deferred ? { deferred: normalizeDeferredState(value.deferred) } : {}),
     seenMessageIds: Array.isArray(value.seenMessageIds)
       ? value.seenMessageIds.filter((id) => typeof id === 'string').slice(-1_000)
@@ -148,11 +151,12 @@ export class WeixinStateStore {
     return this.#state.contextTokens?.users?.[userId]?.token ?? undefined;
   }
 
-  async rememberContextToken({ userId, contextToken, seq, messageTimeMs }) {
+  async rememberContextToken({ userId, contextToken, seq, messageTimeMs, fingerprint, expiresAt }) {
     if (!nonEmptyString(userId) || !nonEmptyString(contextToken) || !this.#state.contextTokens) return;
     const users = this.#state.contextTokens.users;
     const previous = users[userId];
-    const next = { token: contextToken, seq: sequence(seq), messageTimeMs: timestamp(messageTimeMs), receivedAt: Date.now() };
+    const next = { token: contextToken, seq: sequence(seq), messageTimeMs: timestamp(messageTimeMs), receivedAt: Date.now(),
+      ...(fingerprint === undefined ? {} : { fingerprint, expiresAt }) };
     // Late/duplicate batches must not replace a newer conversation capability.
     if (previous) {
       if (previous.seq !== null && next.seq !== null && BigInt(next.seq) <= BigInt(previous.seq)) return;
@@ -163,6 +167,27 @@ export class WeixinStateStore {
     users[userId] = next;
     const keys = Object.keys(users);
     if (keys.length > CONTEXT_TOKEN_LIMIT) delete users[keys[0]];
+    await this.#persist();
+  }
+
+  externalReplySource(messageId) {
+    return structuredClone(this.#state.externalReplySources?.[messageId]);
+  }
+
+  // This is a local retention fence, not a claim about the server's token lifetime.
+  externalPostContext(account) {
+    const entry = this.#state.contextTokens?.users?.[account.ownerUserId];
+    if (entry?.fingerprint !== account.fingerprint || !Number.isFinite(entry.expiresAt)
+      || entry.expiresAt <= Date.now() || typeof entry.token !== 'string'
+      || !entry.token.trim() || entry.token.length > 16384) return undefined;
+    return entry.token;
+  }
+
+  async rememberExternalReplySource(source) {
+    const entries = Object.entries(this.#state.externalReplySources ?? {})
+      .filter(([key, value]) => key !== source.messageId && value.expiresAt > Date.now()).slice(-999);
+    entries.push([source.messageId, structuredClone(source)]);
+    this.#state.externalReplySources = Object.fromEntries(entries);
     await this.#persist();
   }
 
@@ -264,7 +289,7 @@ export class WeixinStateStore {
   }
 
   snapshot() {
-    const { contextTokens, ...state } = this.#state;
+    const { contextTokens, externalReplySources, ...state } = this.#state;
     return structuredClone(state);
   }
 

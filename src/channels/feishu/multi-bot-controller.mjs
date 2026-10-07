@@ -1,5 +1,5 @@
 import { normalizeExternalCardAction } from './external-cards.mjs';
-import { ExclusiveInboundConsumers, normalizeExternalText, normalizeOwnTextEcho } from './external-consumer.mjs';
+import { ExclusiveInboundConsumers, normalizeExternalMedia, normalizeOwnTextEcho } from './external-consumer.mjs';
 import { atConnectionStage, createConnectionDiagnostics } from '../shared/connection-error.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { connectionTestMessage } from '../shared/connection-test.mjs';
@@ -594,11 +594,11 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'feishu', account,
         connected: isConnected(connectionStatus(this.#runtimes.get(botId))),
-        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer'] };
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'source-image-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer'] };
     });
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, onEcho, onAction } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, sourceImages = false, onEcho, onAction } = {}) {
     this.#assertOpen();
     return this.#withBotTransition(botId, async () => {
       this.#assertOpen();
@@ -607,7 +607,7 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       if (account.fingerprint !== expectedFingerprint)
         throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, onEcho, onAction });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, sourceImages, onEcho, onAction });
       try {
         const saved = await this.#configStore.saveBot({ ...config, consumerMode: 'external-consumer' });
         const resolved = await this.#credentials.resolve(saved.secretRef);
@@ -1493,8 +1493,9 @@ export class MultiBotDshFeishuController {
         signal?.throwIfAborted();
         const echo = normalizeOwnTextEcho(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
         if (echo) return this.#inboundConsumers.accept(config.id, echo, signal, true);
-        const evidence = normalizeExternalText(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
+        const evidence = normalizeExternalMedia(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
         if (evidence === null) return { accepted: true, ignored: true };
+        if (evidence.attachments?.length && !this.#inboundConsumers.acceptsImages(config.id)) return { accepted: true, ignored: true };
         const named = typeof runtime.enrichExternalNames === 'function' ? await runtime.enrichExternalNames(evidence, { signal }) : evidence;
         const enriched = this.#inboundConsumers.acceptsFiles(config.id) && typeof runtime.enrichExternal === 'function' ? await runtime.enrichExternal(named, { signal }) : named;
         return this.#inboundConsumers.accept(config.id, enriched, signal);

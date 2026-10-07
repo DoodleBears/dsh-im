@@ -57,6 +57,7 @@ function normalizeAccount(value, invalid = () => null) {
   } catch (error) {
     return invalid('.baseUrl', error?.code === 'untrusted-base-url' ? 'untrusted-api-url' : 'invalid-api-url');
   }
+  if (value.consumerMode != null && value.consumerMode !== 'external-consumer') return invalid('.consumerMode', 'invalid-mode');
   return Object.freeze({
     botId,
     accountId,
@@ -65,6 +66,7 @@ function normalizeAccount(value, invalid = () => null) {
     baseUrl,
     createdAt: cleanString(value.createdAt) ?? new Date().toISOString(),
     connectedAt: cleanString(value.connectedAt),
+    ...(value.consumerMode == null ? {} : { consumerMode: value.consumerMode }),
   });
 }
 

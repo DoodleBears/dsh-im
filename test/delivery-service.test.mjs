@@ -305,6 +305,30 @@ function checkedFixture() {
   return {service, adapter, fingerprint};
 }
 
+test('Weixin checked post requires a current final fence and keeps client acknowledgement separate', async () => {
+  const fx = checkedFixture(); fx.adapter.channel = 'weixin';
+  fx.adapter.describeAccount = async () => ({version: 1, capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'proactive-fence-checked'], account: {fingerprint: fx.fingerprint}});
+  fx.service.registerAdapter(fx.adapter);
+  const target = {targetId: 'owner', kind: 'user', route: {toUserId: 'paired-owner'}};
+  await fx.service.createTarget('bot_one', target);
+  const {createHash} = await import('node:crypto');
+  const expectedTargetDigest = createHash('sha256').update(JSON.stringify({kind: target.kind, route: target.route})).digest('hex');
+  const options = {expectedFingerprint: fx.fingerprint, expectedTargetDigest, receipt: true};
+  await assert.rejects(fx.service.sendChecked('bot_one', 'owner', 'Report', options), {code: 'capability-unavailable'});
+  assert.equal(fx.adapter.sends.length, 0);
+  let sends = 0;
+  fx.adapter.sendText = async (_id, saved, _text, opts) => {
+    assert.equal(saved.route.toUserId, 'paired-owner');
+    if (!opts.beforeSend()) throw Object.assign(new Error('cancelled'), {code: 'cancelled'});
+    sends++;
+    return {sent: true, receipt: {version: 1, messageId: 'dsh-weixin-client', identityKind: 'client-acknowledgement', conversationId: 'paired-owner', serverMessageId: '18446744073709551610', secret: 'discard'}};
+  };
+  await assert.rejects(fx.service.sendChecked('bot_one', 'owner', 'Report', {...options, beforeSend: () => false}), {code: 'send-permission-denied'});
+  assert.equal(sends, 0);
+  assert.deepEqual(await fx.service.sendChecked('bot_one', 'owner', 'Report', {...options, beforeSend: () => true}), {sent: true, receipt: {version: 1, messageId: 'dsh-weixin-client', identityKind: 'client-acknowledgement', conversationId: 'paired-owner', serverMessageId: '18446744073709551610'}});
+  assert.equal(sends, 1);
+});
+
 async function checkedTarget(fx) {
   const target = {targetId: 'self', kind: 'user', route: {openId: 'ou_self'}};
   await fx.service.createTarget('bot_one', target);

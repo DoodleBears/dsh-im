@@ -51,6 +51,9 @@ const DELIVERY_ERROR_CODES = new Set([
   'file-provider-rejected',
   'resource-unavailable',
   'artifact-too-large',
+  'private-context-unavailable',
+  'private-context-rejected',
+  'send-permission-denied',
   'card-provider-rejected',
 ]);
 
@@ -451,7 +454,7 @@ export class DeliveryService {
     } catch (error) { throw publicOperationError(error); }
   }
 
-  async sendChecked(botId, targetId, text, { expectedFingerprint, expectedTargetDigest, signal, format = 'plain', receipt = false } = {}) {
+  async sendChecked(botId, targetId, text, { expectedFingerprint, expectedTargetDigest, signal, format = 'plain', receipt = false, beforeSend } = {}) {
     const id = botIdOf(botId);
     const key = targetIdOf(targetId);
     if (typeof text !== 'string' || !text.trim() || !['plain', 'markdown'].includes(format) || typeof receipt !== 'boolean'
@@ -480,21 +483,38 @@ export class DeliveryService {
       if (account.account?.fingerprint !== expectedFingerprint) throw deliveryError('account-changed');
       const receiptConversation = adapter.channel === 'feishu' && target.kind === 'group'
         ? target.route.chatId : adapter.channel === 'slack' && target.kind === 'conversation'
-          ? target.route.channelId : undefined;
+          ? target.route.channelId : adapter.channel === 'weixin' && target.kind === 'user'
+            ? target.route.toUserId : undefined;
       if (receipt && (!account.capabilities?.includes('proactive-receipt-checked') || !receiptConversation))
+        throw deliveryError('capability-unavailable');
+      if (receipt && adapter.channel === 'weixin' &&
+        (!account.capabilities?.includes('proactive-fence-checked') || typeof beforeSend !== 'function'))
         throw deliveryError('capability-unavailable');
       cancellation(signal);
       this.#assertRegistered(registration);
       const deliverySignal = signal ? AbortSignal.any([signal, registration.controller.signal]) : registration.controller.signal;
+      const fence = () => {
+        cancellation(deliverySignal);
+        this.#assertRegistered(registration);
+        return beforeSend === undefined || beforeSend() === true;
+      };
+      if (!fence()) throw deliveryError('send-permission-denied');
       const result = await adapter.sendText(id, target, text, { signal: deliverySignal, expectedFingerprint,
+        ...(beforeSend === undefined ? {} : { beforeSend: fence }),
         ...(receipt ? { receipt: true } : {}),
         ...(format === 'markdown' ? { format } : {}) });
       if (!receipt) return { sent: true };
       if (result?.sent !== true || result.receipt?.version !== 1
         || typeof result.receipt.messageId !== 'string' || !result.receipt.messageId || result.receipt.messageId.length > 512
-        || result.receipt.conversationId !== receiptConversation)
+        || result.receipt.conversationId !== receiptConversation
+        || (adapter.channel === 'weixin' && (result.receipt.identityKind !== 'client-acknowledgement'
+          || (result.receipt.serverMessageId !== undefined &&
+            (typeof result.receipt.serverMessageId !== 'string' || !/^\d{1,512}$/.test(result.receipt.serverMessageId)))))
+        || (adapter.channel !== 'weixin' && result.receipt.identityKind !== undefined))
         throw deliveryError('send-result-unknown');
-      return { sent: true, receipt: { version: 1, messageId: result.receipt.messageId, conversationId: result.receipt.conversationId } };
+      return { sent: true, receipt: { version: 1, messageId: result.receipt.messageId, conversationId: result.receipt.conversationId,
+        ...(result.receipt.identityKind ? { identityKind: result.receipt.identityKind } : {}),
+        ...(result.receipt.serverMessageId ? { serverMessageId: result.receipt.serverMessageId } : {}) } };
     } catch (error) { throw publicOperationError(error); }
   }
 
