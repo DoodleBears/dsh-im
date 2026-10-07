@@ -97,8 +97,19 @@ export class QqRuntime {
       return verifiedQqAccount(this.#config.appId, user);
     } catch (error) {
       if (!signal?.aborted && this.#bot === bot) {
-        this.#status.error = this.#diagnostics.report(error, { operation: 'account.verify',
-          stage: 'account.verify', botId: this.#config.botId }).publicError;
+        const qualificationHints = {
+          'application-id': 'QQ application identifier is invalid.',
+          'native-user-id': 'QQ account response did not contain a valid native user identifier.',
+          'native-bot-flag': 'QQ account response did not confirm the native bot flag.',
+        };
+        this.#status.error = this.#diagnostics.report(error, { operation: 'connection.status',
+          stage: 'credential.verify', botId: this.#config.botId,
+          httpStatus: error?.httpStatus, providerCode: error?.bizCode,
+          ...(error?.code === 'account-unverified' ? { publicError: {
+            code: 'account-unverified', message: 'QQ account qualification failed.',
+            details: { reason: 'invalid-response', hint: qualificationHints[error.verificationFailure] },
+          } } : {}),
+        }).publicError;
         this.#status.lastError = this.#status.error.message;
       }
       throw error;

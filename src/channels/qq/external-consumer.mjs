@@ -22,8 +22,12 @@ function identifier(value) {
 }
 
 export function verifiedQqAccount(appId, user) {
-  if (!identifier(appId) || !identifier(user?.id) || user.bot !== true)
-    throw qqRefusal('account-unverified');
+  if (!identifier(appId) || !identifier(user?.id) || user.bot !== true) {
+    const error = qqRefusal('account-unverified');
+    error.verificationFailure = !identifier(appId) ? 'application-id'
+      : !identifier(user?.id) ? 'native-user-id' : 'native-bot-flag';
+    throw error;
+  }
   const identity = { provider: 'qq', appId, userId: user.id };
   return Object.freeze({ appId, userId: user.id,
     fingerprint: createHash('sha256').update(JSON.stringify(identity)).digest('hex'),

@@ -67,9 +67,12 @@ test('actual QQ SDK disconnect clears receiver readiness and a native resumed ev
     });
   });
   const originalFetch = globalThis.fetch;
+  let rejectAccountQuery = false;
   globalThis.fetch = async target => String(target).includes('getAppAccessToken')
     ? json({ access_token: 'fake-token', expires_in: 7200 })
-    : String(target).endsWith('/gateway') ? json({ url }) : json({ id: 'native-bot', bot: true });
+    : String(target).endsWith('/gateway') ? json({ url })
+      : rejectAccountQuery ? new Response(JSON.stringify({ code: 11253, message: 'private provider text' }),
+        { status: 403, headers: { 'content-type': 'application/json' } }) : json({ id: 'native-bot', bot: true });
   let disconnected = deferred();
   let bot;
   const runtime = new QqRuntime({
@@ -86,6 +89,13 @@ test('actual QQ SDK disconnect clears receiver readiness and a native resumed ev
   });
   await runtime.start();
   assert.equal(runtime.status.ready, true);
+  rejectAccountQuery = true;
+  await assert.rejects(() => runtime.describeDeliveryAccount());
+  assert.equal(runtime.status.error.details.httpStatus, 403);
+  assert.equal(runtime.status.error.details.providerCode, '11253');
+  assert.equal(runtime.status.error.details.stage, 'credential.verify');
+  assert.equal(JSON.stringify(runtime.status.error).includes('private provider text'), false);
+  rejectAccountQuery = false;
   for (const mode of ['reconnect', 'normal-close']) {
     disconnected = deferred();
     const resumed = mode === 'reconnect' ? new Promise(resolve => bot.on('resumed', resolve)) : undefined;
