@@ -10,6 +10,8 @@ import { QqConfigStore, deriveQqBotIdentity } from '../../../src/channels/qq/con
 import { QqController } from '../../../src/channels/qq/qq-controller.mjs';
 import { QqRuntime } from '../../../src/channels/qq/qq-runtime.mjs';
 import { verifiedQqAccount } from '../../../src/channels/qq/external-consumer.mjs';
+import { createDeliveryService } from '../../../plugin-src/host/delivery-service.mjs';
+import { createDeliveryAdapter } from '../../../plugin-src/host/delivery-adapter.mjs';
 
 test('authenticated robot identity tolerates an omitted bot flag and refuses contradictory flags', () => {
   const account = verifiedQqAccount('12345678', { id: 'native-bot-id' });
@@ -69,6 +71,40 @@ function mention(overrides = {}) {
     replyTarget: { scope: 'group', targetId: 'app-scoped-group', msgId: 'native-source-id' },
     ...overrides };
 }
+
+test('public QQ reply cancellation during account verification refuses before native dispatch', async t => {
+  const fx = await fixture(t);
+  const account = await fx.controller.describeDeliveryAccount(fx.botId);
+  const admitted = [];
+  await fx.controller.consumeInbound(fx.botId, {
+    expectedFingerprint: account.account.fingerprint,
+    onEvent: async event => { admitted.push(event); return { accepted: true }; },
+  });
+  await fx.bot().deliver(mention());
+  const service = createDeliveryService();
+  service.registerAdapter(createDeliveryAdapter({ channel: 'qq',
+    workspaces: { has: id => id === fx.botId },
+    coreController: fx.controller, stateFor: async () => ({}),
+  }));
+  let started;
+  let complete;
+  const ready = new Promise(resolve => { started = resolve; });
+  fx.bot().api.get = async () => {
+    started();
+    await new Promise(resolve => { complete = resolve; });
+    return { id: 'native-bot-id', bot: true };
+  };
+  const abort = new AbortController();
+  const pending = service.replyChecked(fx.botId, admitted[0].reply, 'reply', {
+    expectedFingerprint: account.account.fingerprint, signal: abort.signal,
+  });
+  const rejected = assert.rejects(pending, { code: 'cancelled' });
+  await ready;
+  abort.abort();
+  complete();
+  await rejected;
+  assert.deepEqual(fx.bot().sent, []);
+});
 
 test('a qualified QQ app takes over group mentions and replies with a native receipt in the original group', async t => {
   const fx = await fixture(t);
