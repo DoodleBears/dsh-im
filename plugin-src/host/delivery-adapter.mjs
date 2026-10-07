@@ -258,6 +258,11 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
       return coreController.replyChecked(botId, route, text, options);
     },
+    beginTypingChecked: (botId, route, options) => {
+      if (typeof coreController.beginTypingChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.beginTypingChecked(botId, route, options);
+    },
     describeAccount: (botId) => {
       if (typeof coreController.describeDeliveryAccount !== 'function') {
         const error = new Error('Verified account capability unavailable');

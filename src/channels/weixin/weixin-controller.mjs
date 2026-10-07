@@ -163,7 +163,7 @@ export class WeixinController {
       return { version: 1, botId, channel: 'weixin', account,
         connected: this.#runtimes.get(botId)?.status?.ready === true,
         capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'proactive-fence-checked', 'exclusive-text-consumer', 'reply-text-checked',
-          'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked',
+          'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'typing-lifecycle-checked',
           'source-file-checked', 'reply-file-checked', 'reply-file-fence-checked',
           'source-image-checked', 'reply-image-fence-checked', 'source-voice-transcript-checked', 'source-voice-audio-checked', 'source-video-checked', 'reply-video-fence-checked', 'source-quote-checked'] };
     });
@@ -207,6 +207,13 @@ export class WeixinController {
     return this.#withBotTransition(botId, async () => {
       const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
       return checked.runtime.replyChecked(route, text, { ...options, ...checked });
+    });
+  }
+
+  async beginTypingChecked(botId, route, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      return checked.runtime.beginTypingChecked(route, { ...options, ...checked });
     });
   }
 

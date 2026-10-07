@@ -100,6 +100,8 @@ export function createImHostPlugin(internals = {}) {
           replyContextVersion: 1,
           replyReceiptVersion: 1,
           replyFenceVersion: 1,
+          typingVersion: 1,
+          beginTypingChecked: (botId, route, options) => deliveryService.beginTypingChecked(botId, route, options),
           qualifyReplyChecked: (botId, route, options) => deliveryService.qualifyReplyChecked(botId, route, options),
           readSourceFile: (botId, route, attachment, options) => deliveryService.externalFileChecked(botId, route, attachment, options),
           replyFileChecked: (botId, route, file, options) => deliveryService.externalFileChecked(botId, route, file, { ...options, reply: true }),
