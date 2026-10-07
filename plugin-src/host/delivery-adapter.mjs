@@ -250,6 +250,11 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
       return coreController.approvalCardChecked(botId, route, card, options);
     },
+    questionCardChecked: (botId, route, card, options) => {
+      if (channel !== 'feishu' || typeof coreController.questionCardChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.questionCardChecked(botId, route, card, options);
+    },
     historyChecked: (botId, route, query, options) => {
       if (typeof coreController.historyChecked !== 'function')
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });

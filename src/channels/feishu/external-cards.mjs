@@ -1,4 +1,5 @@
 import { qualifyExternalReply } from './reply-context.mjs';
+import { questionActionValues } from './external-questions.mjs';
 
 const refuse = (code) => { throw Object.assign(new Error(code), { code }); };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -20,20 +21,21 @@ export function normalizeExternalCardAction(event, identity) {
   const appId = event?.header?.app_id ?? event?.app_id;
   if (appId !== undefined && appId !== identity.appId) refuse('account-changed');
   const value = event?.action?.value;
-  if (value?.namespace !== 'botharness/approval-v1') return null;
+  const question = value?.namespace === 'botharness/question-v1';
+  if (!question && value?.namespace !== 'botharness/approval-v1') return null;
   const actorId = event?.operator?.open_id;
   const messageId = event?.context?.open_message_id;
   const conversationId = event?.context?.open_chat_id;
   if (!identifier(actorId, 'ou') || !identifier(messageId, 'om') || !identifier(conversationId, 'oc')
     || event.action.tag !== 'button' || !uuid.test(value.requestId ?? '')
-    || !['allowed-once', 'rejected'].includes(value.action)
+    || (!question && !['allowed-once', 'rejected'].includes(value.action))
     || !/^[a-f0-9]{64}$/.test(identity.fingerprint ?? '')) refuse('invalid-inbound');
   return Object.freeze({ version: 1, channel: 'feishu', botId: identity.botId, fingerprint: identity.fingerprint,
-    actorId, messageId, conversationId, requestId: value.requestId, action: value.action });
+    actorId, messageId, conversationId, requestId: value.requestId, ...(question ? { action: 'answer', values: questionActionValues(event) } : { action: value.action }) });
 }
 
-export async function replyExternalApprovalCard(client, route, card, { signal, assertCurrent, beforeSend } = {}) {
-  const content = externalApprovalCard(card);
+export async function replyExternalApprovalCard(client, route, card, { signal, assertCurrent, beforeSend, render = externalApprovalCard } = {}) {
+  const content = render(card);
   assertCurrent?.();
   const current = await qualifyExternalReply(client, route, signal);
   if (current.actorId !== route.actorId) refuse('stale-route');
@@ -50,8 +52,8 @@ export async function replyExternalApprovalCard(client, route, card, { signal, a
   return { sent: true, receipt: { version: 1, messageId: result.data.message_id, conversationId: result.data.chat_id } };
 }
 
-export async function updateExternalApprovalCard(client, identity, receipt, card, { signal, assertCurrent, beforeSend } = {}) {
-  const content = externalApprovalCard(card);
+export async function updateExternalApprovalCard(client, identity, receipt, card, { signal, assertCurrent, beforeSend, render = externalApprovalCard, privateOnly = false } = {}) {
+  const content = render(card);
   if (!identifier(receipt?.messageId, 'om') || !identifier(receipt?.conversationId, 'oc')) refuse('bad-request');
   assertCurrent?.();
   const result = await client.im.v1.message.get({ path: { message_id: receipt.messageId } }, { signal });
@@ -60,6 +62,10 @@ export async function updateExternalApprovalCard(client, identity, receipt, card
     ((source.sender.id_type === 'app_id' && source.sender.id === identity.appId) ||
       (source.sender.id_type === 'open_id' && source.sender.id === identity.botOpenId));
   if (result?.code !== 0 || !ownSender || source.deleted || source.chat_id !== receipt.conversationId || source.msg_type !== 'interactive') refuse('stale-route');
+  if (privateOnly) {
+    const chat = await client.im.v1.chat.get({ path: { chat_id: receipt.conversationId } }, { signal });
+    if (chat?.code !== 0 || chat?.data?.chat_mode !== 'p2p') refuse('stale-route');
+  }
   assertCurrent?.();
   signal?.throwIfAborted();
   if (typeof beforeSend !== 'function' || beforeSend() !== true) refuse('stale-route');

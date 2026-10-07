@@ -385,6 +385,20 @@ export class DeliveryService {
     } catch (error) { throw publicOperationError(error, 'send-result-unknown'); }
   }
 
+  async questionCardChecked(botId, route, card, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '') || typeof options.beforeSend !== 'function') throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (registration.adapter.channel !== 'feishu' || typeof registration.adapter.questionCardChecked !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    try {
+      return await registration.adapter.questionCardChecked(id, route, card, { ...options,
+        signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal,
+        beforeSend: () => { this.#assertRegistered(registration); return options.beforeSend() === true; } });
+    } catch (error) { throw publicOperationError(error, 'send-result-unknown'); }
+  }
+
   async historyChecked(botId, route, query, options = {}) {
     const id = botIdOf(botId);
     cancellation(options.signal);
