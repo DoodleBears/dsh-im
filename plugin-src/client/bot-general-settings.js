@@ -10,6 +10,7 @@ function modeFromResult(result, botId) {
 }
 
 export function BotGeneralSettingsPage({ account, rpcCall }) {
+  const modeId = React.useId();
   const [mode, setMode] = React.useState('queue');
   const [savedMode, setSavedMode] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -25,7 +26,7 @@ export function BotGeneralSettingsPage({ account, rpcCall }) {
       setMode(value);
       setSavedMode(value);
     } catch (error) {
-      if (mounted.current) setFeedback({ error: true, text: error.message });
+      if (mounted.current) setFeedback(error.message);
     } finally {
       if (mounted.current) setBusy(false);
     }
@@ -37,47 +38,52 @@ export function BotGeneralSettingsPage({ account, rpcCall }) {
     return () => { mounted.current = false; };
   }, [load]);
 
-  const save = async () => {
+  const save = async (nextMode) => {
+    if (busy || savedMode === null || nextMode === savedMode) return;
+    setMode(nextMode);
     setBusy(true);
     setFeedback(null);
     try {
       const value = modeFromResult(await rpcCall(SET_MESSAGE_MODE_ENDPOINT, {
-        botId: account.botId, busyMessageMode: mode,
+        botId: account.botId, busyMessageMode: nextMode,
       }), account.botId);
       if (!mounted.current) return;
       setMode(value);
       setSavedMode(value);
-      setFeedback({ text: '已保存，对新收到的消息生效。' });
     } catch (error) {
-      if (mounted.current) setFeedback({ error: true, text: error.message });
+      if (mounted.current) {
+        setMode(savedMode);
+        setFeedback(error.message);
+      }
     } finally {
       if (mounted.current) setBusy(false);
     }
   };
 
-  return h('section', { className: 'dim-accessPage', 'aria-label': '机器人通用设置' },
-    h('h2', null, '通用'),
-    h('p', null, '以下设置仅影响当前机器人。'),
-    h('label', { className: 'dim-accessField' },
-      h('span', null, '任务运行时的新消息处理方式'),
-      h('select', {
-        value: mode, disabled: busy || savedMode === null,
-        'aria-label': '任务运行时的新消息处理方式',
-        onChange: (event) => { setMode(event.target.value); setFeedback(null); },
-      },
-      h('option', { value: 'queue' }, '排队（默认）'),
-      h('option', { value: 'steer' }, '插话'))),
-    h('p', null, mode === 'queue'
-      ? '当前任务结束后，再处理新消息。可使用 /steer 手动插话。'
-      : '将新的纯文字消息作为补充指令加入当前任务，Agent 在下一步读取。'),
-    h('p', null, '没有正在运行的任务时，正常开始新任务。图片、文件、语音和带引用的消息按原有方式处理。'),
-    h('button', {
-      type: 'button', className: 'dim-deliveryButton', 'data-kind': 'primary',
-      disabled: busy || savedMode === null || mode === savedMode,
-      onClick: () => void save(),
-    }, busy ? '处理中…' : '保存'),
-    savedMode === null && !busy ? h('button', {
-      type: 'button', className: 'dim-deliveryButton', onClick: () => void load(),
-    }, '重新读取') : null,
-    feedback ? h('p', { className: 'dim-targetFeedback', role: feedback.error ? 'alert' : 'status' }, feedback.text) : null);
+  return h('section', { className: 'dim-botGeneralSettings', 'aria-label': '机器人通用设置', 'aria-busy': busy },
+    h('div', { className: 'dim-botGeneralList' },
+      h('div', { className: 'dim-botGeneralRow' },
+        h('div', { className: 'dim-botGeneralText' },
+          h('label', { className: 'dim-botGeneralTitle', htmlFor: modeId }, '消息处理方式'),
+          h('p', { className: 'dim-botGeneralHelp', id: `${modeId}-description` }, mode === 'queue'
+            ? '当前任务结束后处理新消息'
+            : '将新消息补充到当前任务')),
+        h('div', { className: 'dim-botGeneralControl' },
+          h('select', {
+            id: modeId, value: mode, disabled: busy || savedMode === null,
+            'aria-label': '消息处理方式',
+            'aria-describedby': `${modeId}-description`,
+            onChange: (event) => void save(event.target.value),
+          },
+          h('option', { value: 'queue' }, '排队'),
+          h('option', { value: 'steer' }, '插话')),
+          h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+            h('path', { d: 'm4 6 4 4 4-4', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' }))))),
+    feedback ? h('p', {
+      className: 'dim-accessFeedback', 'data-tone': 'error', role: 'alert',
+    }, feedback) : null,
+    savedMode === null && !busy ? h('div', { className: 'dim-botGeneralActions' },
+      h('button', {
+        type: 'button', className: 'dim-deliveryButton', onClick: () => void load(),
+      }, '重新读取')) : null);
 }

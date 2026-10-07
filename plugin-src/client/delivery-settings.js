@@ -26,9 +26,9 @@ export const DELIVERY_ENDPOINTS = Object.freeze({
 });
 
 export const BOT_SETTINGS_TABS = Object.freeze([
+  Object.freeze({ id: 'general', label: '通用' }),
   Object.freeze({ id: 'delivery', label: '投递设置' }),
   Object.freeze({ id: 'access', label: '访问设置' }),
-  Object.freeze({ id: 'general', label: '通用' }),
 ]);
 
 export const FEISHU_BOT_SETTINGS_TABS = Object.freeze([

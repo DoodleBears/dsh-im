@@ -68,7 +68,15 @@ function deferred() {
 async function mount(t, props) {
   let renderer;
   await act(async () => {
-    renderer = create(React.createElement(DeliveryTargetSettingsPage, props));
+    renderer = create(React.createElement(DeliveryTargetSettingsPage, {
+      accessRpcCall: async () => ({ ok: true, value: { bots: [props.account] } }),
+      ...props,
+    }));
+    await flush();
+  });
+  // These cases exercise delivery and its sibling tabs; General is the entry tab.
+  await act(async () => {
+    renderer.root.findByProps({ id: 'dim-bot-settings-delivery-tab' }).props.onClick();
     await flush();
   });
   t.after(async () => {
@@ -106,14 +114,14 @@ const connectedAccount = Object.freeze({
 
 test('delivery settings define only the ten supported IM channel routes', () => {
   assert.deepEqual(BOT_SETTINGS_TABS, [
+    { id: 'general', label: '通用' },
     { id: 'delivery', label: '投递设置' },
     { id: 'access', label: '访问设置' },
-    { id: 'general', label: '通用' },
   ]);
   assert.deepEqual(FEISHU_BOT_SETTINGS_TABS, [
+    { id: 'general', label: '通用' },
     { id: 'delivery', label: '投递设置' },
     { id: 'access', label: '访问设置' },
-    { id: 'general', label: '通用' },
     { id: 'group', label: '群聊' },
     { id: 'slash', label: '指令面板' },
     { id: 'voice', label: '语音交互' },
@@ -269,24 +277,32 @@ test('expanded card more settings opens a bot-scoped page and returns in place',
     await flush();
   });
   const page = renderer.root.findByProps({ className: 'dim-deliveryPage' });
-  assert.match(textOf(page), /微信通知助手/);
+  assert.match(page.props['aria-label'], /微信通知助手/);
   assert.doesNotMatch(textOf(page), /调用标识/);
   assert.equal(
     page.findByProps({ className: 'dim-deliveryHeader' }).findAllByType('h2').length,
     0,
   );
   const settingsTabs = page.findAllByProps({ role: 'tab' });
-  assert.deepEqual(settingsTabs.map(textOf), ['投递设置', '访问设置', '通用']);
+  assert.deepEqual(settingsTabs.map(textOf), ['通用', '投递设置', '访问设置']);
   const settingsTab = settingsTabs[0];
   const settingsPanel = page.findByProps({ role: 'tabpanel' });
-  assert.equal(textOf(settingsTab), '投递设置');
+  assert.equal(textOf(settingsTab), '通用');
   assert.equal(settingsTab.props['aria-selected'], true);
   assert.equal(settingsTab.props.tabIndex, 0);
   assert.equal(settingsTab.props['aria-controls'], settingsPanel.props.id);
   assert.equal(settingsPanel.props['aria-labelledby'], settingsTab.props.id);
-  const identity = settingsPanel.findByProps({ className: 'dim-deliveryIdentity' });
+  assert.ok(settingsPanel.findByProps({ className: 'dim-botGeneralSettings' }));
+  assert.equal(settingsPanel.findByType('select').props.value, 'queue');
+  assert.equal(settingsPanel.findByType('select').props.disabled, false);
+  await act(async () => {
+    button(page, '投递设置').props.onClick();
+    await flush();
+  });
+  const deliveryPanel = page.findByProps({ role: 'tabpanel' });
+  const identity = deliveryPanel.findByProps({ className: 'dim-deliveryIdentity' });
   assert.ok(identity);
-  assert.ok(settingsPanel.findByProps({ className: 'dim-deliveryTargets' }));
+  assert.ok(deliveryPanel.findByProps({ className: 'dim-deliveryTargets' }));
   assert.equal(page.findByProps({ className: 'dim-botSettingsTabsBar' }).findAllByType('a').length, 0);
   assert.equal(
     textOf(identity.findByType('h2')),
@@ -379,7 +395,7 @@ test('Feishu more settings has separate group and voice tabs, with only group co
 
   const page = renderer.root.findByProps({ className: 'dim-deliveryPage' });
   assert.deepEqual(page.findAllByProps({ role: 'tab' }).map(textOf), [
-    '投递设置', '访问设置', '通用', '群聊', '指令面板', '语音交互',
+    '通用', '投递设置', '访问设置', '群聊', '指令面板', '语音交互',
   ]);
   await act(async () => {
     button(page, '群聊').props.onClick();
@@ -427,7 +443,7 @@ test('voice tab loads and saves the selected bot, preserves advanced options, an
   });
   const voiceInput = () => renderer.root.findByProps({ placeholder: 'Momo' });
 
-  assert.equal(calls.length, 0);
+  assert.deepEqual(calls, [{ endpoint: FEISHU_ENDPOINTS.status, payload: {} }]);
   await switchTab('语音交互');
   assert.equal(renderer.root.findByProps({ 'aria-label': '语音交互开关' }).props.value, 'on');
   assert.equal(renderer.root.findByProps({ placeholder: 'DASHSCOPE_API_KEY' }).props.value, 'BOT_DASHSCOPE_KEY');
@@ -445,7 +461,7 @@ test('voice tab loads and saves the selected bot, preserves advanced options, an
   await switchTab('投递设置');
   assert.equal(renderer.root.findAllByProps({ 'aria-label': '语音交互开关' }).length, 0);
   await switchTab('语音交互');
-  assert.equal(calls.filter(({ endpoint }) => endpoint === FEISHU_ENDPOINTS.status).length, 2);
+  assert.equal(calls.filter(({ endpoint }) => endpoint === FEISHU_ENDPOINTS.status).length, 3);
   assert.equal(voiceInput().props.value, 'Cherry');
   await act(async () => {
     renderer.root.findByProps({ 'aria-label': '语音交互开关' }).props.onChange({ target: { value: 'off' } });
@@ -507,6 +523,9 @@ test('access settings preserve independent mode drafts and save direct and group
       return { ok: true, value: { targets: [] } };
     },
     accessRpcCall: async (endpoint, payload) => {
+      if (endpoint === FEISHU_ENDPOINTS.status) {
+        return { ok: true, value: { bots: [connectedAccount] } };
+      }
       calls.push({ endpoint, payload });
       return {
         ok: true,
@@ -1072,7 +1091,7 @@ test('recent conversation names remain platform data in the English UI', async (
   );
   assert.deepEqual(
     renderer.root.findAllByProps({ role: 'tab' }).map(textOf),
-    ['Delivery settings', 'Access settings', 'General', 'Group', 'Command panel', 'Voice'],
+    ['General', 'Delivery settings', 'Access settings', 'Group', 'Command panel', 'Voice'],
   );
 });
 

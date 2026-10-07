@@ -16,29 +16,36 @@ async function mount(t, rpcCall) {
   return view;
 }
 
-test('general settings reads the bot mode, saves only the selected enum, and keeps failed saves retryable', async (t) => {
+test('general settings auto-saves changes, rolls back failures, and blocks edits while saving', async (t) => {
   const calls = [];
   let fail = true;
+  let finishSave;
   const view = await mount(t, async (endpoint, payload) => {
     calls.push({ endpoint, payload });
     if (endpoint === 'connection.status') return result('one', undefined);
     if (fail) return { ok: false, error: { message: 'disk full' } };
-    return result('one', payload.busyMessageMode);
+    return new Promise((resolve) => { finishSave = () => resolve(result('one', payload.busyMessageMode)); });
   });
   const select = () => view.root.findByType('select');
-  const save = () => view.root.findByType('button');
   assert.equal(select().props.value, 'queue');
   assert.deepEqual(select().findAllByType('option').map((node) => node.props.value), ['queue', 'steer']);
-  assert.equal(save().props.disabled, true);
+  assert.equal(view.root.findAllByType('button').length, 0);
+  await act(async () => select().props.onChange({ target: { value: 'queue' } }));
+  assert.deepEqual(calls, [{ endpoint: 'connection.status', payload: {} }]);
   await act(async () => select().props.onChange({ target: { value: 'steer' } }));
-  await act(async () => save().props.onClick());
   assert.match(text(view.root.findByProps({ role: 'alert' })), /disk full/);
-  assert.equal(save().props.disabled, false);
+  assert.equal(select().props.value, 'queue');
+  assert.equal(select().props.disabled, false);
   fail = false;
-  await act(async () => save().props.onClick());
+  await act(async () => select().props.onChange({ target: { value: 'steer' } }));
   assert.deepEqual(calls.at(-1), { endpoint: 'bot.message-mode.set', payload: { botId: 'one', busyMessageMode: 'steer' } });
-  assert.equal(save().props.disabled, true);
-  assert.match(text(view.root.findByProps({ role: 'status' })), /已保存/);
+  assert.equal(select().props.disabled, true);
+  await act(async () => select().props.onChange({ target: { value: 'queue' } }));
+  assert.equal(calls.length, 3);
+  await act(async () => finishSave());
+  assert.equal(select().props.value, 'steer');
+  assert.equal(select().props.disabled, false);
+  assert.equal(view.root.findAllByProps({ role: 'alert' }).length, 0);
 });
 
 test('failed initial load cannot overwrite server settings and can be retried', async (t) => {
@@ -65,6 +72,6 @@ test('switching bot discards the old pending response; labels translate to Engli
   })));
   await act(async () => resolve(result('one', 'queue')));
   assert.equal(view.root.findByType('select').props.value, 'steer');
-  assert.equal(text(view.root.findByType('h2')), 'General');
-  assert.equal(text(view.root.findByType('button')), 'Save');
+  assert.equal(view.root.findByType('select').props['aria-label'], 'Message handling');
+  assert.equal(view.root.findAllByType('button').length, 0);
 });
