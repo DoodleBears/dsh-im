@@ -90,10 +90,19 @@ export class QqRuntime {
     signal?.throwIfAborted();
     if (!this.#status.ready || !this.#bot) throw qqRefusal('bot-not-connected');
     const bot = this.#bot;
-    const user = await bot.api.get('/users/@me');
-    signal?.throwIfAborted();
-    if (this.#bot !== bot || !this.#status.ready) throw qqRefusal('bot-not-connected');
-    return verifiedQqAccount(this.#config.appId, user);
+    try {
+      const user = await bot.api.get('/users/@me');
+      signal?.throwIfAborted();
+      if (this.#bot !== bot || !this.#status.ready) throw qqRefusal('bot-not-connected');
+      return verifiedQqAccount(this.#config.appId, user);
+    } catch (error) {
+      if (!signal?.aborted && this.#bot === bot) {
+        this.#status.error = this.#diagnostics.report(error, { operation: 'account.verify',
+          stage: 'account.verify', botId: this.#config.botId }).publicError;
+        this.#status.lastError = this.#status.error.message;
+      }
+      throw error;
+    }
   }
 
   qualifyReplyChecked(route, { signal } = {}) {
