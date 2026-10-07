@@ -9,6 +9,15 @@ import { ApiError } from '@tencent-connect/qqbot-nodejs/protocol';
 import { QqConfigStore, deriveQqBotIdentity } from '../../../src/channels/qq/config-store.mjs';
 import { QqController } from '../../../src/channels/qq/qq-controller.mjs';
 import { QqRuntime } from '../../../src/channels/qq/qq-runtime.mjs';
+import { verifiedQqAccount } from '../../../src/channels/qq/external-consumer.mjs';
+
+test('authenticated robot identity tolerates an omitted bot flag and refuses contradictory flags', () => {
+  const account = verifiedQqAccount('12345678', { id: 'native-bot-id' });
+  assert.equal(account.fingerprint, verifiedQqAccount('12345678', { id: 'native-bot-id', bot: true }).fingerprint);
+  for (const bot of [false, null, 'true', 1, undefined])
+    assert.throws(() => verifiedQqAccount('12345678', { id: 'native-bot-id', bot }), { code: 'account-unverified' });
+  assert.throws(() => verifiedQqAccount('12345678', {}), { code: 'account-unverified' });
+});
 
 class PlatformBot extends EventEmitter {
   sent = [];

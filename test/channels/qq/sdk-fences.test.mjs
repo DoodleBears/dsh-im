@@ -72,7 +72,7 @@ test('actual QQ SDK disconnect clears receiver readiness and a native resumed ev
     ? json({ access_token: 'fake-token', expires_in: 7200 })
     : String(target).endsWith('/gateway') ? json({ url })
       : rejectAccountQuery ? new Response(JSON.stringify({ code: 11253, message: 'private provider text' }),
-        { status: 403, headers: { 'content-type': 'application/json' } }) : json({ id: 'native-bot', bot: true });
+        { status: 403, headers: { 'content-type': 'application/json' } }) : json({ id: 'native-bot' });
   let disconnected = deferred();
   let bot;
   const runtime = new QqRuntime({

@@ -22,7 +22,10 @@ function identifier(value) {
 }
 
 export function verifiedQqAccount(appId, user) {
-  if (!identifier(appId) || !identifier(user?.id) || user.bot !== true) {
+  // Authenticated GET /users/@me identifies the current robot. Live group apps
+  // can omit the example's bot flag; an explicit contradictory flag still fails.
+  const robot = user && (user.bot === true || !Object.hasOwn(user, 'bot'));
+  if (!identifier(appId) || !identifier(user?.id) || !robot) {
     const error = qqRefusal('account-unverified');
     error.verificationFailure = !identifier(appId) ? 'application-id'
       : !identifier(user?.id) ? 'native-user-id' : 'native-bot-flag';
