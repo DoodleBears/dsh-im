@@ -123,6 +123,18 @@ export class DiscordApi {
     return this.#request('users/@me', { ...options, method: 'GET' });
   }
 
+  getCurrentApplication(options = {}) {
+    return this.#request('applications/@me', { ...options, method: 'GET' });
+  }
+
+  getGuild({ guildId, signal } = {}) {
+    return this.#request(`guilds/${snowflake(guildId, 'guild id')}`, { method: 'GET', signal });
+  }
+
+  getGuildMember({ guildId, userId, signal } = {}) {
+    return this.#request(`guilds/${snowflake(guildId, 'guild id')}/members/${snowflake(userId, 'user id')}`, { method: 'GET', signal });
+  }
+
   getGatewayBot(options = {}) {
     return this.#request('gateway/bot', { ...options, method: 'GET' });
   }
@@ -141,6 +153,13 @@ export class DiscordApi {
     );
   }
 
+  getMessages({ channelId, before, limit, signal } = {}) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new TypeError('Invalid Discord history limit');
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (before !== undefined) query.set('before', snowflake(before, 'history boundary'));
+    return this.#request(`channels/${snowflake(channelId, 'channel id')}/messages?${query}`, { method: 'GET', signal });
+  }
+
   startThreadFromMessage({ channelId, messageId, name, signal } = {}) {
     const threadName = cleanString(name);
     if (!threadName || [...threadName].length > 100) {
@@ -157,10 +176,11 @@ export class DiscordApi {
     );
   }
 
-  createMessage({ channelId, content, replyToMessageId, signal }) {
+  createMessage({ channelId, content, replyToMessageId, signal, retry = true, failIfNotExists = false }) {
     return this.#request(`channels/${snowflake(channelId, 'channel id')}/messages`, {
       method: 'POST',
       signal,
+      retry,
       body: {
         content,
         allowed_mentions: { parse: [], replied_user: false },
@@ -168,14 +188,14 @@ export class DiscordApi {
           message_reference: {
             message_id: snowflake(replyToMessageId, 'message id'),
             channel_id: snowflake(channelId, 'channel id'),
-            fail_if_not_exists: false,
+            fail_if_not_exists: failIfNotExists,
           },
         } : {}),
       },
     });
   }
 
-  async createFileMessage({ channelId, file, replyToMessageId, signal }) {
+  async createFileMessage({ channelId, file, replyToMessageId, signal, retry = true, failIfNotExists = false }) {
     if (!file || typeof file !== 'object'
       || typeof file.fileName !== 'string' || !file.fileName
       || !Buffer.isBuffer(file.bytes)) {
@@ -194,7 +214,7 @@ export class DiscordApi {
         message_reference: {
           message_id: snowflake(replyToMessageId, 'message id'),
           channel_id: snowflake(channelId, 'channel id'),
-          fail_if_not_exists: false,
+          fail_if_not_exists: failIfNotExists,
         },
       } : {}),
     }));
@@ -213,6 +233,7 @@ export class DiscordApi {
         timeoutMs: this.#fileUploadTimeoutMs,
         body: payload,
         multipart: true,
+        retry,
       });
     } catch (error) {
       if (signal?.aborted) throw abortReason(signal);
@@ -221,6 +242,55 @@ export class DiscordApi {
       }
       throw uncertainDiscordDelivery(error);
     }
+  }
+
+  /** A refreshed native attachment URL is private and never receives Bot credentials. */
+  async downloadFileStream({ url, channelId, attachmentId, fileName, signal }) {
+    const refused = () => Object.assign(new Error('resource-unavailable'), { code: 'resource-unavailable' });
+    let target;
+    try { target = new URL(url); } catch { throw refused(); }
+    if (target.protocol !== 'https:' || target.hostname !== 'cdn.discordapp.com'
+      || target.username || target.password || target.port || target.hash
+      || !/^\d{5,30}$/.test(channelId ?? '') || !/^\d{5,30}$/.test(attachmentId ?? '')) throw refused();
+    const parts = target.pathname.split('/');
+    try {
+      if (parts.length !== 5 || parts[1] !== 'attachments' || parts[2] !== channelId
+        || parts[3] !== attachmentId || decodeURIComponent(parts[4]) !== fileName) throw refused();
+    } catch { throw refused(); }
+    const downloadSignal = requestSignal(signal, this.#fileUploadTimeoutMs);
+    downloadSignal.throwIfAborted();
+    let response;
+    try { response = await this.#fetch(target, { method: 'GET', signal: downloadSignal, redirect: 'error' }); }
+    catch { downloadSignal.throwIfAborted(); throw refused(); }
+    if (!response.ok || !response.body) {
+      await response.body?.cancel().catch(() => undefined);
+      throw refused();
+    }
+    const length = response.headers.get('content-length');
+    const reader = response.body.getReader();
+    let closed = false;
+    const cancel = async () => {
+      if (closed) return;
+      closed = true;
+      downloadSignal.removeEventListener('abort', onAbort);
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    };
+    const onAbort = () => { void cancel(); };
+    downloadSignal.addEventListener('abort', onAbort, { once: true });
+    if (downloadSignal.aborted) void cancel();
+    return { length, cancel, stream: (async function* () {
+      try {
+        while (true) {
+          downloadSignal.throwIfAborted();
+          const result = await reader.read();
+          downloadSignal.throwIfAborted();
+          if (result.done) break;
+          yield result.value;
+        }
+      } catch { downloadSignal.throwIfAborted(); throw refused(); }
+      finally { await cancel(); }
+    })() };
   }
 
   editMessage({ channelId, messageId, content, signal }) {

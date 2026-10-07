@@ -19,7 +19,10 @@ export function maskDiscordBotId(platformId) {
 }
 
 export class DiscordConfigStore extends TokenBotConfigStore {
-  constructor(path) {
-    super(path, { channel: 'Discord', ...IDENTITY_OPTIONS });
+  constructor(path, { consumerMode } = {}) {
+    if (consumerMode !== undefined && consumerMode !== 'external-consumer') throw new TypeError('Invalid Discord consumer mode');
+    super(path, { channel: 'Discord', ...IDENTITY_OPTIONS,
+      normalizeBotExtension: value => ({ consumerMode: consumerMode === 'external-consumer' || value.consumerMode === 'external-consumer' ? 'external-consumer' : 'standalone-session' }),
+    });
   }
 }

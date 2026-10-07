@@ -969,3 +969,24 @@ test('own-account qualification maps the sender without borrowing an ingress app
   assert.equal(sends, 2);
   await runtime.stop();
 });
+
+
+test('sender-name enrichment refuses a stopped connection after the native lookup completes', async () => {
+  const runtime = new FeishuRuntime({ lark: fakeLark(), appId: 'app', appSecret: 'secret', ownerOpenIds: ['qa-owner'],
+    consumerMode: 'external-consumer', acceptExternal: async () => ({ accepted: true }),
+    harness: { async ensureRunning() {} }, state: {} });
+  const starting = runtime.start();
+  await waitFor(() => FakeWSClient.instances.length === 1);
+  FakeWSClient.instances[0].becomeReady(); await starting;
+  const requested = deferred(), response = deferred();
+  FakeClient.instances[0].im.v1.message.get = async () => { requested.resolve(); return response.promise; };
+  const evidence = { actor: { id: 'human' }, messageId: 'message', text: 'original',
+    reply: { messageId: 'message', actorId: 'human', conversationId: 'chat' } };
+  const pending = runtime.enrichExternalNames(evidence);
+  await requested.promise; await runtime.stop();
+  response.resolve({ data: { items: [{ message_id: 'message', chat_id: 'chat', msg_type: 'text',
+    sender: { sender_type: 'user', id_type: 'open_id', id: 'human', sender_name: 'QA Human' },
+    body: { content: '{"text":"original"}' } }] } });
+  await assert.rejects(pending, { code: 'bot-not-connected' });
+  assert.equal(evidence.actor.name, undefined);
+});

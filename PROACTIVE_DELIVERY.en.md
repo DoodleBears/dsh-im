@@ -479,3 +479,38 @@ lease 与收件确认检查；应用需订阅 `message.channels`，使用已有 
 BotHarness 仍按明确授权的频道分别控制收件与现有数量／时间汇总或逐条唤醒。自己的 @
 只走 `app_mention`，不因两种订阅重叠而重复收件；不接收私聊、私有频道、Bot 回显、
 编辑／撤回或普通文件分享。无新 Session、队列、历史补收或强制回复，lease 释放撤销 opt-in。
+
+## Checked Discord source file and original-location result (development candidate)
+
+Discord adds `source-file-checked` and `reply-file-checked` only to its verified exclusive consumer. With `sourceFiles: true`, one directly mentioned Human message in a guild text channel or existing public thread carries one hosted attachment's safe `{id,messageId,resourceKey,name,sizeBytes,mediaType?}` metadata. Multiple/ephemeral/malformed or over-20-MiB files refuse; signed URLs stay private. Legacy consumers retain their text envelope. Message Content remains unnecessary for this directly mentioned source; this does not enable ordinary file intake or image vision.
+
+Reading re-fetches that exact original message, matches all retained metadata and downloads its refreshed signed HTTPS CDN attachment route without Bot credentials or redirects. Cancellation/current lease and declared/actual byte checks bound the stream to 20 MiB. The consumer owns canonical persistence and Workspace Grant authorization.
+
+A selected new result of at most 20 MiB rechecks native source identity, parent/thread ancestry and VIEW_CHANNEL, READ_MESSAGE_HISTORY, SEND_MESSAGES(_IN_THREADS) and ATTACH_FILES. The Host `beforeSend` fence runs before one non-retrying multipart request with `fail_if_not_exists=true`. Native author/channel/original-message reference and attachment identity/name/size must match the returned receipt. Definite rejection differs from `reply-result-unknown`; never blindly retry unknown results. The result stays in the original native channel/thread with no fallback or new thread. This candidate does not promote a product pin or publish a release. Qualification: [BotHarness #1002](https://github.com/BotHarness/BotHarness/issues/1002).
+
+## Ordinary Discord guild text (BotHarness #1012)
+
+The checked Discord account advertises `ordinary-text-consumer`. An exclusive Consumer
+opts in with `ordinaryText: true` (default false). At connection time the verified native
+Application must allow Message Content (`GATEWAY_MESSAGE_CONTENT` or its LIMITED flag);
+only then does this external runtime request Gateway `MESSAGE_CONTENT`. With approval
+OFF or opt-in absent it requests only GUILDS and GUILD_MESSAGES, retaining direct mentions.
+Approval is read again before admitting each unmentioned text, with current identity,
+runtime and lease checks. Native rejection does not fall back to standalone processing.
+
+Only fresh, nonempty Human text in a guild text channel or existing public thread is
+normalized; the native parent channel, child thread, author and `mentionedAccount` are
+retained. Bot/self/webhook messages, DM, private/unsupported channels and empty content
+are excluded. Ordinary attachment resources are not promoted into the mentioned-file
+capability. The companion application still owns explicit per-channel grants, collection,
+canonical Inbox admission, deduplication and count/time harvest; capability discovery is
+not proof of actual ordinary delivery or authority to enable new native access.
+
+Discord 普通文字需要独占 Consumer 明确选择 `ordinaryText: true`，并且当前原生 App 已授权
+Message Content；关闭时保留直接 @，不请求该特权 Intent。每条非 @ 文字再次检查 App 身份、
+权限、runtime 和 lease，仅支持群文字频道及已有公开 thread 的非空 Human 文字。
+保留原生发送人／频道／thread，不创建会话或转发到其他位置，普通附件不会获得 @ 文件能力。
+BotHarness 仍拥有逐频道授权、收集范围、Inbox 与数量／时间唤醒；需真实普通消息证明可投递。
+
+Native references: [Gateway intents](https://github.com/discord/discord-api-docs/blob/main/developers/events/gateway.mdx)
+and [Application flags](https://github.com/discord/discord-api-docs/blob/main/developers/resources/application.mdx).

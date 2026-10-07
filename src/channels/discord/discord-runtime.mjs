@@ -5,8 +5,12 @@ import { fetchImageBuffer } from '../shared/image-prompt.mjs';
 import { t } from '../shared/i18n.mjs';
 import { captureContextEnhancement } from '../shared/context-enhancement.mjs';
 import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
+import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
 import { DiscordApi } from './discord-api.mjs';
+import { createDiscordHistoryReader } from './history-reader.mjs';
 import { createDiscordBridgeStatus, DiscordHarnessBridge } from './discord-bridge.mjs';
+import { discordRefusal, verifiedDiscordAccount, discordMessageContentAllowed, inspectDiscordSourceChannel, normalizeDiscordExternalText,
+  qualifyDiscordReply, sendDiscordReply, sendDiscordCheckedText } from './external-consumer.mjs';
 
 const DISCORD_GATEWAY_INTENTS = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
 const THREAD_RECOVERY_TIMEOUT_MS = 5_000;
@@ -559,6 +563,12 @@ export class DiscordRuntime {
   #starting = null;
   #channels = new Map();
   #routing = new Map();
+  #account = null;
+  #externalConsumer;
+  #externalSourceFiles;
+  #externalOrdinaryText;
+  #ordinaryAuthorized = false;
+  #readHistory = createDiscordHistoryReader();
 
   constructor({
     config,
@@ -573,12 +583,18 @@ export class DiscordRuntime {
     createApi = (options) => new DiscordApi(options),
     createWebSocket = (url) => new WebSocket(url),
     random = Math.random,
+    externalConsumer,
+    externalSourceFiles = () => false,
+    externalOrdinaryText = () => false,
   }) {
     if (!config || !token || !harness || !state) {
       throw new TypeError('DiscordRuntime requires config, token, Harness, and state');
     }
     if (typeof createWebSocket !== 'function') throw new TypeError('DiscordRuntime requires WebSocket');
     this.#config = config;
+    this.#externalConsumer = externalConsumer;
+    this.#externalSourceFiles = externalSourceFiles;
+    this.#externalOrdinaryText = externalOrdinaryText;
     this.#token = token;
     this.#harness = harness;
     this.#state = state;
@@ -606,6 +622,14 @@ export class DiscordRuntime {
   }
 
   async sendProactiveText(target, text, options = {}) {
+    if (this.#config.consumerMode === 'external-consumer') {
+      const checked = this.#checkedLifetime(options.signal);
+      if (options.expectedFingerprint !== checked.account.fingerprint) throw discordRefusal('account-changed');
+      if (target?.kind !== 'channel') throw discordRefusal('invalid-target');
+      const channel = await inspectDiscordSourceChannel(checked.api, target.route?.channelId, checked.account, checked.signal, { forReply: true });
+      checked.assertCurrent();
+      return sendDiscordCheckedText(checked.api, checked.account, channel, text, { ...options, signal: checked.signal });
+    }
     if (!this.#status.ready || !this.#bridge) {
       const error = new Error('Discord bot is not connected');
       error.code = 'bot-not-connected';
@@ -621,6 +645,44 @@ export class DiscordRuntime {
     return this.#bridge.sendProactiveText({ channelId }, text, options);
   }
 
+  #checkedLifetime(signal) {
+    if (!this.#status.ready || !this.#account || !this.#api || !this.#abortController
+      || this.#config.consumerMode !== 'external-consumer') throw discordRefusal('capability-unavailable');
+    const generation = this.#generation;
+    const combined = signal ? AbortSignal.any([signal, this.#abortController.signal]) : this.#abortController.signal;
+    return { api: this.#api, account: this.#account, signal: combined, assertCurrent: () => {
+      combined.throwIfAborted();
+      if (generation !== this.#generation || this.#stopped || !this.#status.ready) throw discordRefusal('capability-unavailable');
+    } };
+  }
+
+  async qualifyReplyChecked(route, { signal } = {}) {
+    const checked = this.#checkedLifetime(signal);
+    const result = await qualifyDiscordReply(checked.api, checked.account, route, checked.signal);
+    checked.assertCurrent();
+    return result.route;
+  }
+
+  async historyChecked(route, query, { signal } = {}) {
+    const checked = this.#checkedLifetime(signal);
+    return this.#readHistory(checked.api, { botId: this.#config.botId, account: checked.account },
+      route, query, checked.signal, checked.assertCurrent);
+  }
+
+  async externalFileChecked(route, file, options = {}) {
+    const checked = this.#checkedLifetime(options.signal);
+    if (this.#externalSourceFiles() !== true) throw discordRefusal('capability-unavailable');
+    const operation = options.reply ? replyExternalFile : readExternalFile;
+    return operation(checked.api, checked.account, route, file, { ...options,
+      signal: checked.signal, assertCurrent: checked.assertCurrent });
+  }
+
+  async replyChecked(route, text, options = {}) {
+    const checked = this.#checkedLifetime(options.signal);
+    return sendDiscordReply(checked.api, checked.account, route, text, { ...options,
+      signal: checked.signal, assertCurrent: checked.assertCurrent });
+  }
+
   async start() {
     if (this.#status.ready && this.#socket) return this.status;
     if (this.#starting) return this.#starting;
@@ -632,6 +694,7 @@ export class DiscordRuntime {
 
   async #start() {
     await this.stop();
+    this.#ordinaryAuthorized = false;
     this.#stopped = false;
     this.#sessionId = null;
     this.#resumeUrl = null;
@@ -656,9 +719,14 @@ export class DiscordRuntime {
       if (String(bot?.id ?? '') !== this.#config.platformId || bot?.bot !== true) {
         throw new Error('Discord token identity does not match the saved bot');
       }
+      if (this.#config.consumerMode === 'external-consumer') {
+        const application = await api.getCurrentApplication({ signal: controller.signal });
+        this.#account = verifiedDiscordAccount(bot, application);
+        this.#ordinaryAuthorized = this.#externalOrdinaryText() === true && discordMessageContentAllowed(application);
+      }
       this.#gatewayUrl = gateway?.url;
       const client = new DiscordBotClient({ api, signal: controller.signal });
-      this.#bridge = new DiscordHarnessBridge({
+      this.#bridge = this.#config.consumerMode === 'external-consumer' ? null : new DiscordHarnessBridge({
         bot: client,
         harness: this.#harness,
         state: this.#state,
@@ -735,7 +803,9 @@ export class DiscordRuntime {
               op: 2,
               d: {
                 token: this.#token,
-                intents: DISCORD_GATEWAY_INTENTS,
+                intents: this.#config.consumerMode === 'external-consumer'
+                  ? (1 << 0) | (1 << 9) | (this.#ordinaryAuthorized && this.#externalOrdinaryText() === true ? (1 << 15) : 0)
+                  : DISCORD_GATEWAY_INTENTS,
                 properties: {
                   os: process.platform,
                   browser: 'dsh-im',
@@ -770,6 +840,15 @@ export class DiscordRuntime {
         }
         if (packet.op !== 0) return;
         if (packet.t === 'READY') {
+          if (this.#account && (packet.d?.application?.id !== this.#account.appId
+            || packet.d?.user?.id !== this.#account.userId || packet.d?.user?.bot !== true)) {
+            this.#status.ready = false;
+            this.#status.connectionState = 'failed';
+            settled = true;
+            reject(discordRefusal('account-changed'));
+            socket.close(4000, 'Account identity changed');
+            return;
+          }
           this.#sessionId = packet.d?.session_id ?? null;
           this.#resumeUrl = packet.d?.resume_gateway_url ?? null;
           markReady();
@@ -787,6 +866,13 @@ export class DiscordRuntime {
         } else if (packet.t === 'THREAD_LIST_SYNC') {
           for (const channel of packet.d?.threads ?? []) this.#rememberChannel(channel);
         } else if (packet.t === 'MESSAGE_CREATE') {
+          if (this.#config.consumerMode === 'external-consumer') {
+            void this.#acceptExternalMessage(packet.d, packet.s, generation).catch(error => {
+              if (generation === this.#generation && !this.#stopped)
+                this.#logger.warn?.(`[dsh-im:discord] external phase=intake-failed code=${error?.code ?? 'source-unavailable'}`);
+            });
+            return;
+          }
           const bridge = this.#bridge;
           if (packet.d && bridge) {
             void this.#acceptMessage(packet.d, bridge).catch((error) => {
@@ -834,6 +920,35 @@ export class DiscordRuntime {
   #rememberChannel(channel) {
     if (!channel?.id) return;
     this.#channels.set(String(channel.id), channel);
+  }
+
+  async #acceptExternalMessage(message, sequence, generation) {
+    if (!this.#account || !this.#status.ready || generation !== this.#generation
+      || !message?.guild_id || message.author?.bot === true || message.webhook_id
+      || !Array.isArray(message.mentions)) return;
+    const mentioned = message.mentions.some(user => user.id === this.#account.userId);
+    if (!mentioned && (!this.#ordinaryAuthorized || this.#externalOrdinaryText() !== true
+      || typeof message.content !== 'string' || !message.content.trim())) return;
+    const checked = this.#checkedLifetime();
+    if (!mentioned) {
+      const application = await checked.api.getCurrentApplication({ signal: checked.signal });
+      if (verifiedDiscordAccount({ id: checked.account.userId, bot: true }, application).fingerprint !== checked.account.fingerprint)
+        throw discordRefusal('account-changed');
+      checked.assertCurrent();
+      if (!discordMessageContentAllowed(application) || this.#externalOrdinaryText() !== true) return;
+    }
+    const channel = await inspectDiscordSourceChannel(checked.api, message.channel_id, checked.account, checked.signal);
+    let event = normalizeDiscordExternalText(message, { botId: this.#config.botId, account: checked.account,
+      channel, eventId: `gateway:${this.#sessionId}:${sequence}`, ordinaryText: !mentioned });
+    checked.assertCurrent();
+    if (!event) return;
+    if (!mentioned && this.#externalOrdinaryText() !== true) return;
+    if (mentioned && this.#externalSourceFiles() === true) event = externalAttachments(event, message);
+    if (typeof this.#externalConsumer !== 'function') throw discordRefusal('consumer-unavailable');
+    const result = await this.#externalConsumer(event, checked.signal);
+    checked.assertCurrent();
+    if (result?.accepted !== true) throw discordRefusal('ingress-not-accepted');
+    this.#status.messagesReceived++;
   }
 
   async #acceptMessage(message, bridge) {
@@ -945,6 +1060,7 @@ export class DiscordRuntime {
   }
 
   async stop() {
+    this.#readHistory = createDiscordHistoryReader();
     this.#stopped = true;
     this.#generation += 1;
     this.#abortController?.abort();
@@ -957,6 +1073,7 @@ export class DiscordRuntime {
     this.#socket = null;
     this.#bridge = null;
     this.#api = null;
+    this.#account = null;
     this.#routing.clear();
     try {
       if (socket && socket.readyState < 2) socket.close(1000, 'Plugin stopped');
