@@ -25,6 +25,7 @@ test('question forms submit all answers explicitly and never preselect or emit p
   assert.equal(dropdown.name, 'q0_choices');
   assert.deepEqual(dropdown.options.map((option) => option.value), ['0', '1']);
   assert.equal(dropdown.initial_option, undefined);
+  assert.deepEqual(form.elements.filter(element => element.tag === 'input').map(element => element.max_length), [1000, 1000]);
   const submit = form.elements.at(-1);
   assert.equal(submit.form_action_type, 'submit');
   assert.equal(submit.behaviors[0].value.namespace, 'botharness/question-v1');
@@ -41,9 +42,11 @@ test('question answer evidence uses actual SDK actor and receipt with bounded ex
   assert.equal(evidence.messageId, 'om_card');
   assert.equal(evidence.action, 'answer');
   assert.deepEqual(evidence.values, [{ selected: [1] }, { selected: [], custom: 'My answer' }]);
+  const maximum = event(); maximum.action.form_value.q1_custom = 'a'.repeat(1000);
+  assert.equal(normalizeExternalCardAction(maximum, identity).values[1].custom.length, 1000);
   const multi = event(); multi.action.form_value.q0_choices = ['0', '1'];
   assert.deepEqual(normalizeExternalCardAction(multi, identity).values[0].selected, [0, 1]);
-  for (const values of [{ q0_choices: ['0', '0'] }, { q0_choices: 'permission' }, { q0_custom: 'a'.repeat(2001) }, { injected: 'answer' }]) {
+  for (const values of [{ q0_choices: ['0', '0'] }, { q0_choices: 'permission' }, { q0_custom: 'a'.repeat(1001) }, { injected: 'answer' }]) {
     const forged = event(); forged.action.form_value = values;
     assert.throws(() => normalizeExternalCardAction(forged, identity));
   }

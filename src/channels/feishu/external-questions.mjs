@@ -26,7 +26,7 @@ export function externalQuestionCard(value) {
           if (!text(option.label, 2000)) refuse();
           return { text: { tag: 'plain_text', content: option.label }, value: String(pick) };
         }) });
-      fields.push({ tag: 'input', name: 'q' + index + '_custom', input_type: 'multiline_text', max_length: 2000,
+      fields.push({ tag: 'input', name: 'q' + index + '_custom', input_type: 'multiline_text', max_length: 1000,
         placeholder: { tag: 'plain_text', content: 'Or enter your answer / 或填写自己的答案' } });
       return fields;
     });
@@ -49,7 +49,7 @@ export function questionActionValues(event) {
     const values = selected === undefined || selected === null || selected === '' ? [] : Array.isArray(selected) ? selected : [selected];
     if (values.length > 100 || values.some((value) => typeof value !== 'string' || !/^(0|[1-9][0-9]?)$/.test(value)) || new Set(values).size !== values.length) refuse();
     const custom = form['q' + i + '_custom'];
-    if (custom !== undefined && (typeof custom !== 'string' || custom.length > 2000)) refuse();
+    if (custom !== undefined && (typeof custom !== 'string' || custom.length > 1000)) refuse();
     return { selected: values.map(Number), ...(custom?.trim() ? { custom: custom.trim() } : {}) };
   });
 }
