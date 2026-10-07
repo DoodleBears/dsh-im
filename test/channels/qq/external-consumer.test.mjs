@@ -12,7 +12,10 @@ import { QqRuntime } from '../../../src/channels/qq/qq-runtime.mjs';
 
 class PlatformBot extends EventEmitter {
   sent = [];
-  api = { get: async () => ({ id: 'native-bot-id', username: 'QA Bot', bot: true }) };
+  api = { get: async () => ({ id: 'native-bot-id', username: 'QA Bot', bot: true }), getToken: async () => 'test-token' };
+  apiClient = { request: async (_token, _method, path, body) => this.sendText({
+    scope: 'group', targetId: path.split('/')[3], msgId: body.msg_id,
+  }, body.content) };
   use() {}
   async start(signal) {
     queueMicrotask(() => this.emit('ready', {}));
@@ -112,7 +115,7 @@ test('QQ fences source routes, pending canonical admission, native send uncertai
   await fx.bot().deliver(mention({ msgType: 103, msgElements: [{ content: 'quoted' }] }));
   assert.equal(admitted.length, 1);
   await assert.rejects(() => fx.controller.replyChecked(fx.botId, { ...route, conversationId: 'different-group' }, 'reply', options), { code: 'stale-route' });
-  await assert.rejects(() => fx.controller.replyChecked(fx.botId, route, 'reply', { ...options, beforeSend: () => false }), { code: 'cancelled' });
+  await assert.rejects(() => fx.controller.replyChecked(fx.botId, route, 'reply', { ...options, beforeSend: () => false }), { code: 'stale-route' });
   assert.equal(fx.bot().sent.length, 0);
   fx.bot().sendText = async (target, text) => { fx.bot().sent.push({ target, text }); throw new Error('lost response'); };
   await assert.rejects(() => fx.controller.replyChecked(fx.botId, route, 'reply', options), { code: 'reply-result-unknown' });
@@ -165,4 +168,24 @@ test('QQ preserves definite native refusals, expiry and the five-reply budget wi
   const before = fx.bot().sent.length;
   await assert.rejects(() => fx.controller.replyChecked(fx.botId, admitted.at(-1).reply, 'sixth', options), { code: 'reply-limit-exceeded' });
   assert.equal(fx.bot().sent.length, before);
+});
+
+test('consumer mutation cannot redirect QQ source proof and legacy replies retain the native message id', async t => {
+  const fx = await fixture(t);
+  const fingerprint = (await fx.controller.describeDeliveryAccount(fx.botId)).account.fingerprint;
+  let route;
+  await fx.controller.consumeInbound(fx.botId, { expectedFingerprint: fingerprint,
+    onEvent: async event => {
+      route = structuredClone(event.reply);
+      event.reply.conversationId = 'forged-group';
+      return { accepted: true };
+    },
+  });
+  await fx.bot().deliver(mention());
+  const options = { expectedFingerprint: fingerprint, beforeSend: () => true };
+  await assert.rejects(() => fx.controller.replyChecked(fx.botId, { ...route, conversationId: 'forged-group' }, 'reply', options), { code: 'stale-route' });
+  assert.equal(fx.bot().sent.length, 0);
+  const result = await fx.controller.replyChecked(fx.botId, route, 'reply', options);
+  assert.deepEqual(result, { sent: true, messageId: 'native-reply-id' });
+  assert.equal(fx.bot().sent[0].target.targetId, 'app-scoped-group');
 });

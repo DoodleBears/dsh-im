@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { ApiError } from '@tencent-connect/qqbot-nodejs/protocol';
+import { ApiError, getNextMsgSeq, messagePath } from '@tencent-connect/qqbot-nodejs/protocol';
 
 export function qqRefusal(code) { return Object.assign(new Error(code), { code }); }
 
@@ -75,7 +75,8 @@ export class QqExternalConsumer {
     signal.throwIfAborted();
     const prior = this.#sources.get(event.messageId);
     if (prior && JSON.stringify(prior.event) !== JSON.stringify(event)) throw qqRefusal('stale-route');
-    if (!prior) this.#sources.set(event.messageId, { event, attempts: 0 });
+    // Consumer-owned objects never become the Provider's source authority.
+    if (!prior) this.#sources.set(event.messageId, { event: structuredClone(event), attempts: 0 });
     while (this.#sources.size > 2000) this.#sources.delete(this.#sources.keys().next().value);
     // The external consumer acknowledges only after canonical ingestion commits.
     return this.#accept(event, signal);
@@ -95,17 +96,24 @@ export class QqExternalConsumer {
     const qualified = this.qualify(route, signal);
     if (typeof text !== 'string' || !text.trim() || text.length > 4000 || mentionUserIds?.length)
       throw qqRefusal('bad-request');
-    if (beforeSend !== undefined && beforeSend() !== true) throw qqRefusal('cancelled');
-    signal?.throwIfAborted();
-    this.#sources.get(route.messageId).attempts++;
+    // sendText awaits token acquisition internally. Prepare the token first so
+    // revocation and expiry are checked immediately before the message POST.
+    let token;
+    try { token = await this.#bot.api.getToken(); }
+    catch { throw qqRefusal('source-unavailable'); }
+    if (signal?.aborted) throw qqRefusal('cancelled');
+    this.qualify(qualified, signal);
+    if (beforeSend !== undefined && beforeSend() !== true) throw qqRefusal('stale-route');
+    if (signal?.aborted) throw qqRefusal('cancelled');
+    this.#sources.get(qualified.messageId).attempts++;
     let response;
     try {
-      response = await this.#bot.sendText({ scope: 'group', targetId: qualified.conversationId,
-        msgId: qualified.messageId }, text);
+      response = await this.#bot.apiClient.request(token, 'POST', messagePath('group', qualified.conversationId),
+        { msg_type: 0, content: text, msg_id: qualified.messageId, msg_seq: getNextMsgSeq(qualified.messageId) });
     } catch (error) { throw nativeReplyFailure(error); }
     // Once dispatch begins, cancellation or a missing response cannot prove non-delivery.
     if (signal?.aborted || !identifier(response?.id)) throw qqRefusal('reply-result-unknown');
     return { sent: true, ...(receipt ? { receipt: { version: 1, messageId: response.id,
-      conversationId: qualified.conversationId } } : {}) };
+      conversationId: qualified.conversationId } } : { messageId: response.id }) };
   }
 }

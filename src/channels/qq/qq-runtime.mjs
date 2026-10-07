@@ -169,10 +169,28 @@ export class QqRuntime {
       await atConnectionStage('harness.check', () => this.#harness.ensureRunning());
     this.#status.harnessReachable = true;
 
+    const controller = new AbortController();
+    this.#abortController = controller;
+    const observeTransport = (message) => {
+      if (controller.signal.aborted || this.#abortController !== controller || typeof message !== 'string') return;
+      // SDK 1.0.4 exposes close through its public Logger, not a disconnect event.
+      if (message.startsWith(`[${this.#config.botId}] WebSocket closed:`)
+        || message.startsWith(`[${this.#config.botId}] Connection failed:`)
+        || message.startsWith(`[${this.#config.botId}] Connecting to `)) {
+        this.#status.ready = false;
+        this.#status.qqConnectionState = 'connecting';
+      } else if (message === `[${this.#config.botId}] Max reconnect attempts reached or aborted`) {
+        this.#status.ready = false;
+        this.#status.qqConnectionState = 'failed';
+      } else return false;
+      this.#logger.info?.(`[dsh-im:qq] ${JSON.stringify({ event: 'receiver-state',
+        botId: this.#config.botId, phase: this.#status.qqConnectionState })}`);
+      return true;
+    };
     const sdkLogger = {
-      error: (...args) => this.#logger.error?.(...args),
+      error: (...args) => { if (!observeTransport(args[0])) this.#logger.error?.(...args); },
       warn: (...args) => this.#logger.warn?.(...args),
-      info: (...args) => this.#logger.info?.(...args),
+      info: (...args) => { if (!observeTransport(args[0])) this.#logger.info?.(...args); },
       debug: () => {},
     };
     const bot = this.#createBot({
@@ -189,8 +207,6 @@ export class QqRuntime {
     if (!bot || typeof bot.start !== 'function' || typeof bot.stop !== 'function') {
       throw new TypeError('QQ bot factory returned an invalid client');
     }
-    const controller = new AbortController();
-    this.#abortController = controller;
     this.#bot = bot;
     if (this.#config.consumerMode === 'external-consumer' && this.#externalConsumer) {
       try {
@@ -245,6 +261,7 @@ export class QqRuntime {
       readyReject = reject;
     });
     const onReady = () => {
+      if (controller.signal.aborted || this.#bot !== bot) return;
       const now = Date.now();
       this.#status.ready = true;
       this.#status.qqConnectionState = 'connected';
@@ -254,14 +271,18 @@ export class QqRuntime {
       readyResolve();
     };
     const onError = (error) => {
+      if (controller.signal.aborted || this.#bot !== bot) return;
       if (!this.#status.ready) readyReject(error);
       else {
         this.#status.error = this.#diagnostics.report(error, { operation: 'connection.monitor', botId: this.#config?.botId, automatic: true }).publicError;
         this.#status.lastError = this.#status.error.message;
         this.#logger.warn?.(`[dsh-im:qq] bot ${this.#config.botId} connection error:`, extractConnectionEvidence(error).details);
       }
+      this.#status.ready = false;
+      this.#status.qqConnectionState = 'connecting';
     };
     const onMessage = async (_ctx, message) => {
+      if (controller.signal.aborted || this.#bot !== bot) return;
       const task = this.#config.consumerMode === 'external-consumer'
         ? this.#externalBridge?.accept(message, controller.signal)
         : this.#bridge?.accept(message);
