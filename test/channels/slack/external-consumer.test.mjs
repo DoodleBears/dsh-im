@@ -464,3 +464,14 @@ test('Socket intake names mentioned Humans from users.info and keeps the account
     assert.equal(received.actor.name, 'QA Human');
   } finally { await f.runtime.stop(); }
 });
+
+test('Slack API keeps checked mentions inline where the text places them', async () => {
+  let body;
+  const api = new SlackApi({ botToken: 'xoxb-test-1234567890123456', fetchImpl: async (_url, request) => {
+    body = JSON.parse(request.body);
+    return Response.json({ ok: true, channel: 'C12345678', ts: '1791127737.000001' });
+  } });
+  await api.postMessage({ channelId: 'C12345678', text: 'ok <@U87654321>, ping <@U99999999>',
+    mentionUserIds: ['U87654321', 'U22222222'], retry: false });
+  assert.equal(body.text, '<@U22222222> ok <@U87654321>, ping @U99999999');
+});

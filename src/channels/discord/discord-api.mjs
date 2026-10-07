@@ -99,6 +99,11 @@ export function validDiscordToken(value) {
     && /^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{20,}$/.test(value.trim());
 }
 
+function mentionedContent(content, users) {
+  const missing = users.filter(id => !content.includes(`<@${id}>`) && !content.includes(`<@!${id}>`));
+  return missing.length ? `${missing.map(id => `<@${id}>`).join(' ')} ${content}` : content;
+}
+
 export class DiscordApi {
   #token;
   #fetch;
@@ -183,7 +188,7 @@ export class DiscordApi {
       signal,
       retry,
       body: {
-        content: users.length ? `${users.map(id => `<@${id}>`).join(' ')} ${content}` : content,
+        content: mentionedContent(content, users),
         allowed_mentions: { parse: [], replied_user: false, ...(users.length ? { users } : {}) },
         ...(replyToMessageId ? {
           message_reference: {

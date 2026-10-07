@@ -160,12 +160,12 @@ function slackUserMention(id) {
   return `<@${id}>`;
 }
 
-function safeOutgoingText(value, { trim = true } = {}) {
+function safeOutgoingText(value, { trim = true, allowedMentions = [] } = {}) {
   const raw = typeof value === 'string' ? value : '';
   const text = trim ? raw.trim() : raw;
   if (!text) throw new TypeError('Slack message text is required');
   return text
-    .replace(/<@([A-Z0-9]+)>/gi, '@$1')
+    .replace(/<@([A-Z0-9]+)>/gi, (tag, id) => allowedMentions.includes(id) ? tag : `@${id}`)
     .replace(/<!(channel|here|everyone)(?:\^[^>]*)?>/gi, '@$1');
 }
 
@@ -315,14 +315,16 @@ export class SlackApi {
   }
 
   postMessage({ channelId, text, threadTs, mentionUserIds = [], signal, retry = true }) {
-    const mentions = mentionUserIds.map(id => slackUserMention(id)).join(' ');
+    const tags = mentionUserIds.map(id => slackUserMention(id));
+    const body = safeOutgoingText(text, { allowedMentions: mentionUserIds });
+    const mentions = tags.filter(tag => !body.includes(tag)).join(' ');
     return this.#request('chat.postMessage', {
       tokenKind: 'bot',
       signal,
       retry,
       body: {
         channel: slackId(channelId, 'channel id'),
-        text: mentions ? `${mentions} ${safeOutgoingText(text)}` : safeOutgoingText(text),
+        text: mentions ? `${mentions} ${body}` : body,
         ...(threadTs ? { thread_ts: cleanString(threadTs) } : {}),
         mrkdwn: true,
         link_names: false,

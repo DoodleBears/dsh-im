@@ -421,3 +421,13 @@ test('reply mentions ping only the source author or users the source mentions', 
   assert.equal(body.content, `<@${ids.actor}> hi`);
   assert.deepEqual(body.allowed_mentions, { parse: [], replied_user: false, users: [ids.actor] });
 });
+
+test('Discord keeps checked mentions inline and prefixes only missing ones', async () => {
+  let body;
+  const api = new DiscordApi({ token: `${'A'.repeat(24)}.${'B'.repeat(6)}.${'C'.repeat(30)}`,
+    fetchImpl: async (_url, request) => { body = JSON.parse(request.body);
+      return Response.json({ id: ids.sent, channel_id: ids.channel, author: { id: ids.bot, bot: true } }); } });
+  await api.createMessage({ channelId: ids.channel, content: `ok <@${ids.actor}> done`, mentionUserIds: [ids.actor, ids.message], retry: false });
+  assert.equal(body.content, `<@${ids.message}> ok <@${ids.actor}> done`);
+  assert.deepEqual(body.allowed_mentions.users, [ids.actor, ids.message]);
+});
