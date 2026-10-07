@@ -9,7 +9,7 @@ import { ApiError } from '@tencent-connect/qqbot-nodejs/protocol';
 import { QqConfigStore, deriveQqBotIdentity } from '../../../src/channels/qq/config-store.mjs';
 import { QqController } from '../../../src/channels/qq/qq-controller.mjs';
 import { QqRuntime } from '../../../src/channels/qq/qq-runtime.mjs';
-import { verifiedQqAccount } from '../../../src/channels/qq/external-consumer.mjs';
+import { QqExternalConsumer, verifiedQqAccount } from '../../../src/channels/qq/external-consumer.mjs';
 import { createDeliveryService } from '../../../plugin-src/host/delivery-service.mjs';
 import { createDeliveryAdapter } from '../../../plugin-src/host/delivery-adapter.mjs';
 
@@ -71,6 +71,30 @@ function mention(overrides = {}) {
     replyTarget: { scope: 'group', targetId: 'app-scoped-group', msgId: 'native-source-id' },
     ...overrides };
 }
+
+test('public QQ reply cancellation at the qualified-runtime handoff refuses before native dispatch', async () => {
+  const bot = new PlatformBot();
+  const abort = new AbortController();
+  const account = verifiedQqAccount('12345678', { id: 'native-bot-id', bot: true });
+  let route;
+  const consumer = new QqExternalConsumer({ bot, account, botId: 'qq_test',
+    accept: async event => { route = event.reply; return { accepted: true }; },
+  });
+  await consumer.accept(mention(), abort.signal);
+  const service = createDeliveryService();
+  service.registerAdapter(createDeliveryAdapter({ channel: 'qq',
+    workspaces: { has: id => id === 'qq_test' }, stateFor: async () => ({}),
+    coreController: { replyChecked: async (_id, received, text, options) => {
+      await Promise.resolve();
+      abort.abort();
+      return consumer.reply(received, text, options);
+    } },
+  }));
+  await assert.rejects(() => service.replyChecked('qq_test', route, 'reply', {
+    expectedFingerprint: account.fingerprint, signal: abort.signal,
+  }), { code: 'cancelled' });
+  assert.deepEqual(bot.sent, []);
+});
 
 test('public QQ reply cancellation during account verification refuses before native dispatch', async t => {
   const fx = await fixture(t);

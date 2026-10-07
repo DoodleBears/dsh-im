@@ -89,7 +89,7 @@ export class QqExternalConsumer {
     return this.#accept(event, signal);
   }
   qualify(route, signal) {
-    signal?.throwIfAborted();
+    if (signal?.aborted) throw qqRefusal('cancelled');
     const source = this.#sources.get(route?.messageId);
     if (!source) throw qqRefusal('source-not-found');
     if (Object.keys(route).some(key => !['messageId', 'conversationId', 'actorId'].includes(key))
