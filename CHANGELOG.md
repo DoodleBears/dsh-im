@@ -6,15 +6,34 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+## [4.37.0] - 2026-10-07
+
 ### Added / 新增
 
 - 全部 13 个聊天渠道新增每个机器人独立的「排队／插话」设置，入口为「更多设置 → 通用」，默认排队。插话模式复用现有 `/steer` 权限、任务归属与补充指令机制；普通纯文字可在当前任务的下一步读取，并提供排队或提交回执。（[#314](https://github.com/xmanrui/dsh-im/issues/314)、[#115](https://github.com/xmanrui/dsh-im/issues/115)）
   All 13 chat channels add a per-bot Queue/Steer setting under More settings → General, defaulting to Queue. Automatic steering reuses `/steer` permissions, task ownership, and instruction submission for ordinary plain text, with queue or submission receipts. ([#314](https://github.com/xmanrui/dsh-im/issues/314), [#115](https://github.com/xmanrui/dsh-im/issues/115))
 
+- 新增跨渠道 `/clear` 命令，清空当前会话的模型上下文，同时保留 Session 绑定和历史记录；同步更新帮助、菜单与中英文提示。感谢 [@luochen211](https://github.com/luochen211) 的贡献（[#320](https://github.com/xmanrui/dsh-im/pull/320)，解决 [#318](https://github.com/xmanrui/dsh-im/issues/318)）。
+  The cross-channel `/clear` command clears model context while retaining the current Session binding and history, with updated help, menus, and bilingual messages. Thanks to [@luochen211](https://github.com/luochen211) ([#320](https://github.com/xmanrui/dsh-im/pull/320), addressing [#318](https://github.com/xmanrui/dsh-im/issues/318)).
+
+### Fixed / 修复
+
+- 修复飞书数字菜单的新会话操作在消息队列中被自身队列误判为忙碌的问题；等待前序消息处理完成后正常切换，仍保留未完成交互保护。
+  Feishu numeric new-Session menu actions no longer mistake their own queue entry for a busy task. They run after earlier messages while preserving pending-interaction protection.
+
+### Security / 安全
+
+- 可选图片处理依赖 `sharp` 从 `0.35.4` 升级至 `0.35.5`，更新预编译原生依赖，修复上游 librsvg 内存安全漏洞 [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w)。其他直接依赖声明保持不变。
+  Optional image processing dependency `sharp` is upgraded from `0.35.4` to `0.35.5`, updating prebuilt native dependencies to fix the upstream librsvg memory-safety vulnerability [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w). Other direct dependency declarations remain unchanged.
+
 ### Notes / 使用说明
 
 - 设置保存后对新消息生效，已排队消息保持原顺序；没有运行任务时正常开始新任务，附件、语音、引用、命令、审批和菜单保持原有处理方式。手动 `/steer` 在两种模式下均可用；AI Office 的任务协议不适用此设置。
   Settings apply to new messages without reinterpreting queued inputs. Idle messages start normally; attachments, voice, quotes, commands, approvals, and menus retain their existing handling. Manual `/steer` works in either mode. AI Office's task protocol is outside this setting's scope.
+- `/clear` 不接受参数、图片或文件，运行任务或等待交互时须先处理完毕；Host 不支持时明确提示，不会回退到 `/new` 或解除会话绑定。
+  `/clear` accepts no arguments, images, or files and requires active tasks or pending interactions to finish first. Unsupported Hosts receive an explicit notice without falling back to `/new` or clearing the Session binding.
+- DSH `0.2.0-rc.2` 兼容声明保持不变；升级后重启 Host 并刷新管理页面，以加载同版 Host 和客户端设置。
+  Declared DSH `0.2.0-rc.2` compatibility remains unchanged. Restart the Host and refresh the management page after upgrading so Host and client settings use the same version.
 
 ## [4.36.1] - 2026-10-06
 
@@ -1623,7 +1642,8 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 改进 npm 发布包结构，保留 CLI 入口并避免安装脚本拦截。
   Improved npm package contents to preserve the CLI entry point and avoid install-script blocking.
 
-[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.36.1...HEAD
+[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.37.0...HEAD
+[4.37.0]: https://github.com/xmanrui/dsh-im/compare/v4.36.1...v4.37.0
 [4.36.1]: https://github.com/xmanrui/dsh-im/compare/v4.36.0...v4.36.1
 [4.36.0]: https://github.com/xmanrui/dsh-im/compare/v4.35.1...v4.36.0
 [4.35.1]: https://github.com/xmanrui/dsh-im/compare/v4.35.0...v4.35.1
