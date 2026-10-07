@@ -94,6 +94,8 @@ export function createImHostPlugin(internals = {}) {
           contractVersion: 1,
           inboundVersion: 1,
           fileVersion: 1,
+          approvalCardVersion: 1,
+          approvalCardChecked: (botId, route, card, options) => deliveryService.approvalCardChecked(botId, route, card, options),
           receiptVersion: 1,
           echoVersion: 1,
           replyContextVersion: 1,

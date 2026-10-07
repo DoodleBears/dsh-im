@@ -1,3 +1,4 @@
+import { normalizeExternalCardAction } from './external-cards.mjs';
 import { ExclusiveInboundConsumers, normalizeExternalText, normalizeOwnTextEcho } from './external-consumer.mjs';
 import { atConnectionStage, createConnectionDiagnostics } from '../shared/connection-error.mjs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -593,11 +594,11 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'feishu', account,
         connected: isConnected(connectionStatus(this.#runtimes.get(botId))),
-        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer'] };
     });
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, onEcho } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, onEcho, onAction } = {}) {
     this.#assertOpen();
     return this.#withBotTransition(botId, async () => {
       this.#assertOpen();
@@ -606,7 +607,7 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       if (account.fingerprint !== expectedFingerprint)
         throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, onEcho });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, onEcho, onAction });
       try {
         const saved = await this.#configStore.saveBot({ ...config, consumerMode: 'external-consumer' });
         const resolved = await this.#credentials.resolve(saved.secretRef);
@@ -678,6 +679,23 @@ export class MultiBotDshFeishuController {
         || typeof runtime.replyChecked !== 'function')
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
       return runtime.replyChecked(route, text, { signal, receipt, beforeSend });
+    });
+  }
+
+  async approvalCardChecked(botId, route, card, { expectedFingerprint, signal, beforeSend, update = false } = {}) {
+    this.#assertOpen();
+    return this.#withBotTransition(botId, async () => {
+      this.#assertOpen();
+      signal?.throwIfAborted();
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      if (account.fingerprint !== expectedFingerprint) throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      const runtime = this.#runtimes.get(botId);
+      if (config.consumerMode !== 'external-consumer' || !isConnected(connectionStatus(runtime))
+        || typeof runtime.approvalCardChecked !== 'function') throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      const lease = this.#inboundConsumers.signalFor(botId, expectedFingerprint);
+      return runtime.approvalCardChecked({ appId: config.appId, botOpenId: config.botOpenId }, route, card,
+        { signal: signal ? AbortSignal.any([signal, lease]) : lease, beforeSend, update });
     });
   }
 
@@ -1453,6 +1471,17 @@ export class MultiBotDshFeishuController {
       config,
       appSecret,
       repair: this.#runtimeRepairCapability(config.id),
+      acceptExternalAction: (event, { signal } = {}) => this.#withBotTransition(config.id, async () => {
+        this.#assertOpen();
+        signal?.throwIfAborted();
+        if (this.#runtimes.get(config.id) !== runtime) throw Object.assign(new Error('consumer-unavailable'), { code: 'consumer-unavailable' });
+        const current = this.#requireBot(config.id);
+        if (current.consumerMode !== 'external-consumer' || configuredBotFingerprint(current) !== configuredBotFingerprint(config))
+          throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+        const account = await this.#deliveryAccount(current);
+        return normalizeExternalCardAction(event, { botId: current.id, appId: current.appId, fingerprint: account.fingerprint });
+      }).then(evidence => evidence ? this.#inboundConsumers.acceptAction(config.id, evidence, signal)
+        : { toast: { type: 'error', content: 'Unknown control / 未识别的按钮' } }),
       acceptExternal: (event, { signal } = {}) => this.#withBotTransition(config.id, async () => {
         signal?.throwIfAborted();
         if (this.#runtimes.get(config.id) !== runtime) throw Object.assign(new Error('consumer-unavailable'), { code: 'consumer-unavailable' });

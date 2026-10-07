@@ -1,3 +1,4 @@
+import { consumeExternalCardAction } from './external-cards.mjs';
 import { externalSenderName } from './external-names.mjs';
 import { qualifyExternalReply } from './reply-context.mjs';
 import { readExternalHistory } from './history-reader.mjs';
@@ -5,6 +6,7 @@ import { externalAttachments, readExternalFile, replyExternalFile } from './exte
 import { createConnectionDiagnostics, atConnectionStage } from '../shared/connection-error.mjs';
 import { randomUUID } from 'node:crypto';
 import { FeishuHarnessBridge } from './bridge.mjs';
+import { replyExternalApprovalCard, updateExternalApprovalCard } from './external-cards.mjs';
 import { cardActionProbeCard } from './feishu-cards.mjs';
 import { VerifiedFeishuChannel } from './feishu-channel.mjs';
 import { normalizeFeishuGroupResponseMode } from './group-response-mode.mjs';
@@ -140,6 +142,7 @@ export class FeishuRuntime {
   #bridge = null;
   #consumerMode;
   #acceptExternal;
+  #acceptExternalAction;
   #wsClient = null;
   #starting = null;
   #stopping = null;
@@ -165,6 +168,7 @@ export class FeishuRuntime {
     lark,
     consumerMode = 'standalone',
     acceptExternal,
+    acceptExternalAction,
     botId,
     appId,
     appSecret,
@@ -207,6 +211,7 @@ export class FeishuRuntime {
 
     this.#consumerMode = consumerMode;
     this.#acceptExternal = acceptExternal;
+    this.#acceptExternalAction = acceptExternalAction;
     this.#lark = lark;
     this.#botId = nonEmptyString(botId);
     this.#appId = appId;
@@ -404,7 +409,11 @@ export class FeishuRuntime {
         // subscribes card.action.trigger; the number-reply fallback covers
         // apps that do not).
         'card.action.trigger': (event) => {
-          if (!isCurrentStart() || this.#consumerMode === 'external-consumer') return;
+          if (!isCurrentStart()) return;
+          if (this.#consumerMode === 'external-consumer') {
+            if (typeof this.#acceptExternalAction !== 'function') return { toast: { type: 'error', content: 'Management controls unavailable / 管理按钮不可用' } };
+            return consumeExternalCardAction(this.#acceptExternalAction, event, signal);
+          }
           this.#status.cardActionsReceived += 1;
           this.#status.lastCardActionAt = new Date().toISOString();
           if (!this.#consumeCardActionProbe(event)) void bridge.onCardAction(event);
@@ -740,6 +749,18 @@ export class FeishuRuntime {
     if (typeof messageId !== 'string' || !messageId || messageId.length > 512 || conversationId !== receiveId)
       throw Object.assign(new Error('send-result-unknown'), { code: 'send-result-unknown' });
     return { sent: true, receipt: { version: 1, messageId, conversationId } };
+  }
+
+  async approvalCardChecked(identity, route, card, { signal, beforeSend, update = false } = {}) {
+    const client = this.#client;
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      if (!client || this.#client !== client || this.#consumerMode !== 'external-consumer')
+        throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    };
+    assertCurrent();
+    return update ? updateExternalApprovalCard(client, identity, route, card, { signal, assertCurrent, beforeSend })
+      : replyExternalApprovalCard(client, route, card, { signal, assertCurrent, beforeSend });
   }
 
   async historyChecked(identity, route, query, { signal } = {}) {
