@@ -134,6 +134,9 @@ test('QQ quoted voice ASR belongs to the current native mention rather than adja
   assert.equal(fx.admitted[0].voice.transcript, 'platform');
   assert.match(fx.admitted[0].text, /forty one times forty three/);
   assert.equal(fx.admitted[0].reply.messageId, native.messageId);
+  assert.deepEqual((await fx.controller.status()).bots[0].health.lastInbound.voice, {
+    count: 1, platformTranscriptPresent: true, platformWavPresent: false,
+  });
   for (const change of [
     { raw: undefined }, { refMsgIdx: 'other-voice' },
     { raw: { ...native.raw, id: 'other-mention' } },
@@ -142,6 +145,16 @@ test('QQ quoted voice ASR belongs to the current native mention rather than adja
     { attachments: [voice] },
   ]) await fx.bot().deliver({ ...native, ...change });
   assert.equal(fx.admitted.length, 1);
+});
+
+test('QQ original voice can opt in without disclosing the optional platform transcript', async t => {
+  const fx = await fixture(t, { sourceVoiceAudio: true, sourceVoiceTranscripts: false });
+  await fx.bot().deliver(mention({ attachments: [{ content_type: 'voice', url: privateUrl,
+    asr_refer_text: 'Not opted into transcript disclosure' }] }));
+  assert.equal(fx.admitted.length, 1);
+  assert.equal(fx.admitted[0].attachments.length, 1);
+  assert.equal(fx.admitted[0].voice.transcript, 'unavailable');
+  assert.equal(JSON.stringify(fx.admitted).includes('Not opted into transcript disclosure'), false);
 });
 
 test('QQ original voice bytes are lazy, source-bound and revoked with their consumer', async t => {

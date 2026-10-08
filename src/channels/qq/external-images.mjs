@@ -1,3 +1,4 @@
+import { isQqVoiceAttachment } from './voice-attachment.mjs';
 import { createHash } from 'node:crypto';
 import { detectedImageMediaType, fetchImageBuffer } from '../shared/image-prompt.mjs';
 import { QQ_IMAGE_HOSTS } from './qq-bridge.mjs';
@@ -13,7 +14,7 @@ export function qqSourceAttachments(message, event, { sourceImages = true, sourc
   const files = message.attachments.map((native, index) => {
     // Tencent's native `file` label is a category, not a MIME declaration.
     const voice = sourceVoiceAudio && message.attachments.length === 1
-      && (native?.content_type === 'voice' || /^audio\/[a-z0-9!#$&^_.+-]+$/i.test(native?.content_type ?? ''));
+      && isQqVoiceAttachment(native);
     const mediaType = voice ? 'audio/unknown' : native?.content_type === 'file' && sourceFiles
       ? 'application/octet-stream' : sourceImages && imageTypes.has(native?.content_type) ? native.content_type : null;
     if (!mediaType) throw refusal('invalid-inbound', 'file-category-invalid');

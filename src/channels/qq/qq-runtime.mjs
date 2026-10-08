@@ -1,3 +1,4 @@
+import { isQqVoiceAttachment } from './voice-attachment.mjs';
 import { extractConnectionEvidence, createConnectionDiagnostics, atConnectionStage } from '../shared/connection-error.mjs';
 import { QQBot, contentSanitizer, typingIndicator } from '@tencent-connect/qqbot-nodejs';
 
@@ -341,8 +342,9 @@ export class QqRuntime {
     const onMessage = async (_ctx, message) => {
       if (controller.signal.aborted || this.#bot !== bot) return;
       const elements = Array.isArray(message?.raw?.msg_elements) ? message.raw.msg_elements : [];
-      const quotedFiles = elements.slice(0, 2).flatMap(element => Array.isArray(element?.attachments)
-        ? element.attachments.slice(0, 33).filter(file => file?.content_type === 'file') : []);
+      const quotedAttachments = elements.slice(0, 2).flatMap(element => Array.isArray(element?.attachments)
+        ? element.attachments.slice(0, 33) : []);
+      const quotedFiles = quotedAttachments.filter(file => file?.content_type === 'file');
       const lastInbound = {
         observedAt: new Date().toISOString(),
         eventType: ['GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE', 'C2C_MESSAGE_CREATE'].includes(message?.rawEventType)
@@ -375,8 +377,8 @@ export class QqRuntime {
           })),
         };
       }
-      const voices = [...(Array.isArray(message?.attachments) ? message.attachments.slice(0, 2) : []), ...quotedFiles.slice(0, 2)]
-        .filter(file => file?.content_type === 'voice' || /^audio\/[a-z0-9!#$&^_.+-]+$/i.test(file?.content_type ?? ''));
+      const voices = [...(Array.isArray(message?.attachments) ? message.attachments.slice(0, 2) : []), ...quotedAttachments.slice(0, 2)]
+        .filter(isQqVoiceAttachment);
       if (voices.length) lastInbound.voice = {
         count: Math.min(voices.length, 2),
         platformTranscriptPresent: voices.some(file => typeof file.asr_refer_text === 'string' && !!file.asr_refer_text.trim()),

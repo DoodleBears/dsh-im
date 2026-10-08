@@ -87,7 +87,8 @@ export class QqExternalConsumer {
   }
   async accept(message, signal) {
     this.#observations.receive(message, signal);
-    const voice = this.#sourceVoiceTranscripts() === true ? qqVoiceMessage(message) : undefined;
+    const voice = this.#sourceVoiceTranscripts() === true || this.#sourceVoiceAudio() === true
+      ? qqVoiceMessage(message, { sourceVoiceTranscripts: this.#sourceVoiceTranscripts() === true }) : undefined;
     const quoted = !voice && this.#sourceFiles() === true ? qqQuotedFileMessage(message) : undefined;
     message = quoted?.message ?? message;
     message = voice?.message ?? message;
