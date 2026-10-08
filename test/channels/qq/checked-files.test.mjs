@@ -173,6 +173,7 @@ test('installed QQ contract acquires an explicitly quoted native file under the 
   assert.deepEqual(evidence.quoteShape, {
     directAttachments: 'absent', rawDirectAttachments: 'absent',
     elementFields: ['attachments', 'msg_idx'], normalizedElementMatches: true,
+    files: [{ urlPresent: true, httpsUrl: true, sizeType: 'number', sizeValid: true }],
   });
   assert.equal(JSON.stringify(evidence).includes('private-ticket'), false);
 });

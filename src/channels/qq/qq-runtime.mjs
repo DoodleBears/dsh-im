@@ -357,6 +357,13 @@ export class QqRuntime {
             ? Object.keys(elements[0]).filter(key => /^[a-z_]{1,32}$/.test(key)).sort().slice(0, 16) : [],
           normalizedElementMatches: Array.isArray(message.msgElements) && message.msgElements.length === 1
             && elements.length === 1 && message.msgElements[0]?.msg_idx === elements[0]?.msg_idx,
+          files: quotedFiles.slice(0, 2).map(file => ({
+            urlPresent: typeof file.url === 'string' && file.url.length > 0,
+            httpsUrl: typeof file.url === 'string' && file.url.startsWith('https://'),
+            sizeType: file.size === undefined ? 'absent' : file.size === null ? 'null'
+              : ['string', 'number'].includes(typeof file.size) ? typeof file.size : 'other',
+            sizeValid: file.size === undefined || (Number.isSafeInteger(file.size) && file.size > 0),
+          })),
         };
       }
       this.#status.lastInbound = lastInbound;
