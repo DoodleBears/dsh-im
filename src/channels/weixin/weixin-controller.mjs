@@ -224,8 +224,13 @@ export class WeixinController {
     });
   }
 
-  async startProvisioning() {
+  async startProvisioning({ consumerMode, signal } = {}) {
+    if (consumerMode !== undefined && consumerMode !== 'external-consumer') throw new TypeError('Invalid consumer mode');
+    signal?.throwIfAborted();
     if (this.#closed) throw new Error('dsh-weixin controller is closed');
+    if (consumerMode === 'external-consumer' && this.#activeAttemptId) {
+      throw new Error('Weixin provisioning is already active');
+    }
     if (this.#activeAttemptId) await this.cancelProvisioning(this.#activeAttemptId);
 
     const record = {
@@ -240,7 +245,11 @@ export class WeixinController {
       error: null,
       botId: null,
       task: null,
+      consumerMode,
     };
+    const abort = () => { record.controller.abort(); record.verifyResolve?.(); };
+    signal?.addEventListener('abort', abort, { once: true });
+    record.detachSignal = () => signal?.removeEventListener('abort', abort);
     this.#attempts.set(record.id, record);
     this.#activeAttemptId = record.id;
     this.#touch();
@@ -277,6 +286,7 @@ export class WeixinController {
         record.error = error.publicError;
       }
       if (this.#activeAttemptId === record.id) this.#activeAttemptId = null;
+      record.detachSignal();
       this.#touch();
       throw error;
     }
@@ -538,6 +548,11 @@ export class WeixinController {
           record.currentBaseUrl = apiBaseFromServer(response.redirect_host, record.currentBaseUrl);
           record.state = 'scanned';
         } else if (response.status === 'binded_redirect') {
+          if (record.consumerMode === 'external-consumer') {
+            record.state = 'failed';
+            record.error = safeAccountError('already-bound', t('该微信账号已绑定，请选择已有应用。'));
+            break;
+          }
           const existing = this.#configStore.list().find(
             (config) => this.#runtimes.get(config.botId)?.status?.ready === true,
           ) ?? this.#configStore.list()[0];
@@ -590,6 +605,7 @@ export class WeixinController {
         }).publicError;
       }
     } finally {
+      record.detachSignal();
       record.pendingVerifyCode = null;
       record.verifyResolve?.();
       record.verifyResolve = null;
@@ -610,7 +626,8 @@ export class WeixinController {
       baseUrl,
       createdAt: previousConfig?.createdAt ?? new Date().toISOString(),
       connectedAt: new Date().toISOString(),
-      ...(previousConfig?.consumerMode ? { consumerMode: previousConfig.consumerMode } : {}),
+      ...(record.consumerMode || previousConfig?.consumerMode
+        ? { consumerMode: record.consumerMode ?? previousConfig.consumerMode } : {}),
     };
     let previousToken;
     try {
