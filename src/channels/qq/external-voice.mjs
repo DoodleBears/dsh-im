@@ -9,7 +9,7 @@ export function qqVoiceMessage(message, { sourceVoiceTranscripts = false } = {})
   const candidate = message?.msgType === 103 ? message.raw?.msg_elements?.[0]?.attachments?.[0] : message?.attachments?.[0];
   if (!isQqVoiceAttachment(candidate)) return undefined;
   const quoted = message?.msgType === 103 ? qqQuotedMediaMessage(message, {
-    accepts: files => files.length === 1 && isQqVoiceAttachment(files[0]), label: 'voice',
+    accepts: files => files.length === 1 && isQqVoiceAttachment(files[0]), label: 'voice', requireCaption: false,
   }) : undefined;
   message = quoted?.message ?? message;
   const attachments = message?.attachments;
