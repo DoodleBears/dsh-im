@@ -434,7 +434,7 @@ export class MultiBotDshFeishuController {
     });
   }
 
-  async bindCredentials({ appId, appSecret, domain = 'feishu' } = {}) {
+  async bindCredentials({ appId, appSecret, domain = 'feishu', consumerMode, signal } = {}) {
     this.#assertOpen();
     const normalizedAppId = typeof appId === 'string' ? appId.trim() : '';
     const normalizedSecret = typeof appSecret === 'string' ? appSecret.trim() : '';
@@ -450,10 +450,14 @@ export class MultiBotDshFeishuController {
         appSecret: normalizedSecret,
         domain: normalizedDomain,
       });
+      signal?.throwIfAborted();
       this.#assertOpen();
       const existing = this.#configStore.list().find(
         (candidate) => candidate.appId === normalizedAppId,
       );
+      if (consumerMode === 'external-consumer' && existing) {
+        throw Object.assign(new Error('setup-account-exists'), { code: 'setup-account-exists' });
+      }
       const botId = existing?.id ?? this.#createBotId();
       if (typeof botId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(botId)
         || (!existing && this.#configStore.getBot(botId))) {
@@ -463,6 +467,7 @@ export class MultiBotDshFeishuController {
       const previousSecret = await atConnectionStage('credential.read', () => this.#credentials.resolve(secretRef), 'credential-store').catch(() => undefined);
       const config = {
         ...existing,
+        ...(consumerMode === 'external-consumer' ? { consumerMode } : {}),
         id: botId,
         appId: normalizedAppId,
         secretRef,
@@ -501,7 +506,7 @@ export class MultiBotDshFeishuController {
         }
       });
       this.#touch();
-      return this.status(botId);
+      return consumerMode === 'external-consumer' ? { accountRef: botId } : this.status(botId);
     });
   }
 

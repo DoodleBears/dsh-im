@@ -18,6 +18,7 @@ import { installHostLanguageRpc } from './host-language-rpc.mjs';
 import { installDeliveryRpc } from './delivery-rpc.mjs';
 import { installDeliveryHttp } from './delivery-http.mjs';
 import { createDeliveryService } from './delivery-service.mjs';
+import { installAppSetupRpc } from './app-setup.mjs';
 import { installInboundTtlRpc } from './inbound-ttl-rpc.mjs';
 import { installInjectedContext } from './injected-context.mjs';
 import { installSessionSyncCoordinator } from './session-sync-coordinator.mjs';
@@ -92,6 +93,8 @@ export function createImHostPlugin(internals = {}) {
       if (typeof ctx?.provide === 'function') {
         ctx.provide('dshIm', Object.freeze({
           contractVersion: 1,
+          setupVersion: 1,
+          describeSetup: (channel) => deliveryService.appSetup.describe(channel),
           inboundVersion: 1,
           fileVersion: 1,
           approvalCardVersion: 1,
@@ -191,6 +194,7 @@ export function createImHostPlugin(internals = {}) {
       }
       try {
         startDelivery(ctx, deliveryService, { authority: config.rpcAuthority });
+        if (deliveryService.appSetup) installAppSetupRpc(ctx, deliveryService.appSetup, config.rpcAuthority);
       } catch (error) {
         logger.error?.('[dsh-im] failed to activate delivery management; continuing with channels', error);
       }

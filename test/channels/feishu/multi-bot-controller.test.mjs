@@ -178,10 +178,63 @@ async function completeScan(fx, result) {
   return fx.controller.registrationStatus(attemptId);
 }
 
+test('inline setup creates an external-consumer app before its first connection and returns only authenticated identity', async () => {
+  const { AppSetupService, installAppSetupRpc } = await import('../../../plugin-src/host/app-setup.mjs');
+  const { managementFetch } = await import('../../fixtures/management-rpc.mjs');
+  const fx = fixture();
+  const setup = new AppSetupService({ describeBot: (id) => fx.controller.describeDeliveryAccount(id) });
+  setup.register('feishu', fx.controller);
+  let rpc;
+  installAppSetupRpc({ connection: { fetch: managementFetch((_channel, handler) => { rpc = handler; }) } }, setup);
+  try {
+    const started = await rpc('setup.start', { channel: 'feishu' });
+    assert.equal(started.ok, true);
+    const created = await rpc('setup.credentials', {
+      attemptId: started.value.attemptId,
+      appId: 'cli_inline', appSecret: 'private-inline-secret', domain: 'lark',
+    });
+    assert.equal(created.ok, true);
+    assert.equal(created.value.state, 'ready');
+    assert.equal(created.value.accountRef, 'bot_generated_1');
+    assert.equal(created.value.description.channel, 'feishu');
+    assert.match(created.value.description.account.fingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(fx.runtimes.get('bot_generated_1')[0].config.consumerMode, 'external-consumer');
+    assert.equal(JSON.stringify(created).includes('private-inline-secret'), false);
+    assert.equal(JSON.stringify(created).includes('secretRef'), false);
+  } finally { await fx.controller.close(); }
+});
+
 function callbackRepairQrUrl(appId, domain = 'feishu') {
   const host = domain === 'lark' ? 'open.larksuite.com' : 'open.feishu.cn';
   return `https://${host}/page/launcher?tp=sdk&clientID=${encodeURIComponent(appId)}&addons=encoded`;
 }
+
+test('cancelling inline credential verification prevents an account and resumes as cancelled', async () => {
+  const { AppSetupService, installAppSetupRpc } = await import('../../../plugin-src/host/app-setup.mjs');
+  const { managementFetch } = await import('../../fixtures/management-rpc.mjs');
+  let release;
+  let verifying = false;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const fx = fixture({ verifyApp: async () => { verifying = true; await gate; return { name: 'New app', openId: 'ou_new', activated: 1 }; } });
+  const setup = new AppSetupService({ describeBot: (id) => fx.controller.describeDeliveryAccount(id) });
+  setup.register('feishu', fx.controller);
+  let rpc;
+  installAppSetupRpc({ connection: { fetch: managementFetch((_channel, handler) => { rpc = handler; }) } }, setup);
+  try {
+    const started = await rpc('setup.start', { channel: 'feishu' });
+    const attemptId = started.value.attemptId;
+    const creating = rpc('setup.credentials', { attemptId, appId: 'cli_cancel', appSecret: 'cancelled-secret', domain: 'lark' });
+    await waitFor(() => verifying);
+    const cancelling = rpc('setup.cancel', { attemptId });
+    await flush();
+    release();
+    assert.equal((await cancelling).value.state, 'cancelled');
+    assert.equal((await creating).ok, false);
+    assert.equal((await rpc('setup.poll', { attemptId })).value.state, 'cancelled');
+    assert.equal(fx.configStore.list().length, 0);
+    assert.equal(fx.values.size, 0);
+  } finally { release(); await fx.controller.close(); }
+});
 
 test('QR registration separates events from card callbacks', async () => {
   const fx = fixture({ createBotIds: ['bot_callbacks'] });
