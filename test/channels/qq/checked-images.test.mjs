@@ -55,7 +55,7 @@ async function fixture(t, { sourceImages = true, production = false } = {}) {
   });
   let productionAdapter;
   if (production) {
-    const created = await createProductionController({ credentials, apiProxy: {},
+    const created = await createProductionController({ credentials, typertGateway: { invoke() {}, stream() {} },
       logger: () => ({ error() {}, warn() {}, info() {}, debug() {} }) },
     { dataDir: directory, dshHome: directory, configPath: join(directory, 'config.json') }, {
       HarnessClient: class { async ensureRunning() {} stopManagedProcess() {} },

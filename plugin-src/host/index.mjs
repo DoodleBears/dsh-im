@@ -94,6 +94,7 @@ export function createImHostPlugin(internals = {}) {
           contractVersion: 1,
           receiptVersion: 1,
           inboundVersion: 1,
+          fileVersion: 1,
           replyContextVersion: 1,
           replyReceiptVersion: 1,
           replyFenceVersion: 1,
@@ -101,6 +102,8 @@ export function createImHostPlugin(internals = {}) {
           consumeInbound: (botId, options) => deliveryService.consumeInbound(botId, options),
           historyChecked: (botId, route, query, options) => deliveryService.historyChecked(botId, route, query, options),
           replyChecked: (botId, route, text, options) => deliveryService.replyChecked(botId, route, text, options),
+          readSourceFile: (botId, route, attachment, options) => deliveryService.externalFileChecked(botId, route, attachment, options),
+          replyFileChecked: (botId, route, file, options) => deliveryService.externalFileChecked(botId, route, file, { ...options, reply: true }),
           describeBot: (botId) => deliveryService.describeBot(botId),
           sendChecked: (botId, targetId, text, options) => deliveryService.sendChecked(botId, targetId, text, options),
           send: (botId, targetId, text, options) => (

@@ -52,6 +52,9 @@ const DELIVERY_ERROR_CODES = new Set([
   'history-unavailable',
   'thread-unavailable',
   'untrusted-source',
+  'resource-unavailable',
+  'artifact-too-large',
+  'file-upload-failed',
 ]);
 
 const SESSION_SYNC_METHODS = Object.freeze([
@@ -410,6 +413,20 @@ export class DeliveryService {
     });
     try { this.#assertRegistered(registration); } catch (error) { dispose(); throw error; }
     return dispose;
+  }
+
+  async externalFileChecked(botId, route, value, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')) throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (typeof registration.adapter.externalFileChecked !== 'function') throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    try {
+      return await registration.adapter.externalFileChecked(id, structuredClone(route), structuredClone(value), {
+        ...options, signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal,
+      });
+    } catch (error) { throw publicOperationError(error); }
   }
 
   async historyChecked(botId, route, query, options = {}) {

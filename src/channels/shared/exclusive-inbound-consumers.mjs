@@ -4,13 +4,15 @@ function refusal(code) { return Object.assign(new Error(code), { code }); }
 export class ExclusiveInboundConsumers {
   #entries = new Map();
 
-  register(botId, { fingerprint, onEvent, signal }) {
+  acceptsImages(botId) { return this.#entries.get(botId)?.sourceImages === true; }
+
+  register(botId, { fingerprint, onEvent, signal, sourceImages = false }) {
     if (this.#entries.has(botId)) throw refusal('consumer-conflict');
-    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function')
+    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function' || typeof sourceImages !== 'boolean')
       throw refusal('bad-request');
     signal?.throwIfAborted();
     const controller = new AbortController();
-    const entry = { fingerprint, onEvent, controller, dispose: undefined };
+    const entry = { fingerprint, onEvent, sourceImages, controller, dispose: undefined };
     const dispose = () => {
       if (this.#entries.get(botId) === entry) this.#entries.delete(botId);
       controller.abort(refusal('consumer-unavailable'));
