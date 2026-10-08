@@ -1,3 +1,4 @@
+import { isQqVoiceAttachment } from './voice-attachment.mjs';
 import { createHash } from 'node:crypto';
 import { detectedImageMediaType, fetchImageBuffer } from '../shared/image-prompt.mjs';
 import { QQ_IMAGE_HOSTS } from './qq-bridge.mjs';
@@ -7,12 +8,14 @@ const imageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'
 const refusal = (code, reason) => Object.assign(new Error(code), { code, ...(reason ? { reason } : {}) });
 
 /** Native caption and attachment order are separate; no native interleaving is inferred. */
-export function qqSourceAttachments(message, event, { sourceImages = true, sourceFiles = false, referenceKey } = {}) {
+export function qqSourceAttachments(message, event, { sourceImages = true, sourceFiles = false, sourceVoiceAudio = false, referenceKey } = {}) {
   if (!Array.isArray(message.attachments) || !message.attachments.length || message.attachments.length > 32)
     throw refusal('invalid-inbound');
   const files = message.attachments.map((native, index) => {
     // Tencent's native `file` label is a category, not a MIME declaration.
-    const mediaType = native?.content_type === 'file' && sourceFiles
+    const voice = sourceVoiceAudio && message.attachments.length === 1
+      && isQqVoiceAttachment(native);
+    const mediaType = voice ? 'audio/unknown' : native?.content_type === 'file' && sourceFiles
       ? 'application/octet-stream' : sourceImages && imageTypes.has(native?.content_type) ? native.content_type : null;
     if (!mediaType) throw refusal('invalid-inbound', 'file-category-invalid');
     if (typeof native.url !== 'string' || native.url.length > 16384)
@@ -24,13 +27,13 @@ export function qqSourceAttachments(message, event, { sourceImages = true, sourc
       throw refusal('resource-unavailable');
     if (native.size !== undefined && (!Number.isSafeInteger(native.size) || native.size <= 0))
       throw refusal('invalid-inbound', 'file-size-invalid');
-    if (native.size > QQ_EXTERNAL_IMAGE_LIMIT) throw refusal('artifact-too-large');
+    if (native.size > (voice ? 1024 * 1024 : QQ_EXTERNAL_IMAGE_LIMIT)) throw refusal('artifact-too-large');
     const id = createHash('sha256').update(JSON.stringify([
       event.fingerprint, event.conversation.id, event.messageId, index,
       ...(referenceKey === undefined ? [] : ['quote', referenceKey]),
     ])).digest('hex');
     const name = typeof native.filename === 'string' && native.filename.trim() && native.filename.length <= 512
-      && !/[\x00-\x1f\x7f/\\]/.test(native.filename) ? native.filename : native.content_type === 'file' ? 'file' : 'image';
+      && !/[\x00-\x1f\x7f/\\]/.test(native.filename) ? native.filename : native.content_type === 'file' ? 'file' : voice ? 'voice.bin' : 'image';
     const attachment = { id, messageId: event.messageId, resourceKey: id, name,
       mediaType, ...(native.size === undefined ? {} : { sizeBytes: native.size }) };
     return { attachment, url: native.url };
@@ -51,7 +54,7 @@ export async function readQqSourceAttachment(source, attachment, { signal, asser
   let bytes;
   try {
     bytes = await fetchImageBuffer(file.url, { signal, allowedHosts: QQ_IMAGE_HOSTS,
-      maxBytes: QQ_EXTERNAL_IMAGE_LIMIT, timeoutMs: 15000 });
+      maxBytes: attachment.mediaType.startsWith('audio/') ? 1024 * 1024 : QQ_EXTERNAL_IMAGE_LIMIT, timeoutMs: 15000 });
   } catch (error) {
     assertCurrent();
     throw refusal(error?.code === 'image-too-large' ? 'artifact-too-large' : 'resource-unavailable');

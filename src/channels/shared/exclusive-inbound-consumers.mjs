@@ -4,16 +4,18 @@ function refusal(code) { return Object.assign(new Error(code), { code }); }
 export class ExclusiveInboundConsumers {
   #entries = new Map();
 
+  acceptsVoiceTranscripts(botId) { return this.#entries.get(botId)?.sourceVoiceTranscripts === true; }
+  acceptsVoiceAudio(botId) { return this.#entries.get(botId)?.sourceVoiceAudio === true; }
   acceptsImages(botId) { return this.#entries.get(botId)?.sourceImages === true; }
   acceptsFiles(botId) { return this.#entries.get(botId)?.sourceFiles === true; }
 
-  register(botId, { fingerprint, onEvent, signal, sourceImages = false, sourceFiles = false }) {
+  register(botId, { fingerprint, onEvent, signal, sourceImages = false, sourceFiles = false, sourceVoiceTranscripts = false, sourceVoiceAudio = false }) {
     if (this.#entries.has(botId)) throw refusal('consumer-conflict');
-    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function' || typeof sourceImages !== 'boolean' || typeof sourceFiles !== 'boolean')
+    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function' || typeof sourceImages !== 'boolean' || typeof sourceFiles !== 'boolean' || typeof sourceVoiceTranscripts !== 'boolean' || typeof sourceVoiceAudio !== 'boolean')
       throw refusal('bad-request');
     signal?.throwIfAborted();
     const controller = new AbortController();
-    const entry = { fingerprint, onEvent, sourceImages, sourceFiles, controller, dispose: undefined };
+    const entry = { fingerprint, onEvent, sourceImages, sourceFiles, sourceVoiceTranscripts, sourceVoiceAudio, controller, dispose: undefined };
     const dispose = () => {
       if (this.#entries.get(botId) === entry) this.#entries.delete(botId);
       controller.abort(refusal('consumer-unavailable'));
