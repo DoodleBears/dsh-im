@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { ApiError, getNextMsgSeq, messagePath } from '@tencent-connect/qqbot-nodejs/protocol';
 import { QqNativeReplyObservations, qqNativeIdentifier as identifier } from './native-reply-observations.mjs';
 import { qqSourceAttachments, readQqSourceAttachment, checkedQqImageFile, uploadQqCheckedMedia } from './external-images.mjs';
-import { checkedQqGenericFile } from './external-files.mjs';
+import { checkedQqGenericFile, qqQuotedFileMessage } from './external-files.mjs';
 
 export function qqRefusal(code) { return Object.assign(new Error(code), { code }); }
 
@@ -82,13 +82,16 @@ export class QqExternalConsumer {
   }
   async accept(message, signal) {
     this.#observations.receive(message, signal);
+    const quoted = this.#sourceFiles() === true ? qqQuotedFileMessage(message) : undefined;
+    message = quoted?.message ?? message;
     const mediaEnabled = (this.#sourceImages() === true || this.#sourceFiles() === true) && message?.attachments?.length;
     const base = normalizeQqExternalText(mediaEnabled ? { ...message, attachments: undefined,
       content: typeof message.content === 'string' && !message.content.trim()
         ? message.attachments.every(file => file?.content_type === 'file') ? '[File]' : '[Image]' : message.content } : message,
     { botId: this.#botId, account: this.#account });
     const media = base && mediaEnabled ? qqSourceAttachments(message, base,
-      { sourceImages: this.#sourceImages() === true, sourceFiles: this.#sourceFiles() === true }) : undefined;
+      { sourceImages: this.#sourceImages() === true, sourceFiles: this.#sourceFiles() === true,
+        referenceKey: quoted?.referenceKey }) : undefined;
     const event = media?.event ?? base;
     if (!event) return;
     signal.throwIfAborted();

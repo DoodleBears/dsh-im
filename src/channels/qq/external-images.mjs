@@ -7,7 +7,7 @@ const imageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'
 const refusal = code => Object.assign(new Error(code), { code });
 
 /** Native caption and attachment order are separate; no native interleaving is inferred. */
-export function qqSourceAttachments(message, event, { sourceImages = true, sourceFiles = false } = {}) {
+export function qqSourceAttachments(message, event, { sourceImages = true, sourceFiles = false, referenceKey } = {}) {
   if (!Array.isArray(message.attachments) || !message.attachments.length || message.attachments.length > 32)
     throw refusal('invalid-inbound');
   const files = message.attachments.map((native, index) => {
@@ -26,6 +26,7 @@ export function qqSourceAttachments(message, event, { sourceImages = true, sourc
     if (native.size > QQ_EXTERNAL_IMAGE_LIMIT) throw refusal('artifact-too-large');
     const id = createHash('sha256').update(JSON.stringify([
       event.fingerprint, event.conversation.id, event.messageId, index,
+      ...(referenceKey === undefined ? [] : ['quote', referenceKey]),
     ])).digest('hex');
     const name = typeof native.filename === 'string' && native.filename.trim() && native.filename.length <= 512
       && !/[\x00-\x1f\x7f/\\]/.test(native.filename) ? native.filename : native.content_type === 'file' ? 'file' : 'image';

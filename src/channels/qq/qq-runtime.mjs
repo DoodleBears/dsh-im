@@ -351,12 +351,29 @@ export class QqRuntime {
     };
     const onMessage = async (_ctx, message) => {
       if (controller.signal.aborted || this.#bot !== bot) return;
+      const elements = Array.isArray(message?.raw?.msg_elements) ? message.raw.msg_elements : [];
+      const quotedFiles = elements.slice(0, 2).flatMap(element => Array.isArray(element?.attachments)
+        ? element.attachments.slice(0, 33).filter(file => file?.content_type === 'file') : []);
+      const lastInbound = {
+        observedAt: new Date().toISOString(),
+        eventType: ['GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE', 'C2C_MESSAGE_CREATE'].includes(message?.rawEventType)
+          ? message.rawEventType : 'other',
+        messageType: Number.isSafeInteger(message?.msgType) ? message.msgType : null,
+        textPresent: typeof message?.content === 'string' && !!message.content.trim(),
+        directAttachments: Array.isArray(message?.attachments) ? Math.min(message.attachments.length, 33) : 0,
+        quotedElements: Math.min(elements.length, 2), quotedFiles: Math.min(quotedFiles.length, 33),
+        quoteIndexMatches: typeof message?.refMsgIdx === 'string' && message.refMsgIdx.length > 0
+          && elements.length === 1 && elements[0]?.msg_idx === message.refMsgIdx,
+      };
+      this.#status.lastInbound = lastInbound;
       const task = this.#config.consumerMode === 'external-consumer'
         ? this.#externalBridge?.accept(message, controller.signal)
         : this.#bridge?.accept(message);
       if (!task) return;
       return task.catch((error) => {
         if (controller.signal.aborted) return;
+        lastInbound.refusalCode = typeof error?.code === 'string' && /^[a-z-]{1,64}$/.test(error.code)
+          ? error.code : 'message-handling-failed';
         this.#logger.error?.(
           `[dsh-im:qq] bot ${this.#config.botId} message handling failed:`,
           extractConnectionEvidence(error).details,

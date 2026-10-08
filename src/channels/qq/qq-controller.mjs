@@ -445,6 +445,7 @@ export class QqController {
               ?? (state === 'error' ? t('QQ 连接未就绪，插件会自动重试') : t('QQ 连接当前离线')),
           lastCheckedAt: runtimeStatus?.lastCheckedAt ?? null,
           lastConnectedAt: runtimeStatus?.lastConnectedAt ?? null,
+          ...(runtimeStatus?.lastInbound ? { lastInbound: structuredClone(runtimeStatus.lastInbound) } : {}),
         },
         stats: {
           messagesReceived: runtimeStatus?.messagesReceived ?? 0,
