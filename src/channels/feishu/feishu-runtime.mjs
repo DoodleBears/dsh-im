@@ -5,7 +5,7 @@ import { FeishuHarnessBridge } from './bridge.mjs';
 import { cardActionProbeCard } from './feishu-cards.mjs';
 import { VerifiedFeishuChannel, waitForFeishuOperation } from './feishu-channel.mjs';
 import { normalizeFeishuGroupResponseMode } from './group-response-mode.mjs';
-import { normalizeFeishuStepPushMode } from './step-push-mode.mjs';
+import { normalizeFeishuStepPushMode, normalizeFeishuStepCardPanels } from './step-push-mode.mjs';
 import { createVoice } from './voice.mjs';
 import {
   syncSlashCommands,
@@ -119,6 +119,7 @@ export class FeishuRuntime {
   #mentionTopicReply;
   #stepPush;
   #stepPushMode;
+  #stepCardPanels;
   #voice = null;
   #sessionSyncTargetsFor;
   #ownerOpenIds;
@@ -171,6 +172,7 @@ export class FeishuRuntime {
     mentionTopicReply = true,
     stepPush = false,
     stepPushMode = 'post',
+    stepCardPanels,
     voice = null,
     sessionSyncTargetsFor = null,
     ownerOpenId,
@@ -214,6 +216,7 @@ export class FeishuRuntime {
     this.#mentionTopicReply = mentionTopicReply !== false;
     this.#stepPush = stepPush === true;
     this.#stepPushMode = normalizeFeishuStepPushMode(stepPushMode);
+    this.#stepCardPanels = normalizeFeishuStepCardPanels(stepCardPanels);
     // voice 为 { config, secret } 来源;凭据缺失时 createVoice 返回禁用对象,
     // 桥接层完全跳过语音路径,不影响连接。
     this.#voice = voice == null
@@ -260,6 +263,11 @@ export class FeishuRuntime {
   setStepPushMode(value) {
     this.#stepPushMode = normalizeFeishuStepPushMode(value);
     this.#bridge?.setStepPushMode(this.#stepPushMode);
+  }
+
+  setStepCardPanels(value) {
+    this.#stepCardPanels = normalizeFeishuStepCardPanels(value);
+    this.#bridge?.setStepCardPanels(this.#stepCardPanels);
   }
 
   setVoice(source) {
@@ -371,6 +379,7 @@ export class FeishuRuntime {
         mentionTopicReply: this.#mentionTopicReply,
         stepPush: this.#stepPush,
         stepPushMode: this.#stepPushMode,
+        stepCardPanels: this.#stepCardPanels,
         voice: this.#voice,
         sessionSyncTargetsFor: this.#sessionSyncTargetsFor,
         repair: this.#repair,

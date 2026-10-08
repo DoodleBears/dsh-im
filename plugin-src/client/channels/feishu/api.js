@@ -14,7 +14,7 @@ import { normalizeModelCatalog, normalizeModelSelection, SET_MODEL_ENDPOINT } fr
 import { normalizeLastMessageError } from "../../last-message-error.js";
 import { normalizeAccessPolicy } from "../../../../src/channels/shared/access-policy.mjs";
 import { normalizeContextEnhancementConfig } from "../../../../src/channels/shared/context-enhancement.mjs";
-import { normalizeFeishuStepPushMode } from "../../../../src/channels/feishu/step-push-mode.mjs";
+import { normalizeFeishuStepPushMode, normalizeFeishuStepCardPanels } from "../../../../src/channels/feishu/step-push-mode.mjs";
 import { normalizeFeishuVoiceConfig } from "../../../../src/channels/feishu/voice-config.mjs";
 import { normalizeSlashPanelConfig } from "../../../../src/channels/feishu/slash-command-panel.mjs";
 
@@ -42,6 +42,7 @@ export const FEISHU_ENDPOINTS = Object.freeze({
   setMentionTopicReply: "bot.mention-topic-reply.set",
   setStepPush: "bot.step-push.set",
   setStepPushMode: "bot.step-push-mode.set",
+  setStepCardPanels: "bot.step-card-panels.set",
   setVoice: "bot.voice.set",
   setSlashPanel: "bot.slash-panel.set",
   // Kept for rolling upgrades. The multi-bot UI never calls these endpoints.
@@ -233,6 +234,7 @@ export function normalizeBotConnection(value, fallbackBotId) {
     mentionTopicReply: value.mentionTopicReply !== false,
     stepPush: value.stepPush === true,
     stepPushMode: normalizeFeishuStepPushMode(value.stepPushMode),
+    stepCardPanels: normalizeFeishuStepCardPanels(value.stepCardPanels),
     voice: normalizeFeishuVoiceConfig(value.voice),
     slashPanel: normalizeSlashPanelConfig(value.slashPanel),
     groupMessagePermissionGranted: value.groupMessagePermissionGranted === true,

@@ -781,7 +781,7 @@ export function DeliveryTargetSettingsPage({
     'aria-labelledby': activeTabDomId,
   },
   activeTab.id === 'general'
-    ? h(BotGeneralSettingsPage, { key: account.botId, account, rpcCall: accessRpcCall })
+    ? h(BotGeneralSettingsPage, { key: `${channel}:${account.botId}`, channel, account, rpcCall: accessRpcCall })
     : activeTab.id === 'access'
     ? h(AccessPolicySettingsPage, {
         channel,

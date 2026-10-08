@@ -10324,6 +10324,49 @@ function stepCardClient() {
   };
 }
 
+test('step card panel settings apply on the next live update and the finished card still collapses', async (t) => {
+  const fixture = stateFixture();
+  const { client, interactiveCreates, patches, text } = stepCardClient();
+  const ready = deferred();
+  const finish = deferred();
+  let update;
+  const bridge = new FeishuHarnessBridge({
+    client, channel: stepPushChannel(), state: fixture.state, status: bridgeStatus(),
+    allowedSenderOpenIds: new Set(['ou_user']), stepPush: true, stepPushMode: 'streaming_card',
+    stepPushClock: stepPushClockFixture().stepPushClock,
+    stepCardPanels: { thinkingExpanded: true, toolsExpanded: false },
+    harness: stepPushHarness(async (_sessionId, _text, options) => {
+      update = options.onUpdate;
+      await update({ type: 'assistant-message', step: 0, text: '正在检查' });
+      await update({ type: 'tool', name: 'bash', arguments: '{"command":"echo first"}' });
+      ready.resolve();
+      await finish.promise;
+      return '最终结果';
+    }),
+  });
+  t.after(() => finish.resolve());
+  const latest = () => patches.at(-1)?.content ?? interactiveCreates.at(-1);
+  const panels = () => latest()?.body.elements.filter((element) => element.tag === 'collapsible_panel') ?? [];
+  const accepted = bridge.accept(event('om_panels_live', '验证面板'));
+  await ready.promise;
+  await eventually(() => panels().length === 2);
+  assert.deepEqual(panels().map((panel) => panel.expanded), [true, false]);
+  const count = interactiveCreates.length + patches.length;
+  bridge.setStepCardPanels({ thinkingExpanded: false, toolsExpanded: true });
+  assert.equal(interactiveCreates.length + patches.length, count, 'changing preferences sends no extra message');
+  await update({ type: 'tool', name: 'bash', arguments: '{"command":"echo second"}' });
+  await eventually(() => patches.length + interactiveCreates.length > count);
+  assert.deepEqual(panels().map((panel) => panel.expanded), [false, true]);
+  finish.resolve();
+  await accepted;
+  await bridge.waitForIdle();
+  assert.equal(interactiveCreates.length, 1);
+  assert.equal(panels()[0].expanded, false);
+  assert.deepEqual(panels()[0].elements.map((panel) => panel.expanded), [false, false]);
+  assert.match(JSON.stringify(latest()), /最终结果/);
+  assert.deepEqual(text, []);
+});
+
 test('step push streaming_card mode: one process card patched in place, answer sealed inside', async () => {
   const fixture = stateFixture();
   const streamCalls = [];

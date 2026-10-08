@@ -646,6 +646,9 @@ const CSS = String.raw`
 .dim-botGeneralControl select:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #3370ff); outline-offset: 2px; }
 .dim-botGeneralControl select:disabled { opacity: .5; cursor: not-allowed; }
 .dim-botGeneralControl svg { position: absolute; top: 50%; right: 12px; transform: translateY(-50%); pointer-events: none; }
+.dim-botGeneralControl .dim-contextSwitch { display: block; }
+.dim-botGeneralControl .dim-contextSwitch:disabled { opacity: .5; cursor: not-allowed; }
+.dim-botGeneralControl .dim-contextSwitch:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #3370ff); outline-offset: 3px; }
 .dim-botGeneralActions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding-top: 16px; }
 .dim-generalSettingsPage { min-width: 0; display: grid; }
 .dim-generalSettingsHeader { min-width: 0; margin: 0 0 8px; }
