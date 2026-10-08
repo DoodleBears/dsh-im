@@ -313,15 +313,16 @@ export class QqController {
     return this.#withBotTransition(botId, async () => ({
       version: 1, botId, channel: 'qq', account: await this.#deliveryAccount(botId), connected: true,
       capabilities: ['exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked',
-        'reply-receipt-checked', 'reply-fence-checked'],
+        'reply-receipt-checked', 'reply-fence-checked', 'source-file-checked', 'source-image-checked',
+        'reply-file-checked', 'reply-image-fence-checked', 'reply-file-receipt-checked'],
     }));
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceImages = false } = {}) {
     return this.#withBotTransition(botId, async () => {
       const account = await this.#deliveryAccount(botId, signal);
       if (account.fingerprint !== expectedFingerprint) throw qqRefusal('account-changed');
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceImages });
       try {
         const saved = await this.#configStore.save({ ...this.#configStore.get(botId), consumerMode: 'external-consumer' });
         const secret = await this.#resolveSecret(saved.secretRef);
@@ -358,6 +359,19 @@ export class QqController {
     return this.#withBotTransition(botId, async () => {
       const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
       return checked.runtime.replyChecked(route, text, { ...options, signal: checked.signal });
+    });
+  }
+
+  async externalFileChecked(botId, route, value, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      const verifyAccount = async () => {
+        const current = await this.#checkedRuntime(botId, options.expectedFingerprint, checked.signal);
+        if (current.runtime !== checked.runtime) throw qqRefusal('account-changed');
+      };
+      if (options.reply) return checked.runtime.replyImageChecked(route, value, { ...options,
+        signal: checked.signal, verifyAccount });
+      return checked.runtime.readSourceImage(route, value, { ...options, signal: checked.signal, verifyAccount });
     });
   }
 
@@ -536,6 +550,7 @@ export class QqController {
     const runtime = await atConnectionStage('runtime.prepare', () => this.#createRuntime({ botId: config.botId, config, appSecret,
       ...(config.consumerMode === 'external-consumer' ? {
         externalConsumer: (event, signal) => this.#inboundConsumers.accept(config.botId, event, signal),
+        sourceImages: () => this.#inboundConsumers.acceptsImages(config.botId),
       } : {}),
     }));
     if (!runtime || typeof runtime.start !== 'function' || typeof runtime.stop !== 'function') {
