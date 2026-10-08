@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { ApiError, getNextMsgSeq, messagePath } from '@tencent-connect/qqbot-nodejs/protocol';
 import { QqNativeReplyObservations, qqNativeIdentifier as identifier } from './native-reply-observations.mjs';
-import { qqSourceImages, readQqSourceImage, checkedQqImageFile, uploadQqCheckedImage } from './external-images.mjs';
-import { readQqSourceFile, checkedQqGenericFile } from './external-files.mjs';
+import { qqSourceAttachments, readQqSourceAttachment, checkedQqImageFile, uploadQqCheckedMedia } from './external-images.mjs';
+import { checkedQqGenericFile } from './external-files.mjs';
 
 export function qqRefusal(code) { return Object.assign(new Error(code), { code }); }
 
@@ -87,7 +87,7 @@ export class QqExternalConsumer {
       content: typeof message.content === 'string' && !message.content.trim()
         ? message.attachments.every(file => file?.content_type === 'file') ? '[File]' : '[Image]' : message.content } : message,
     { botId: this.#botId, account: this.#account });
-    const media = base && mediaEnabled ? qqSourceImages(message, base,
+    const media = base && mediaEnabled ? qqSourceAttachments(message, base,
       { sourceImages: this.#sourceImages() === true, sourceFiles: this.#sourceFiles() === true }) : undefined;
     const event = media?.event ?? base;
     if (!event) return;
@@ -118,7 +118,7 @@ export class QqExternalConsumer {
   }
   async readImage(route, attachment, options = {}) {
     const source = this.#source(route, options.signal);
-    return readQqSourceImage(source, attachment, { ...options,
+    return readQqSourceAttachment(source, attachment, { ...options,
       assertCurrent: () => {
         if (this.#source(route, options.signal) !== source || this.#sourceImages() !== true)
           throw qqRefusal('source-unavailable');
@@ -126,13 +126,13 @@ export class QqExternalConsumer {
   }
   async readFile(route, attachment, options = {}) {
     const source = this.#source(route, options.signal);
-    return readQqSourceFile(source, attachment, { ...options,
+    return readQqSourceAttachment(source, attachment, { ...options,
       assertCurrent: () => {
         if (this.#source(route, options.signal) !== source || this.#sourceFiles() !== true)
           throw qqRefusal('source-unavailable');
       } });
   }
-  async replyImage(route, file, { signal, beforeSend, verifyAccount } = {}) {
+  async replyFile(route, file, { signal, beforeSend, verifyAccount } = {}) {
     const qualified = this.qualify(route, signal);
     if (typeof beforeSend !== 'function' || typeof verifyAccount !== 'function') throw qqRefusal('bad-request');
     const image = typeof file?.mediaType === 'string' && file.mediaType.startsWith('image/');
@@ -140,7 +140,7 @@ export class QqExternalConsumer {
     if (beforeSend() !== true) throw qqRefusal('stale-route');
     if (signal?.aborted) throw qqRefusal('cancelled');
     const target = { scope: 'group', targetId: qualified.conversationId, msgId: qualified.messageId };
-    const fileInfo = await uploadQqCheckedImage(this.#bot, target, file, bytes, signal, image ? 1 : 4);
+    const fileInfo = await uploadQqCheckedMedia(this.#bot, target, file, bytes, signal, image ? 1 : 4);
     await verifyAccount();
     this.qualify(qualified, signal);
     let token;

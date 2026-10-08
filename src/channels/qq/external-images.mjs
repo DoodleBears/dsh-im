@@ -7,7 +7,7 @@ const imageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'
 const refusal = code => Object.assign(new Error(code), { code });
 
 /** Native caption and attachment order are separate; no native interleaving is inferred. */
-export function qqSourceImages(message, event, { sourceImages = true, sourceFiles = false } = {}) {
+export function qqSourceAttachments(message, event, { sourceImages = true, sourceFiles = false } = {}) {
   if (!Array.isArray(message.attachments) || !message.attachments.length || message.attachments.length > 32)
     throw refusal('invalid-inbound');
   const files = message.attachments.map((native, index) => {
@@ -40,7 +40,7 @@ export function qqSourceImages(message, event, { sourceImages = true, sourceFile
     ] } };
 }
 
-export async function readQqSourceImage(source, attachment, { signal, assertCurrent, verifyAccount }) {
+export async function readQqSourceAttachment(source, attachment, { signal, assertCurrent, verifyAccount }) {
   assertCurrent();
   const file = source.files?.find(file => file.attachment.id === attachment?.id);
   if (!file || Object.keys(attachment).some(key => !Object.hasOwn(file.attachment, key))
@@ -57,7 +57,7 @@ export async function readQqSourceImage(source, attachment, { signal, assertCurr
   assertCurrent();
   await verifyAccount();
   assertCurrent();
-  if (detectedImageMediaType(bytes) !== attachment.mediaType
+  if ((attachment.mediaType.startsWith('image/') && detectedImageMediaType(bytes) !== attachment.mediaType)
     || (attachment.sizeBytes !== undefined && bytes.byteLength !== attachment.sizeBytes))
     throw refusal('resource-unavailable');
   return (async function* () {
@@ -80,7 +80,7 @@ export function checkedQqImageFile(file) {
 }
 
 /** Upload cancellation prevents the later send; the SDK upload itself has no AbortSignal. */
-export async function uploadQqCheckedImage(bot, target, file, bytes, signal, fileType = 1) {
+export async function uploadQqCheckedMedia(bot, target, file, bytes, signal, fileType = 1) {
   let timer;
   let aborted;
   const interrupted = new Promise((_, reject) => {

@@ -148,9 +148,9 @@ export class QqRuntime {
     return this.#externalBridge.readFile(route, attachment, options);
   }
 
-  replyImageChecked(route, file, options) {
+  replyFileChecked(route, file, options) {
     if (!this.#externalBridge) throw qqRefusal('consumer-unavailable');
-    return this.#externalBridge.replyImage(route, file, options);
+    return this.#externalBridge.replyFile(route, file, options);
   }
 
   async sendConnectionTest(text) {
