@@ -835,7 +835,9 @@ export class SlackRuntime {
     const evidence = normalizeSlackExternalText(payload, { botId: this.#config.botId, account: this.#account, sourceFiles: this.#externalSourceFiles(), ordinaryText: this.#externalOrdinaryText() });
     if (!evidence) return;
     const signal = this.#abortController.signal;
-    await this.#verifyChannel(evidence.conversation.id, signal);
+    const channel = await this.#verifyChannel(evidence.conversation.id, signal);
+    const conversationName = evidence.conversation.kind === 'group' && typeof channel?.name === 'string'
+      && channel.name.trim() ? channel.name.trim().slice(0, 512) : undefined;
     let name;
     try {
       const user = await this.#api.userInfo({ userId: evidence.actor.id, signal });
@@ -853,6 +855,7 @@ export class SlackRuntime {
       } catch { signal.throwIfAborted(); return mention; }
     }));
     const enriched = { ...withFiles, mentions,
+      ...(conversationName ? { conversation: { ...evidence.conversation, name: conversationName } } : {}),
       actor: { ...evidence.actor, ...(typeof name === 'string' && name ? { name: name.slice(0, 512) } : {}) } };
     if (generation !== this.#generation || this.#stopped) throw slackRefusal('cancelled');
     const result = await this.#externalConsumer(enriched, signal);

@@ -72,6 +72,14 @@ test('existing public thread retains native child and parent channel without fab
   await assert.rejects(event(f), { code: 'stale-route' });
 });
 
+test('the conversation carries the server and parent channel names next to the ID', async () => {
+  const f = fixture(true);
+  f.guild.name = ' BH QA '; f.parent.name = 'general';
+  assert.deepEqual((await event(f)).conversation, { kind: 'group', id: ids.channel, name: 'BH QA #general' });
+  delete f.parent.name;
+  assert.deepEqual((await event(f)).conversation, { kind: 'group', id: ids.channel });
+});
+
 test('permission overwrite order and high thread bit use exact integers', () => {
   const f = fixture(); f.guild.roles.push({ id: ids.role, permissions: '0' }); f.member.roles.push(ids.role);
   f.parent.permission_overwrites.push({ type: 0, id: ids.guild, deny: String(1n << 38n), allow: '0' },

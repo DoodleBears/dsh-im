@@ -87,7 +87,9 @@ export async function inspectDiscordSourceChannel(api, channelId, account, signa
     if (forReply && member.communication_disabled_until && Date.parse(member.communication_disabled_until) > Date.now())
       throw discordRefusal('reply-permission-denied');
     signal?.throwIfAborted();
-    return { guildId: guild.id, conversationId: parent.id, channelId: channel.id,
+    const name = [guild.name, parent.name].every(value => typeof value === 'string' && value.trim())
+      ? `${guild.name.trim()} #${parent.name.trim()}`.slice(0, 512) : undefined;
+    return { guildId: guild.id, conversationId: parent.id, channelId: channel.id, ...(name ? { name } : {}),
       ...(isThread ? { threadId: channel.id } : {}) };
   } catch (error) { throw nativeFailure(error, 'source-not-found'); }
 }
@@ -132,7 +134,7 @@ function normalizeDiscordHumanText(message, { botId, account, channel, eventId }
       ...(user.id === account.userId ? { name: account.name } : {}) }));
   return { version: 1, channel: 'discord', botId, fingerprint: account.fingerprint,
     eventId, messageId: message.id, actor: { kind: 'user', id: message.author.id, ...(name ? { name: name.slice(0, 512) } : {}) },
-    conversation: { kind: 'group', id: channel.conversationId }, mentions, mentionedAccount,
+    conversation: { kind: 'group', id: channel.conversationId, ...(channel.name ? { name: channel.name } : {}) }, mentions, mentionedAccount,
     at: new Date(timestamp).toISOString(), text: message.content,
     reply: { messageId: message.id, conversationId: channel.conversationId, actorId: message.author.id,
       ...(channel.threadId ? { threadId: channel.threadId } : {}) },
