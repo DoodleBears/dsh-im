@@ -373,6 +373,8 @@ export class QqRuntime {
           rawDirectAttachments: attachmentShape(message.raw?.attachments),
           elementFields: elements[0] && typeof elements[0] === 'object'
             ? Object.keys(elements[0]).filter(key => /^[a-z_]{1,32}$/.test(key)).sort().slice(0, 16) : [],
+          elementMessageType: Number.isSafeInteger(elements[0]?.message_type) && elements[0].message_type >= 0
+            ? elements[0].message_type : null,
           normalizedElementMatches: Array.isArray(message.msgElements) && message.msgElements.length === 1
             && elements.length === 1 && message.msgElements[0]?.msg_idx === elements[0]?.msg_idx,
           files: quotedFiles.slice(0, 2).map(file => ({
