@@ -57,6 +57,7 @@ const DELIVERY_ERROR_CODES = new Set([
   'private-context-unavailable',
   'private-context-rejected',
   'send-permission-denied',
+  'send-rate-limited',
   'card-provider-rejected',
 ]);
 
@@ -486,11 +487,15 @@ export class DeliveryService {
       if (account.account?.fingerprint !== expectedFingerprint) throw deliveryError('account-changed');
       const receiptConversation = adapter.channel === 'feishu' && target.kind === 'group'
         ? target.route.chatId : adapter.channel === 'slack' && target.kind === 'conversation'
-          ? target.route.channelId : adapter.channel === 'weixin' && target.kind === 'user'
+          ? target.route.channelId : adapter.channel === 'qq' && target.kind === 'group'
+            ? target.route.groupOpenId : adapter.channel === 'weixin' && target.kind === 'user'
             ? target.route.toUserId : undefined;
       if (receipt && (!account.capabilities?.includes('proactive-receipt-checked') || !receiptConversation))
         throw deliveryError('capability-unavailable');
       if (receipt && adapter.channel === 'weixin' &&
+        (!account.capabilities?.includes('proactive-fence-checked') || typeof beforeSend !== 'function'))
+        throw deliveryError('capability-unavailable');
+      if (adapter.channel === 'qq' &&
         (!account.capabilities?.includes('proactive-fence-checked') || typeof beforeSend !== 'function'))
         throw deliveryError('capability-unavailable');
       cancellation(signal);

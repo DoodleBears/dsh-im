@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { ApiError } from '@tencent-connect/qqbot-nodejs/protocol';
+import { QQBot } from '@tencent-connect/qqbot-nodejs';
 
 import { QqConfigStore, deriveQqBotIdentity } from '../../../src/channels/qq/config-store.mjs';
 import { QqController } from '../../../src/channels/qq/qq-controller.mjs';
@@ -71,6 +73,133 @@ function mention(overrides = {}) {
     replyTarget: { scope: 'group', targetId: 'app-scoped-group', msgId: 'native-source-id' },
     ...overrides };
 }
+
+test('public QQ proactive text returns an own-app native group receipt without source reply fields', async t => {
+  const fx = await fixture(t);
+  const fingerprint = (await fx.controller.describeDeliveryAccount(fx.botId)).account.fingerprint;
+  await fx.controller.consumeInbound(fx.botId, { expectedFingerprint: fingerprint,
+    onEvent: async () => ({ accepted: true }),
+  });
+  const target = { targetId: 'qa-group', kind: 'group', route: { groupOpenId: 'app-scoped-group' } };
+  const service = createDeliveryService();
+  service.registerAdapter(createDeliveryAdapter({ channel: 'qq', coreController: fx.controller,
+    workspaces: { has: id => id === fx.botId, listDeliveryTargets: () => [target] },
+    stateFor: async () => ({}),
+  }));
+  const requests = [];
+  fx.bot().apiClient.request = async (token, method, path, body) => {
+    requests.push({ token, method, path, body });
+    return { id: 'native-proactive-id', timestamp: '2026-10-08T23:00:00+08:00' };
+  };
+  const expectedTargetDigest = createHash('sha256').update(JSON.stringify({ kind: 'group', route: target.route })).digest('hex');
+  assert.deepEqual(await service.sendChecked(fx.botId, target.targetId, 'Delayed result', {
+    expectedFingerprint: fingerprint, expectedTargetDigest, receipt: true, beforeSend: () => true,
+  }), { sent: true, receipt: { version: 1, messageId: 'native-proactive-id', conversationId: 'app-scoped-group' } });
+  assert.deepEqual(requests, [{ token: 'test-token', method: 'POST',
+    path: '/v2/groups/app-scoped-group/messages', body: { msg_type: 0, content: 'Delayed result' } }]);
+});
+
+async function proactiveFixture(t) {
+  const fx = await fixture(t);
+  const fingerprint = (await fx.controller.describeDeliveryAccount(fx.botId)).account.fingerprint;
+  const dispose = await fx.controller.consumeInbound(fx.botId, { expectedFingerprint: fingerprint,
+    onEvent: async () => ({ accepted: true }),
+  });
+  const target = { targetId: 'qa-group', kind: 'group', route: { groupOpenId: 'app-scoped-group' } };
+  const service = createDeliveryService();
+  service.registerAdapter(createDeliveryAdapter({ channel: 'qq', coreController: fx.controller,
+    workspaces: { has: id => id === fx.botId, listDeliveryTargets: () => [target] },
+    stateFor: async () => ({}),
+  }));
+  const options = { expectedFingerprint: fingerprint,
+    expectedTargetDigest: createHash('sha256').update(JSON.stringify({ kind: 'group', route: target.route })).digest('hex'),
+    receipt: true, beforeSend: () => true };
+  return { ...fx, options, dispose,
+    send: (overrides = {}) => service.sendChecked(fx.botId, target.targetId, 'Delayed result', { ...options, ...overrides }) };
+}
+
+test('public QQ proactive post rechecks revocation and own-app identity after preparing the token', async t => {
+  for (const scenario of ['blocked', 'cancelled', 'account-changed', 'receiver-disposed']) {
+    const fx = await proactiveFixture(t);
+    const abort = new AbortController();
+    let allowed = true;
+    let dispatched = 0;
+    fx.bot().apiClient.request = async () => { dispatched++; return { id: 'must-not-send' }; };
+    fx.bot().api.getToken = async () => {
+      if (scenario === 'blocked') allowed = false;
+      if (scenario === 'cancelled') abort.abort();
+      if (scenario === 'account-changed') fx.bot().api.get = async () => ({ id: 'different-bot', bot: true });
+      if (scenario === 'receiver-disposed') fx.dispose();
+      return 'prepared-token';
+    };
+    await assert.rejects(() => fx.send({ signal: abort.signal, beforeSend: () => allowed }), {
+      code: { blocked: 'send-permission-denied', cancelled: 'cancelled',
+        'account-changed': 'account-changed', 'receiver-disposed': 'cancelled' }[scenario],
+    });
+    assert.equal(dispatched, 0);
+  }
+});
+
+test('public QQ proactive post preserves native refusals and unknown without resending', async t => {
+  const fx = await proactiveFixture(t);
+  for (const [bizCode, httpStatus, code] of [
+    [40034105, 403, 'send-permission-denied'], [40034101, 403, 'send-permission-denied'],
+    [40054002, 403, 'send-permission-denied'], [40034100, 400, 'send-rate-limited'],
+    [undefined, 429, 'send-rate-limited'], [40054007, 400, 'bad-request'],
+    [50055001, 500, 'send-result-unknown'],
+  ]) {
+    let dispatched = 0;
+    fx.bot().apiClient.request = async () => {
+      dispatched++;
+      throw new ApiError('native rejection', httpStatus, '/v2/groups/test/messages', bizCode);
+    };
+    await assert.rejects(() => fx.send(), { code });
+    assert.equal(dispatched, 1);
+  }
+  for (const outcome of ['lost-response', 'missing-id', 'cancel-after-dispatch']) {
+    const abort = new AbortController();
+    let dispatched = 0;
+    fx.bot().apiClient.request = async () => {
+      dispatched++;
+      if (outcome === 'lost-response') throw new Error('connection closed');
+      if (outcome === 'cancel-after-dispatch') abort.abort();
+      return outcome === 'missing-id' ? {} : { id: 'possibly-delivered' };
+    };
+    await assert.rejects(() => fx.send({ signal: abort.signal }), { code: 'send-result-unknown' });
+    assert.equal(dispatched, 1);
+  }
+});
+
+test('public QQ proactive post refuses absent fences and changed targets before any effect', async t => {
+  const fx = await proactiveFixture(t);
+  let tokenRequests = 0;
+  fx.bot().api.getToken = async () => { tokenRequests++; return 'token'; };
+  await assert.rejects(() => fx.send({ beforeSend: undefined }), { code: 'capability-unavailable' });
+  await assert.rejects(() => fx.send({ beforeSend: () => false }), { code: 'send-permission-denied' });
+  await assert.rejects(() => fx.send({ expectedTargetDigest: '0'.repeat(64) }), { code: 'target-changed' });
+  await assert.rejects(() => fx.send({ expectedFingerprint: '0'.repeat(64) }), { code: 'account-changed' });
+  assert.equal(tokenRequests, 0);
+});
+
+test('public QQ proactive post uses the actual SDK HTTP carrier without a passive reply token', async t => {
+  const fx = await proactiveFixture(t);
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const path = new URL(String(url)).pathname;
+    const value = path.endsWith('/getAppAccessToken') ? { access_token: 'sdk-test-token', expires_in: 7200 }
+      : path === '/users/@me' ? { id: 'native-bot-id', bot: true }
+        : { id: 'sdk-native-post' };
+    if (path.includes('/messages')) requests.push({ path, body: JSON.parse(options.body) });
+    return new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
+  });
+  const sdk = new QQBot({ appId: '12345678', appSecret: 'fake-secret' });
+  fx.bot().api = sdk.api;
+  fx.bot().apiClient = sdk.apiClient;
+  assert.deepEqual(await fx.send(), { sent: true,
+    receipt: { version: 1, messageId: 'sdk-native-post', conversationId: 'app-scoped-group' } });
+  assert.deepEqual(requests, [{ path: '/v2/groups/app-scoped-group/messages',
+    body: { msg_type: 0, content: 'Delayed result' } }]);
+});
 
 test('runtime observes native reply candidates independently without enabling Echo or ordinary-message admission', async t => {
   const bot = new PlatformBot();

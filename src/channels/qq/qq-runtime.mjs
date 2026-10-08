@@ -10,6 +10,7 @@ import { t } from '../shared/i18n.mjs';
 import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
 import { createQqBridgeStatus, QqHarnessBridge } from './qq-bridge.mjs';
 import { QqExternalConsumer, qqRefusal, verifiedQqAccount } from './external-consumer.mjs';
+import { postQqText } from './external-post.mjs';
 
 function timeoutError() {
   const error = new Error('QQ WebSocket did not become ready in time');
@@ -180,7 +181,35 @@ export class QqRuntime {
     return { sent: true };
   }
 
-  async sendProactiveText(target, text, { signal } = {}) {
+  async sendProactiveText(target, text, { signal, expectedFingerprint, beforeSend, verifyAccount } = {}) {
+    if (expectedFingerprint !== undefined) {
+      const bot = this.#bot;
+      if (!bot || !this.#status.ready || !this.#abortController) throw qqRefusal('bot-not-connected');
+      const sendSignal = signal ? AbortSignal.any([signal, this.#abortController.signal]) : this.#abortController.signal;
+      const started = Date.now();
+      const report = (phase, reason) => {
+        try {
+          this.#logger.info?.('[dsh-im:qq] checked post', { event: 'qq-external-post',
+            initiator: 'external-consumer', phase, durationMs: Math.max(0, Date.now() - started),
+            ...(reason ? { reason } : {}) });
+        } catch {}
+      };
+      report('preparing');
+      try {
+        const result = await postQqText({ bot, target, text, signal: sendSignal, beforeSend, verifyAccount,
+          assertCurrent: () => {
+            if (this.#bot !== bot || !this.#status.ready) throw qqRefusal('bot-not-connected');
+          } });
+        report('accepted', 'native-receipt');
+        return result;
+      } catch (error) {
+        const reason = ['invalid-target', 'bad-request', 'cancelled', 'provider-unavailable',
+          'account-changed', 'consumer-unavailable', 'bot-not-connected', 'send-permission-denied',
+          'send-rate-limited', 'send-result-unknown'].includes(error?.code) ? error.code : 'operation-failed';
+        report(reason === 'send-result-unknown' ? 'unknown' : 'refused', reason);
+        throw error;
+      }
+    }
     const nativeId = target?.kind === 'user'
       ? (typeof target?.route?.userOpenId === 'string' ? target.route.userOpenId.trim() : '')
       : target?.kind === 'group'
