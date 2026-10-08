@@ -8,8 +8,17 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- Slack 的 checked external consumer 接收发给 App 的 Human 私聊（`conversation.kind: 'dm'`），私聊回复不再开 thread；Slack 与 Discord 的 checked 回复新增 `mentionUserIds`，只能 @ 原消息作者或原消息里 @ 过的人，并声明 `reply-mention-checked`；Slack 收件时用 `users.info` 补全被 @ 的人名（[BotHarness #1125](https://github.com/BotHarness/BotHarness/issues/1125)、[#1126](https://github.com/BotHarness/BotHarness/issues/1126)）。
+  Slack checked external consumers accept Human DMs to the App (`conversation.kind: 'dm'`) and answer them without a thread. Slack and Discord checked replies accept `mentionUserIds`, limited to the source author and people the source mentions; matching inline `<@ID>` tags stay in place and missing ones are prefixed, and advertise `reply-mention-checked`. Slack intake names mentioned people through `users.info` ([BotHarness #1125](https://github.com/BotHarness/BotHarness/issues/1125), [#1126](https://github.com/BotHarness/BotHarness/issues/1126)).
+
 - 微信增加可选的独占扫码绑定者文本私聊 consumer，提交接收后才推进同步游标；回复仅使用该账号私有的原消息 continuation，回执明确区分客户端确认编号与服务端消息 ID。此扩展仍未发布。
   WeChat adds an optional exclusive paired-owner text-DM consumer whose sync cursor advances after committed intake; replies use the account-private original-message continuation and distinguish acknowledged client identifiers from server message IDs. This extension remains unreleased.
+
+- Discord 的 checked external consumer 增加有界频道／已有公开 Thread Human 文本历史读取：核对原生 App 正文可见性、来源和权限，使用账号／来源／查询绑定的签名 cursor；普通 @ 收件条件不变，本候选未发布（[BotHarness #937](https://github.com/BotHarness/BotHarness/issues/937)）。
+  Discord checked external consumers add bounded channel/existing-public-thread Human-text history, with native App content visibility, source and permission checks plus signed account/source/query-bound continuations. Mention-only intake stays unchanged; this candidate is unreleased ([BotHarness #937](https://github.com/BotHarness/BotHarness/issues/937)).
+
+- Discord 增加可选 external-only Profile 与受校验的 App/Bot 身份、独占 @ 收件和原频道／已有公开 Thread 回复；缺失 consumer 不回退到独立 Session，发送前复查原消息及权限，不确定结果不自动重发。真实 BotHarness App/E2E 资格仍待验证（BotHarness/BotHarness#855）。
+  Discord adds an optional external-only Profile with checked App/Bot identity, exclusive mention intake and replies in the original channel or existing public thread. Consumer loss never restores standalone Sessions; source and permissions are checked before dispatch and ambiguous results are not automatically retried. Real BotHarness App/E2E qualification remains pending (BotHarness/BotHarness#855).
 
 - Feishu/Lark 增加可选的独占外部文本 consumer 与经原消息校验的回复：保留工作群的提及和话题身份，等待 consumer 提交后确认接收；被接管账号在 consumer 消失或重启时不会回退到独立 Session。此扩展仍未发布。
   Feishu/Lark adds an optional exclusive external text consumer and replies checked against the original message. Work-group mentions and topic identities are retained, acknowledgement waits for the consumer to commit, and a claimed account never falls back to an independent Session after consumer loss or restart. This extension remains unreleased.
@@ -17,6 +26,9 @@ This file records the notable changes in each dsh-im release. Its format follows
   The same-Host public `dshIm` Service adds versioned account descriptions and checked plain-text sends. Feishu/Lark account identity is authenticated against the platform, destinations are checked against a frozen content digest, legacy `send` remains compatible, and unsupported channels return an explicit error.
 
 ### Fixed / 修复
+
+- Feishu/Lark 独占外部文本接收在原消息、发送人和话题路由核验后补充原生发送人名称；可选名称读取最多等待 1.5 秒，权限缺失、名称缺失或查询失败保留 ID 回退和原收件行为，取消或连接替换仍拒绝过期交付。此候选修复未发布，真实 BotHarness 验收单独记录于 BotHarness/BotHarness#1070。
+  Feishu/Lark exclusive external text intake enriches the native sender name after checking the exact message, sender and topic route. Optional reads wait at most 1.5 seconds; unavailable permissions, names or lookups preserve ID fallback and intake, while cancellation or connection replacement still refuses stale delivery. This candidate fix is unreleased; real BotHarness qualification is tracked separately in BotHarness/BotHarness#1070.
 
 - 修复 Host 语言设置在未注入的 Context 中读取时报错，以及新版 DSH 切换界面语言后 IM 回复和命令菜单未同步的问题。兼容新旧 settings API，渠道启动前等待语言初始化，settings 服务撤销时清理监听并回退到镜像语言。感谢 [@resetsix](https://github.com/resetsix)（[#288](https://github.com/xmanrui/dsh-im/pull/288)，修复 [#287](https://github.com/xmanrui/dsh-im/issues/287)）。
   Fixed Host language settings being read from a Context without injection, and IM replies and command menus not following interface-language changes in newer DSH versions. Supports both settings APIs, waits for language initialization before channels start, and cleans up observers and falls back to the mirrored language when the settings service is withdrawn. Thanks to [@resetsix](https://github.com/resetsix) ([#288](https://github.com/xmanrui/dsh-im/pull/288), fixes [#287](https://github.com/xmanrui/dsh-im/issues/287)).

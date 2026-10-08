@@ -5,7 +5,7 @@ import { createSlackHistoryReader } from './history-reader.mjs';
 import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
 import { SlackApi } from './slack-api.mjs';
 import { createSlackBridgeStatus, SlackHarnessBridge } from './slack-bridge.mjs';
-import { normalizeSlackExternalText, verifiedSlackAccount, slackRefusal, slackTimestamp } from './external-consumer.mjs';
+import { normalizeSlackExternalText, slackReplyMentions, verifiedSlackAccount, slackRefusal, slackTimestamp } from './external-consumer.mjs';
 
 const RECONNECT_DELAYS_MS = Object.freeze([1_000, 3_000, 5_000, 10_000, 30_000]);
 const SLACK_MESSAGE_LIMIT = 38_000;
@@ -529,6 +529,7 @@ export class SlackRuntime {
 
   async #verifyChannel(channelId, signal) {
     signal?.throwIfAborted();
+    if (/^D[A-Z0-9]{4,30}$/.test(channelId)) return { id: channelId, is_im: true };
     const channel = await this.#api.conversationInfo({ channelId, signal });
     if (channel?.id !== channelId || channel.is_member !== true || channel.is_archived === true
       || channel.is_private === true || channel.is_im === true || channel.is_mpim === true)
@@ -613,14 +614,17 @@ export class SlackRuntime {
     }
   }
 
-  async replyChecked(route, text, { signal, receipt = false, beforeSend } = {}) {
+  async replyChecked(route, text, { signal, receipt = false, beforeSend, mentionUserIds } = {}) {
     const generation = this.#generation;
-    await this.qualifyReplyChecked(route, { signal });
+    const source = await this.#replySource(route, signal);
+    const mentions = slackReplyMentions(mentionUserIds, route, source);
     if (beforeSend && beforeSend() !== true) throw slackRefusal('stale-route');
     signal?.throwIfAborted();
     if (generation !== this.#generation || this.#stopped || !this.#status.ready)
       throw slackRefusal('capability-unavailable');
-    const sent = await this.#postChecked({ channelId: route.conversationId, threadTs: route.threadId, text, signal });
+    const topLevel = route.conversationId.startsWith('D') && route.messageId === route.threadId;
+    const sent = await this.#postChecked({ channelId: route.conversationId,
+      ...(topLevel ? {} : { threadTs: route.threadId }), ...(mentions.length ? { mentionUserIds: mentions } : {}), text, signal });
     return { sent: true, ...(receipt ? { receipt: { version: 1, messageId: sent.ts, conversationId: sent.channel } } : {}) };
   }
 
@@ -839,7 +843,16 @@ export class SlackRuntime {
     } catch { signal.throwIfAborted(); }
     const withFiles = this.#externalSourceFiles()
       ? await externalAttachments(evidence, () => this.#replySource(evidence.reply, signal)) : evidence;
-    const enriched = { ...withFiles,
+    const mentions = await Promise.all(evidence.mentions.map(async (mention, index) => {
+      if (mention.name || index >= 10) return mention;
+      if (mention.id === evidence.actor.id) return typeof name === 'string' && name ? { ...mention, name: name.slice(0, 512) } : mention;
+      try {
+        const user = await this.#api.userInfo({ userId: mention.id, signal });
+        const label = user?.id === mention.id ? user.profile?.display_name || user.real_name || user.name : undefined;
+        return typeof label === 'string' && label ? { ...mention, name: label.slice(0, 512) } : mention;
+      } catch { signal.throwIfAborted(); return mention; }
+    }));
+    const enriched = { ...withFiles, mentions,
       actor: { ...evidence.actor, ...(typeof name === 'string' && name ? { name: name.slice(0, 512) } : {}) } };
     if (generation !== this.#generation || this.#stopped) throw slackRefusal('cancelled');
     const result = await this.#externalConsumer(enriched, signal);
