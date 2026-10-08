@@ -24,6 +24,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- checked Lark reaction 将 SDK HTTP 异常中的明确权限拒绝归为失败，保持未知传输结果与不重试约束；首个真实窗口确认权限缺失，样式仍未合格。
+  Checked Lark reactions classify explicit permission denials in SDK HTTP exceptions as failures, retaining unknown transport outcomes and no-retry behavior; the first live window found missing permission and did not qualify rendering.
+
 - Feishu/Lark 独占外部文本接收在原消息、发送人和话题路由核验后补充原生发送人名称；可选名称读取最多等待 1.5 秒，权限缺失、名称缺失或查询失败保留 ID 回退和原收件行为，取消或连接替换仍拒绝过期交付。此候选修复未发布，真实 BotHarness 验收单独记录于 BotHarness/BotHarness#1070。
   Feishu/Lark exclusive external text intake enriches the native sender name after checking the exact message, sender and topic route. Optional reads wait at most 1.5 seconds; unavailable permissions, names or lookups preserve ID fallback and intake, while cancellation or connection replacement still refuses stale delivery. This candidate fix is unreleased; real BotHarness qualification is tracked separately in BotHarness/BotHarness#1070.
 

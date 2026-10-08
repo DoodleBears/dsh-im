@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Client, Domain } from '@larksuiteoapi/node-sdk';
 import { reactExternalMessage } from '../../../src/channels/feishu/external-reactions.mjs';
 
 function fixture() {
@@ -49,4 +50,23 @@ test('validates actual write permission, result identity and unknown transport w
   assert.equal(writes, 5);
   fx.client.im.v1.messageReaction.create = async () => { writes++; throw new Error('timeout'); };
   await assert.rejects(fx.react('answered'), /timeout/); assert.equal(writes, 6);
+});
+
+test('classifies an SDK HTTP rejection carrying the platform permission denial without retry', async () => {
+  const fx = fixture(); let writes = 0;
+  const client = new Client({ appId: 'cli_qa', appSecret: 'fixture', domain: Domain.Lark,
+    logger: { error() {}, warn() {}, info() {}, debug() {}, trace() {} },
+    httpInstance: { async post() { return { code: 0, tenant_access_token: 'fixture', expire: 7200 }; },
+      async request(options) {
+      if (options.url.includes('/auth/')) return { code: 0, tenant_access_token: 'fixture', expire: 7200 };
+      if (options.method === 'GET') return { code: 0, data: { items: [fx.source] } };
+      writes++;
+      throw Object.assign(new Error('HTTP 400'), {
+        response: { status: 400, data: { code: 99991672 } },
+      });
+    } },
+  });
+  await assert.rejects(reactExternalMessage(client, { appId: 'cli_qa' }, fx.route, 'received', fx.context),
+    { code: 'reaction-permission-denied' });
+  assert.equal(writes, 1);
 });
