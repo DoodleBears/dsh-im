@@ -245,6 +245,11 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
       return coreController.consumeInbound(botId, options);
     },
+    reactionChecked: (botId, route, reaction, options) => {
+      if (channel !== 'feishu' || typeof coreController.reactionChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.reactionChecked(botId, route, reaction, options);
+    },
     approvalCardChecked: (botId, route, card, options) => {
       if (channel !== 'feishu' || typeof coreController.approvalCardChecked !== 'function')
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });

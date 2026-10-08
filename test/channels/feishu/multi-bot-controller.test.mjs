@@ -1435,6 +1435,33 @@ test('history requires current verified account and live exclusive consumer leas
  assert.equal(calls,1);await fx.controller.close();
 });
 
+test('reaction write requires verified account and live consumer without holding the Bot transition queue', async () => {
+  const existing = bot('bot_reactions');
+  const fx = fixture({ bots: [existing], secrets: { [existing.secretRef]: 'local-secret' },
+    verifyApp: async () => ({ openId: existing.botOpenId }) });
+  await fx.controller.initialize();
+  const info = await fx.controller.describeDeliveryAccount(existing.id);
+  assert.ok(info.capabilities.includes('reaction-write-checked'));
+  const options = { expectedFingerprint: info.account.fingerprint, beforeSend: () => true };
+  await assert.rejects(fx.controller.reactionChecked(existing.id, {}, 'received', options), { code: 'capability-unavailable' });
+  const dispose = await fx.controller.consumeInbound(existing.id, { ...options, onEvent: async () => ({ accepted: true }) });
+  const runtime = fx.runtimes.get(existing.id).at(-1);
+  let entered; let release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  runtime.reactionChecked = async (identity, _route, _kind, context) => {
+    assert.equal(identity.appId, existing.appId); entered(); await gate;
+    context.signal.throwIfAborted(); return { accepted: true };
+  };
+  const pending = fx.controller.reactionChecked(existing.id, {}, 'received', options);
+  const refusal = assert.rejects(pending);
+  await started;
+  await fx.controller.describeDeliveryAccount(existing.id);
+  await assert.rejects(fx.controller.reactionChecked(existing.id, {}, 'answered', {
+    ...options, expectedFingerprint: 'b'.repeat(64) }), { code: 'account-changed' });
+  dispose(); release(); await refusal; await fx.controller.close();
+});
+
 test('releasing the exclusive consumer cancels a pending history read', async () => {
  const existing=bot('bot_history_release');
  const fx=fixture({bots:[existing],secrets:{[existing.secretRef]:'local-secret'},verifyApp:async()=>({openId:existing.botOpenId})});

@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- 可选 `reactionVersion: 1` checked Service 在原消息上写入 `GLANCE`／`DONE`，重查账户、来源和授权，失败不自动重试；真实平台权限与样式待新 Human QA 窗口确认，不改变已发布 pin（[BotHarness #1040](https://github.com/BotHarness/BotHarness/issues/1040), [contract](docs/checked-lark-reactions.md)）。
+  An optional checked reaction Service writes native `GLANCE` / `DONE` on the original message after account, source and authorization checks, without automatic retry; live permission and rendering qualification remain pending a fresh Human QA window ([BotHarness #1040](https://github.com/BotHarness/BotHarness/issues/1040), [contract](docs/checked-lark-reactions.md)).
+
 - Discord 的 checked external consumer 增加有界频道／已有公开 Thread Human 文本历史读取：核对原生 App 正文可见性、来源和权限，使用账号／来源／查询绑定的签名 cursor；普通 @ 收件条件不变，本候选未发布（[BotHarness #937](https://github.com/BotHarness/BotHarness/issues/937)）。
   Discord checked external consumers add bounded channel/existing-public-thread Human-text history, with native App content visibility, source and permission checks plus signed account/source/query-bound continuations. Mention-only intake stays unchanged; this candidate is unreleased ([BotHarness #937](https://github.com/BotHarness/BotHarness/issues/937)).
 
