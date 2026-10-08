@@ -143,6 +143,7 @@ export class QqExternalConsumer {
           msg_seq: getNextMsgSeq(qualified.messageId) });
     } catch (error) { throw nativeReplyFailure(error); }
     if (signal?.aborted || !identifier(response?.id)) throw qqRefusal('reply-result-unknown');
+    this.#observations.sent(qualified.conversationId, response.id, signal);
     return { sent: true, receipt: { version: 1, messageId: response.id, conversationId: qualified.conversationId } };
   }
   async reply(route, text, { signal, receipt = false, beforeSend, mentionUserIds } = {}) {

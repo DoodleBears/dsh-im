@@ -9,6 +9,7 @@ import { QqController } from '../../../src/channels/qq/qq-controller.mjs';
 import { QqRuntime } from '../../../src/channels/qq/qq-runtime.mjs';
 import { createDeliveryService } from '../../../plugin-src/host/delivery-service.mjs';
 import { createDeliveryAdapter } from '../../../plugin-src/host/delivery-adapter.mjs';
+import { createProductionController } from '../../../plugin-src/host/channels/qq/production.mjs';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
 const privateUrl = 'https://multimedia.nt.qq.com.cn/download?private-ticket=secret';
@@ -37,30 +38,48 @@ class PlatformBot extends EventEmitter {
   async uploadMedia(request) { this.uploads.push(request); return { file_info: 'private-upload-ticket' }; }
   async deliver(message) { await Promise.all(this.listeners('message').map(listener => listener({}, message))); }
 }
-async function fixture(t, { sourceImages = true } = {}) {
+async function fixture(t, { sourceImages = true, production = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-im-qq-images-'));
   const store = await new QqConfigStore(join(directory, 'config.json')).load();
   const identity = deriveQqBotIdentity('12345678');
   await store.save({ ...identity, appId: '12345678', ownerUserOpenid: 'owner' });
   let bot;
-  const controller = new QqController({ configStore: store,
-    credentials: { resolve: async () => ({ value: 'test-secret' }), set: async () => {}, unset: async () => {} },
+  const observations = [];
+  const credentials = { resolve: async () => ({ value: 'test-secret' }), set: async () => {}, unset: async () => {} };
+  let controller = new QqController({ configStore: store, credentials,
     qrAuth: { start() {} },
     createRuntime: async args => new QqRuntime({ ...args, state: {}, harness: { ensureRunning: async () => {} }, connectTimeoutMs: 100,
       typingMiddleware: () => () => {},
+      logger: { info: (_label, record) => observations.push(record), error() {}, warn() {} },
       createBot: () => { bot = new PlatformBot(); return bot; } }),
   });
+  let productionAdapter;
+  if (production) {
+    const created = await createProductionController({ credentials, apiProxy: {},
+      logger: () => ({ error() {}, warn() {}, info() {}, debug() {} }) },
+    { dataDir: directory, dshHome: directory, configPath: join(directory, 'config.json') }, {
+      HarnessClient: class { async ensureRunning() {} stopManagedProcess() {} },
+      Runtime: class extends QqRuntime {
+        constructor(args) { super({ ...args, connectTimeoutMs: 100, typingMiddleware: () => () => {},
+          createBot: () => { bot = new PlatformBot(); return bot; } }); }
+      },
+      createConnectionSupervisor: () => ({ ready: Promise.resolve(), start() { return this; }, async close() {} }),
+    });
+    controller = created.controller;
+    productionAdapter = created.deliveryAdapter;
+    t.after(() => created.close());
+  }
   t.after(() => controller.close());
   await controller.initialize();
   const service = createDeliveryService();
-  const unregister = service.registerAdapter(createDeliveryAdapter({ channel: 'qq',
+  const unregister = service.registerAdapter(productionAdapter ?? createDeliveryAdapter({ channel: 'qq',
     workspaces: { has: id => id === identity.botId }, coreController: controller, stateFor: async () => ({}) }));
   t.after(unregister);
   const fingerprint = (await service.describeBot(identity.botId)).account.fingerprint;
   const admitted = [];
   const dispose = await service.consumeInbound(identity.botId, { expectedFingerprint: fingerprint, sourceImages,
     onEvent: async event => { admitted.push(event); return { accepted: true }; } });
-  return { service, controller, bot: () => bot, botId: identity.botId, fingerprint, admitted, dispose, unregister,
+  return { service, controller, bot: () => bot, botId: identity.botId, fingerprint, admitted, dispose, unregister, observations,
     options: { expectedFingerprint: fingerprint, beforeSend: () => true } };
 }
 
@@ -94,6 +113,17 @@ test('public checked QQ image intake retains source association while URL acquis
   assert.equal(downloads.length, 1);
   assert.equal(downloads[0].url, privateUrl);
   assert.equal(downloads[0].options.redirect, 'manual');
+});
+
+test('installed production QQ factory carries image opt-in into real runtime and checked native output', async t => {
+  const fx = await fixture(t, { production: true });
+  await fx.bot().deliver(mention());
+  assert.equal(fx.admitted.length, 1);
+  assert.equal(fx.admitted[0].attachments[0].messageId, 'image-source');
+  const result = await fx.service.externalFileChecked(fx.botId, fx.admitted[0].reply,
+    { id: 'result', name: 'result.png', bytes: png, mediaType: 'image/png' }, { ...fx.options, reply: true });
+  assert.equal(result.receipt.messageId, 'native-image-reply');
+  assert.equal(fx.bot().sent.length, 1);
 });
 
 test('public checked QQ image output uploads without sending then returns one original-group native receipt', async t => {
@@ -203,4 +233,17 @@ test('a lost QQ image response remains unknown after exactly one native POST', a
   { code: 'reply-result-unknown' });
   assert.equal(fx.bot().sent.length, 1);
   assert.equal(fx.bot().uploads.length, 1);
+});
+
+test('an actual native image reply callback correlates its checked receipt without creating another admission', async t => {
+  const fx = await fixture(t);
+  await fx.bot().deliver(mention());
+  await fx.service.externalFileChecked(fx.botId, fx.admitted[0].reply,
+    { id: 'result', name: 'result.png', bytes: png, mediaType: 'image/png' }, { ...fx.options, reply: true });
+  assert.deepEqual(fx.observations, []);
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', messageId: 'native-image-reply',
+    senderIsBot: true, senderId: 'native-bot' }));
+  assert.equal(fx.observations.length, 1);
+  assert.equal(fx.observations[0].receiptMatched, true);
+  assert.equal(fx.admitted.length, 1);
 });

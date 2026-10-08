@@ -113,7 +113,7 @@ export async function createProductionController(ctx, config = {}, internals = {
     credentials: ctx.credentials,
     configStore: observedConfigStore,
     logger,
-    createRuntime: async ({ botId, config: botConfig, appSecret, externalConsumer }) => {
+    createRuntime: async ({ botId, config: botConfig, appSecret, externalConsumer, sourceImages }) => {
       const state = await stateFor(botId);
       await workspaces.ensure(botId, {
         defaultAgentPreset: config.agentPreset,
@@ -126,6 +126,7 @@ export async function createProductionController(ctx, config = {}, internals = {
         config: botConfig,
         appSecret,
         externalConsumer,
+        sourceImages,
         harness: workspaceScope.harness,
         state: workspaceScope.state,
         contextEnhancement: { botId, getSettings: () => workspaces.contextEnhancementFor(botId) },
