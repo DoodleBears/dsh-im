@@ -18,7 +18,7 @@ export function qqQuotedFileMessage(message) {
 }
 
 /** Shared native quote authority; each media owner supplies its own category policy. */
-export function qqQuotedMediaMessage(message, { accepts, label }) {
+export function qqQuotedMediaMessage(message, { accepts, label, requireCaption = true }) {
   if (message?.msgType !== 103) return undefined;
   const raw = message.raw;
   const elements = raw?.msg_elements;
@@ -42,7 +42,7 @@ export function qqQuotedMediaMessage(message, { accepts, label }) {
       || element.message_type < 0))
     || !Array.isArray(element.attachments) || !element.attachments.length
     || !accepts(element.attachments)
-    || typeof message.content !== 'string' || !message.content.trim())
+    || typeof message.content !== 'string' || (requireCaption && !message.content.trim()))
     throw refusal('invalid-inbound', 'quote-elements-invalid');
   return { referenceKey: key, message: { ...message, msgType: 0, msgElements: undefined,
     content: `${message.content}\n[Quoted ${label}]`, attachments: element.attachments } };

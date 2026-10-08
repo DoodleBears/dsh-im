@@ -121,11 +121,11 @@ test('QQ voice ASR requires its own opt-in and preserves explicit unavailable pr
   assert.equal(fx.admitted.length, 1);
 });
 
-test('QQ quoted voice ASR belongs to the current native mention rather than adjacent history', async t => {
+test('QQ quoted voice ASR belongs to the current mention even without a separate text instruction', async t => {
   const fx = await fixture(t, { sourceFiles: true });
   const voice = { content_type: 'voice', url: privateUrl, asr_refer_text: 'forty one times forty three' };
   const elements = [{ msg_idx: 'quoted-voice-index', content: '', message_type: 4, attachments: [voice] }];
-  const native = mention({ content: 'Answer the spoken question', attachments: undefined, msgType: 103,
+  const native = mention({ content: '', attachments: undefined, msgType: 103,
     refMsgIdx: 'quoted-voice-index', msgElements: elements,
     raw: { id: 'file-source', group_openid: 'app-group', author: { member_openid: 'app-member' },
       message_type: 103, msg_elements: elements, message_scene: { ext: ['ref_msg_idx=quoted-voice-index'] } } });
