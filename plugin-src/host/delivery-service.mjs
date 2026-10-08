@@ -59,6 +59,8 @@ const DELIVERY_ERROR_CODES = new Set([
   'private-context-rejected',
   'send-permission-denied',
   'send-rate-limited',
+  'typing-unavailable',
+  'typing-conflict',
   'card-provider-rejected',
 ]);
 
@@ -430,6 +432,29 @@ export class DeliveryService {
       return result;
     }
     catch (error) { const safe = publicOperationError(error); throw deliveryError(safe.code, safe.code); }
+  }
+
+  async beginTypingChecked(botId, route, options = {}) {
+    const id = botIdOf(botId);
+    if (!(options.signal instanceof AbortSignal)) throw deliveryError('bad-request');
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')
+      || typeof options.beforeSend !== 'function') throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (registration.adapter.channel !== 'weixin'
+      || typeof registration.adapter.beginTypingChecked !== 'function')
+      throw deliveryError('capability-unavailable');
+    const signal = AbortSignal.any([options.signal, registration.controller.signal]);
+    const beforeSend = () => {
+      cancellation(signal);
+      this.#assertRegistered(registration);
+      return options.beforeSend() === true;
+    };
+    try {
+      return await registration.adapter.beginTypingChecked(id, structuredClone(route), {
+        ...options, signal, beforeSend,
+      });
+    } catch (error) { throw publicOperationError(error, 'typing-unavailable'); }
   }
 
   async replyChecked(botId, route, text, options = {}) {
