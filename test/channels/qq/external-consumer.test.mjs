@@ -44,7 +44,7 @@ class PlatformBot extends EventEmitter {
   }
 }
 
-async function fixture(t) {
+async function fixture(t, logger) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-im-qq-checked-'));
   const store = await new QqConfigStore(join(directory, 'config.json')).load();
   const identity = deriveQqBotIdentity('12345678');
@@ -57,6 +57,7 @@ async function fixture(t) {
     qrAuth: { start() {} },
     createRuntime: async args => new QqRuntime({
       ...args, state: {}, harness: { ensureRunning: async () => { standaloneRuns++; } },
+      ...(logger ? { logger } : {}),
       typingMiddleware: () => () => {}, connectTimeoutMs: 100,
       createBot: () => { bot = new PlatformBot(); return bot; },
     }),
@@ -99,8 +100,8 @@ test('public QQ proactive text returns an own-app native group receipt without s
     path: '/v2/groups/app-scoped-group/messages', body: { msg_type: 0, content: 'Delayed result' } }]);
 });
 
-async function proactiveFixture(t) {
-  const fx = await fixture(t);
+async function proactiveFixture(t, logger) {
+  const fx = await fixture(t, logger);
   const fingerprint = (await fx.controller.describeDeliveryAccount(fx.botId)).account.fingerprint;
   const dispose = await fx.controller.consumeInbound(fx.botId, { expectedFingerprint: fingerprint,
     onEvent: async () => ({ accepted: true }),
@@ -168,6 +169,24 @@ test('public QQ proactive post preserves native refusals and unknown without res
     await assert.rejects(() => fx.send({ signal: abort.signal }), { code: 'send-result-unknown' });
     assert.equal(dispatched, 1);
   }
+});
+
+test('public QQ post diagnostics distinguish a native refusal from a local fence without leaking input', async t => {
+  const records = [];
+  const fx = await proactiveFixture(t, { info: (_label, record) => records.push(record) });
+  fx.bot().apiClient.request = async () => {
+    throw new ApiError('private token and URL must not be logged', 403, '/v2/groups/private-group/messages', 40034105);
+  };
+  await assert.rejects(() => fx.send(), { code: 'send-permission-denied' });
+  assert.deepEqual(records.at(-1), { event: 'qq-external-post', initiator: 'external-consumer',
+    phase: 'refused', durationMs: records.at(-1).durationMs, reason: 'send-permission-denied',
+    stage: 'native-post', httpStatus: 403, providerCode: 40034105 });
+  records.length = 0;
+  await assert.rejects(() => fx.send({ beforeSend: () => false }), { code: 'send-permission-denied' });
+  assert.equal(records.at(-1)?.stage, undefined);
+  assert.equal(records.at(-1)?.httpStatus, undefined);
+  assert.equal(records.at(-1)?.providerCode, undefined);
+  assert.equal(JSON.stringify(records).includes('private'), false);
 });
 
 test('public QQ proactive post refuses absent fences and changed targets before any effect', async t => {

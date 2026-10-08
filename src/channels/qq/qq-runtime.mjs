@@ -188,11 +188,17 @@ export class QqRuntime {
       if (!bot || !this.#status.ready || !this.#abortController) throw qqRefusal('bot-not-connected');
       const sendSignal = signal ? AbortSignal.any([signal, this.#abortController.signal]) : this.#abortController.signal;
       const started = Date.now();
-      const report = (phase, reason) => {
+      const report = (phase, reason, nativePost) => {
         try {
           this.#logger.info?.('[dsh-im:qq] checked post', { event: 'qq-external-post',
             initiator: 'external-consumer', phase, durationMs: Math.max(0, Date.now() - started),
-            ...(reason ? { reason } : {}) });
+            ...(reason ? { reason } : {}),
+            ...(nativePost ? { stage: 'native-post',
+              ...(Number.isInteger(nativePost.httpStatus) && nativePost.httpStatus >= 100 && nativePost.httpStatus <= 599
+                ? { httpStatus: nativePost.httpStatus } : {}),
+              ...(Number.isSafeInteger(nativePost.providerCode) && nativePost.providerCode >= 0
+                ? { providerCode: nativePost.providerCode } : {}),
+            } : {}) });
         } catch {}
       };
       report('preparing');
@@ -208,7 +214,7 @@ export class QqRuntime {
         const reason = ['invalid-target', 'bad-request', 'cancelled', 'provider-unavailable',
           'account-changed', 'consumer-unavailable', 'bot-not-connected', 'send-permission-denied',
           'send-rate-limited', 'send-result-unknown'].includes(error?.code) ? error.code : 'operation-failed';
-        report(reason === 'send-result-unknown' ? 'unknown' : 'refused', reason);
+        report(reason === 'send-result-unknown' ? 'unknown' : 'refused', reason, error?.nativePost);
         throw error;
       }
     }

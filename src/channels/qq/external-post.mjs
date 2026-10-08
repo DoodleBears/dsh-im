@@ -3,13 +3,19 @@ import { qqNativeIdentifier } from './native-reply-observations.mjs';
 import { qqRefusal } from './external-consumer.mjs';
 
 function nativePostFailure(error) {
-  if (!(error instanceof ApiError)) return qqRefusal('send-result-unknown');
-  const code = Number(error.bizCode);
-  if (error.httpStatus === 429 || code === 40034100) return qqRefusal('send-rate-limited');
-  if ([40034101, 40034105, 40054002, 40054003, 40054016].includes(code))
-    return qqRefusal('send-permission-denied');
-  if ([22006, 304061, 40034006, 40054007, 40054010].includes(code)) return qqRefusal('bad-request');
-  return qqRefusal('send-result-unknown');
+  let reason = 'send-result-unknown';
+  const nativePost = {};
+  if (error instanceof ApiError) {
+    const code = Number(error.bizCode);
+    if (Number.isInteger(error.httpStatus) && error.httpStatus >= 100 && error.httpStatus <= 599)
+      nativePost.httpStatus = error.httpStatus;
+    if (Number.isSafeInteger(code) && code >= 0) nativePost.providerCode = code;
+    if (error.httpStatus === 429 || code === 40034100) reason = 'send-rate-limited';
+    else if ([40034101, 40034105, 40054002, 40054003, 40054016].includes(code))
+      reason = 'send-permission-denied';
+    else if ([22006, 304061, 40034006, 40054007, 40054010].includes(code)) reason = 'bad-request';
+  }
+  return Object.assign(qqRefusal(reason), { nativePost: Object.freeze(nativePost) });
 }
 
 export async function postQqText({ bot, target, text, signal, beforeSend, verifyAccount, assertCurrent }) {
