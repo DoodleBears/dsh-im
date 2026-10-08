@@ -28,19 +28,21 @@ export class AppSetupService {
 
   register(channel, controller) {
     if (!['feishu', 'weixin'].includes(channel)) return () => {};
+    const previous = this.#channels.get(channel);
+    if (previous) this.#retire(channel, previous);
     const registration = { controller };
     this.#channels.set(channel, registration);
-    return () => {
-      if (this.#channels.get(channel) !== registration) return;
-      this.#channels.delete(channel);
-      for (const attempt of this.#attempts.values()) {
-        if (attempt.registration === registration) {
-          attempt.controller.abort();
-          void this.#stopQr(attempt).catch(() => undefined);
-          this.#record('disposed', channel, attempt.startedAt);
-        }
-      }
-    };
+    return () => this.#retire(channel, registration);
+  }
+
+  #retire(channel, registration) {
+    if (this.#channels.get(channel) === registration) this.#channels.delete(channel);
+    for (const attempt of this.#attempts.values()) {
+      if (attempt.registration !== registration || attempt.controller.signal.aborted) continue;
+      attempt.controller.abort();
+      void this.#stopQr(attempt).catch(() => undefined);
+      this.#record('disposed', channel, attempt.startedAt);
+    }
   }
 
   describe(channel) {

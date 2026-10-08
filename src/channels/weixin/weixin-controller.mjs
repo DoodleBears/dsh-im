@@ -637,6 +637,10 @@ export class WeixinController {
     }
 
     return this.#withBotTransition(identity.botId, async () => {
+      this.#assertAttemptActive(record);
+      if (record.consumerMode === 'external-consumer' && this.#configStore.getByAccountId(accountId)) {
+        throw weixinStageError('account-already-configured');
+      }
       try {
         try {
           await this.#writeCredential(identity.tokenRef, token);
