@@ -1,7 +1,7 @@
 import { QQ_EXTERNAL_IMAGE_LIMIT } from './external-images.mjs';
 import { qqNativeIdentifier } from './native-reply-observations.mjs';
 
-const refusal = code => Object.assign(new Error(code), { code });
+const refusal = (code, reason) => Object.assign(new Error(code), { code, ...(reason ? { reason } : {}) });
 
 export function checkedQqGenericFile(file) {
   if (typeof file?.id !== 'string' || !file.id || file.id.length > 512
@@ -24,9 +24,11 @@ export function qqQuotedFileMessage(message) {
       .map(value => value.slice(value.indexOf('=') + 1).trim()) : [];
   if (message.kind !== 'group' || message.rawEventType !== 'GROUP_AT_MESSAGE_CREATE'
     || raw?.message_type !== 103 || raw.id !== message.messageId || raw.group_openid !== message.groupOpenid
-    || raw.author?.member_openid !== message.senderId || raw.author?.bot === true
-    || !qqNativeIdentifier(key) || message.refMsgIdx !== key || refs.some(value => value !== key)
-    || (message.attachments !== undefined && (!Array.isArray(message.attachments) || message.attachments.length))
+    || raw.author?.member_openid !== message.senderId || raw.author?.bot === true)
+    throw refusal('invalid-inbound', 'quote-envelope-invalid');
+  if (!qqNativeIdentifier(key) || message.refMsgIdx !== key || refs.some(value => value !== key))
+    throw refusal('invalid-inbound', 'quote-reference-invalid');
+  if ((message.attachments !== undefined && (!Array.isArray(message.attachments) || message.attachments.length))
     || (raw.attachments !== undefined && (!Array.isArray(raw.attachments) || raw.attachments.length))
     || !Array.isArray(message.msgElements) || message.msgElements.length !== 1
     || message.msgElements[0]?.msg_idx !== key
@@ -34,7 +36,7 @@ export function qqQuotedFileMessage(message) {
     || !Array.isArray(element.attachments) || !element.attachments.length
     || element.attachments.some(file => file?.content_type !== 'file')
     || typeof message.content !== 'string' || !message.content.trim())
-    throw refusal('invalid-inbound');
+    throw refusal('invalid-inbound', 'quote-elements-invalid');
   return { referenceKey: key, message: { ...message, msgType: 0, msgElements: undefined,
     content: `${message.content}\n[Quoted file]`, attachments: element.attachments } };
 }

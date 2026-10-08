@@ -226,6 +226,32 @@ test('quoted QQ files reject missing native proof, conflicting indices and neigh
   assert.equal(JSON.stringify(evidence).includes(privateUrl), false);
 });
 
+test('installed QQ file diagnostics distinguish quote proof and file descriptor refusals without private values', async t => {
+  const fx = await fixture(t, { production: true });
+  const native = mention();
+  const quoted = (element, changes = {}) => mention({ attachments: undefined, msgType: 103,
+    refMsgIdx: 'quoted-file-index', msgElements: [element],
+    raw: { id: native.messageId, group_openid: native.groupOpenid,
+      author: { member_openid: native.senderId }, message_type: 103, msg_elements: [element] }, ...changes });
+  const element = { msg_idx: 'quoted-file-index', attachments: native.attachments };
+  for (const [message, reason] of [
+    [quoted(element, { raw: undefined }), 'quote-envelope-invalid'],
+    [quoted(element, { refMsgIdx: 'another-index' }), 'quote-reference-invalid'],
+    [quoted({ ...element, unknown_field: 'private-value' }), 'quote-elements-invalid'],
+    [quoted({ ...element, attachments: [{ content_type: 'file', filename: 'input.csv' }] }), 'file-url-invalid'],
+    [quoted({ ...element, attachments: [{ ...native.attachments[0], size: '29' }] }), 'file-size-invalid'],
+  ]) {
+    await fx.bot().deliver(message);
+    const evidence = (await fx.controller.status()).bots[0].health.lastInbound;
+    assert.equal(evidence.refusalCode, 'invalid-inbound');
+    assert.equal(evidence.refusalReason, reason);
+    assert.equal(JSON.stringify(evidence).includes('private-value'), false);
+    assert.equal(JSON.stringify(evidence).includes(privateUrl), false);
+  }
+  assert.deepEqual(fx.admitted, []);
+  assert.deepEqual(fx.bot().sent, []);
+});
+
 test('revoked QQ file upload never dispatches and a lost native file response remains unknown', async t => {
   for (const revoke of ['lease', 'registration', 'account', 'core-fence', 'token', 'cancel']) {
     const fx = await fixture(t);
