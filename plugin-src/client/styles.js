@@ -637,9 +637,11 @@ const CSS = String.raw`
 .dim-botGeneralList { min-width: 0; display: grid; }
 .dim-botGeneralRow { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; gap: 24px; padding: 16px 0; border-bottom: 1px solid var(--dsw-alias-border-l2, #dfe1e5); }
 .dim-botGeneralRow:last-child { border-bottom: 0; }
+.dim-botGeneralPanelRow { border-bottom: 0; }
 .dim-botGeneralText { min-width: 0; display: grid; gap: 4px; }
 .dim-botGeneralTitle { color: var(--dsw-alias-label-primary, #1f2329); font-size: 14px; line-height: 22px; font-weight: 400; }
 .dim-botGeneralHelp { margin: 0; color: var(--dsw-alias-label-tertiary, #8f959e); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.dim-botGeneralPanelHelp { padding-bottom: 16px; border-bottom: 1px solid var(--dsw-alias-border-l2, #dfe1e5); }
 .dim-botGeneralControl { position: relative; min-width: 0; max-width: 100%; justify-self: end; color: var(--dsw-alias-label-primary, #1f2329); }
 .dim-botGeneralControl select { display: block; min-width: 104px; max-width: 100%; height: 36px; padding: 0 36px 0 14px; border: 0; border-radius: 10px; color: inherit; background: var(--dsw-alias-bg-module-platform, #f5f6f7); font: inherit; font-size: 14px; line-height: 22px; appearance: none; cursor: pointer; }
 .dim-botGeneralControl select:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, #eef0f3); }

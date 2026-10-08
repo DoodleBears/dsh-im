@@ -97,7 +97,7 @@ export function BotGeneralSettingsPage({ channel, account, rpcCall }) {
       channel === 'feishu' ? [
         ['thinkingExpanded', '展开思考过程'],
         ['toolsExpanded', '展开工具摘要'],
-      ].map(([field, label]) => h('div', { key: field, className: 'dim-botGeneralRow' },
+      ].map(([field, label]) => h('div', { key: field, className: 'dim-botGeneralRow dim-botGeneralPanelRow' },
         h('label', { className: 'dim-botGeneralTitle', htmlFor: `${modeId}-${field}` }, label),
         h('div', { className: 'dim-botGeneralControl' },
           h('input', {
@@ -108,7 +108,7 @@ export function BotGeneralSettingsPage({ channel, account, rpcCall }) {
               ...settings.stepCardPanels, [field]: event.target.checked,
             }),
           })))) : null),
-    channel === 'feishu' ? h('p', { className: 'dim-botGeneralHelp', id: `${modeId}-panels-description` },
+    channel === 'feishu' ? h('p', { className: 'dim-botGeneralHelp dim-botGeneralPanelHelp', id: `${modeId}-panels-description` },
       '仅对实时过程卡生效，任务结束后自动收起。') : null,
     feedback ? h('p', {
       className: 'dim-accessFeedback', 'data-tone': 'error', role: 'alert',
