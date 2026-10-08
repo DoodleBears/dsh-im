@@ -51,6 +51,8 @@ export class QqRuntime {
   #externalConsumer;
   #sourceImages;
   #sourceFiles;
+  #sourceVoiceTranscripts;
+  #sourceVoiceAudio;
   #externalBridge = null;
 
   constructor({
@@ -68,6 +70,7 @@ export class QqRuntime {
     externalConsumer,
     sourceImages = () => false,
     sourceFiles = () => false,
+    sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false,
   }) {
     if (!config || !appSecret || !harness || !state) {
       throw new TypeError('QqRuntime requires config, app secret, Harness, and state');
@@ -86,6 +89,8 @@ export class QqRuntime {
     this.#externalConsumer = externalConsumer;
     this.#sourceImages = sourceImages;
     this.#sourceFiles = sourceFiles;
+    this.#sourceVoiceTranscripts = sourceVoiceTranscripts;
+    this.#sourceVoiceAudio = sourceVoiceAudio;
   }
 
   get status() {
@@ -262,6 +267,8 @@ export class QqRuntime {
           accept: this.#externalConsumer,
           sourceImages: this.#sourceImages,
           sourceFiles: this.#sourceFiles,
+          sourceVoiceTranscripts: this.#sourceVoiceTranscripts,
+          sourceVoiceAudio: this.#sourceVoiceAudio,
           reportNativeObservation: record => this.#logger.info?.('[dsh-im:qq] native reply observation', record),
         });
       } catch (error) {
@@ -368,6 +375,13 @@ export class QqRuntime {
           })),
         };
       }
+      const voices = [...(Array.isArray(message?.attachments) ? message.attachments.slice(0, 2) : []), ...quotedFiles.slice(0, 2)]
+        .filter(file => file?.content_type === 'voice' || /^audio\/[a-z0-9!#$&^_.+-]+$/i.test(file?.content_type ?? ''));
+      if (voices.length) lastInbound.voice = {
+        count: Math.min(voices.length, 2),
+        platformTranscriptPresent: voices.some(file => typeof file.asr_refer_text === 'string' && !!file.asr_refer_text.trim()),
+        platformWavPresent: voices.some(file => typeof file.voice_wav_url === 'string' && !!file.voice_wav_url),
+      };
       this.#status.lastInbound = lastInbound;
       const task = this.#config.consumerMode === 'external-consumer'
         ? this.#externalBridge?.accept(message, controller.signal)

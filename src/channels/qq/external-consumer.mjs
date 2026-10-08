@@ -3,6 +3,7 @@ import { ApiError, getNextMsgSeq, messagePath } from '@tencent-connect/qqbot-nod
 import { QqNativeReplyObservations, qqNativeIdentifier as identifier } from './native-reply-observations.mjs';
 import { qqSourceAttachments, readQqSourceAttachment, checkedQqImageFile, uploadQqCheckedMedia } from './external-images.mjs';
 import { checkedQqGenericFile, qqQuotedFileMessage } from './external-files.mjs';
+import { qqVoiceMessage } from './external-voice.mjs';
 
 export function qqRefusal(code) { return Object.assign(new Error(code), { code }); }
 
@@ -73,26 +74,34 @@ export class QqExternalConsumer {
   #observations;
   #sourceImages;
   #sourceFiles;
+  #sourceVoiceTranscripts;
+  #sourceVoiceAudio;
   #sources = new Map();
-  constructor({ bot, account, botId, accept, sourceImages = () => false, sourceFiles = () => false, reportNativeObservation = () => {} }) {
+  constructor({ bot, account, botId, accept, sourceImages = () => false, sourceFiles = () => false, sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false, reportNativeObservation = () => {} }) {
     this.#bot = bot; this.#account = account; this.#botId = botId; this.#accept = accept;
     this.#observations = new QqNativeReplyObservations({ account, report: reportNativeObservation });
     this.#sourceImages = sourceImages;
     this.#sourceFiles = sourceFiles;
+    this.#sourceVoiceTranscripts = sourceVoiceTranscripts;
+    this.#sourceVoiceAudio = sourceVoiceAudio;
   }
   async accept(message, signal) {
     this.#observations.receive(message, signal);
-    const quoted = this.#sourceFiles() === true ? qqQuotedFileMessage(message) : undefined;
+    const voice = this.#sourceVoiceTranscripts() === true ? qqVoiceMessage(message) : undefined;
+    const quoted = !voice && this.#sourceFiles() === true ? qqQuotedFileMessage(message) : undefined;
     message = quoted?.message ?? message;
+    message = voice?.message ?? message;
     const mediaEnabled = (this.#sourceImages() === true || this.#sourceFiles() === true) && message?.attachments?.length;
     const base = normalizeQqExternalText(mediaEnabled ? { ...message, attachments: undefined,
       content: typeof message.content === 'string' && !message.content.trim()
         ? message.attachments.every(file => file?.content_type === 'file') ? '[File]' : '[Image]' : message.content } : message,
     { botId: this.#botId, account: this.#account });
-    const media = base && mediaEnabled ? qqSourceAttachments(message, base,
+    const media = base && voice && this.#sourceVoiceAudio() === true
+      ? qqSourceAttachments(voice.nativeMessage, base, { sourceImages: false, sourceVoiceAudio: true, referenceKey: voice.referenceKey })
+      : base && mediaEnabled ? qqSourceAttachments(message, base,
       { sourceImages: this.#sourceImages() === true, sourceFiles: this.#sourceFiles() === true,
         referenceKey: quoted?.referenceKey }) : undefined;
-    const event = media?.event ?? base;
+    const event = base && voice ? { ...(media?.event ?? base), voice: voice.voice } : media?.event ?? base;
     if (!event) return;
     signal.throwIfAborted();
     const prior = this.#sources.get(event.messageId);
@@ -131,7 +140,7 @@ export class QqExternalConsumer {
     const source = this.#source(route, options.signal);
     return readQqSourceAttachment(source, attachment, { ...options,
       assertCurrent: () => {
-        if (this.#source(route, options.signal) !== source || this.#sourceFiles() !== true)
+        if (this.#source(route, options.signal) !== source || (source.event.voice ? this.#sourceVoiceAudio() !== true : this.#sourceFiles() !== true))
           throw qqRefusal('source-unavailable');
       } });
   }

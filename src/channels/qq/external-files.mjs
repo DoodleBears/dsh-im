@@ -14,6 +14,11 @@ export function checkedQqGenericFile(file) {
   return Buffer.from(file.bytes);
 }
 export function qqQuotedFileMessage(message) {
+  return qqQuotedMediaMessage(message, { accepts: files => files.every(file => file?.content_type === 'file'), label: 'file' });
+}
+
+/** Shared native quote authority; each media owner supplies its own category policy. */
+export function qqQuotedMediaMessage(message, { accepts, label }) {
   if (message?.msgType !== 103) return undefined;
   const raw = message.raw;
   const elements = raw?.msg_elements;
@@ -36,9 +41,9 @@ export function qqQuotedFileMessage(message) {
     || (element.message_type !== undefined && (!Number.isSafeInteger(element.message_type)
       || element.message_type < 0))
     || !Array.isArray(element.attachments) || !element.attachments.length
-    || element.attachments.some(file => file?.content_type !== 'file')
+    || !accepts(element.attachments)
     || typeof message.content !== 'string' || !message.content.trim())
     throw refusal('invalid-inbound', 'quote-elements-invalid');
   return { referenceKey: key, message: { ...message, msgType: 0, msgElements: undefined,
-    content: `${message.content}\n[Quoted file]`, attachments: element.attachments } };
+    content: `${message.content}\n[Quoted ${label}]`, attachments: element.attachments } };
 }
