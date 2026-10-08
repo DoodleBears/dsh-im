@@ -135,7 +135,7 @@ test('QQ quoted voice ASR belongs to the current native mention rather than adja
   assert.match(fx.admitted[0].text, /forty one times forty three/);
   assert.equal(fx.admitted[0].reply.messageId, native.messageId);
   assert.deepEqual((await fx.controller.status()).bots[0].health.lastInbound.voice, {
-    count: 1, platformTranscriptPresent: true, platformWavPresent: false,
+    count: 1, quotedAttachmentCount: 1, quotedCategories: ['voice'], platformTranscriptPresent: true, platformWavPresent: false,
   });
   for (const change of [
     { raw: undefined }, { refMsgIdx: 'other-voice' },
