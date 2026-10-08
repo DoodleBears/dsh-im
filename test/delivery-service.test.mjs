@@ -426,6 +426,25 @@ test('checked receipt requires capability and exact frozen group correspondence,
   assert.equal(calls, 2);
 });
 
+test('checked Lark sending honors caller revocation at its final controller fence', async () => {
+  const fx = checkedFixture();
+  fx.service.registerAdapter(fx.adapter);
+  const digest = await checkedTarget(fx);
+  let allowed = true;
+  let nativeEffects = 0;
+  fx.adapter.sendText = async (_id, _target, _text, options) => {
+    await Promise.resolve();
+    allowed = false;
+    options.beforeSend();
+    nativeEffects++;
+    return { sent: true };
+  };
+  await assert.rejects(() => fx.service.sendChecked('bot_one', 'self', 'retained result', {
+    expectedFingerprint: fx.fingerprint, expectedTargetDigest: digest, beforeSend: () => allowed,
+  }), { code: 'send-permission-denied' });
+  assert.equal(nativeEffects, 0);
+});
+
 test('consumer replacement aborts the old account lease and stale dispose cannot remove its successor', async () => {
   const fx = checkedFixture();
   let lease;

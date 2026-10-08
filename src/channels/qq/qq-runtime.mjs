@@ -11,6 +11,7 @@ import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
 import { createQqBridgeStatus, QqHarnessBridge } from './qq-bridge.mjs';
 import { isQqMessageAddressed, normalizeQqMentions } from './qq-mention.mjs';
 import { QqExternalConsumer, qqRefusal, verifiedQqAccount } from './external-consumer.mjs';
+import { postQqText } from './external-post.mjs';
 
 function timeoutError() {
   const error = new Error('QQ WebSocket did not become ready in time');
@@ -191,7 +192,45 @@ export class QqRuntime {
     }, options);
   }
 
-  async sendProactiveText(target, text, { signal } = {}) {
+  async sendProactiveText(target, text, { signal, expectedFingerprint, beforeSend, verifyAccount } = {}) {
+    if (expectedFingerprint !== undefined) {
+      const bot = this.#bot;
+      const bridge = this.#externalBridge;
+      if (!bot || !this.#status.ready || !this.#abortController) throw qqRefusal('bot-not-connected');
+      const sendSignal = signal ? AbortSignal.any([signal, this.#abortController.signal]) : this.#abortController.signal;
+      const started = Date.now();
+      const report = (phase, reason, nativePost) => {
+        try {
+          this.#logger.info?.('[dsh-im:qq] checked post', { event: 'qq-external-post',
+            initiator: 'external-consumer', phase, durationMs: Math.max(0, Date.now() - started),
+            ...(reason ? { reason } : {}),
+            ...(nativePost ? { stage: 'native-post',
+              ...(Number.isInteger(nativePost.httpStatus) && nativePost.httpStatus >= 100 && nativePost.httpStatus <= 599
+                ? { httpStatus: nativePost.httpStatus } : {}),
+              ...(Number.isSafeInteger(nativePost.providerCode) && nativePost.providerCode >= 0
+                ? { providerCode: nativePost.providerCode } : {}),
+            } : {}) });
+        } catch {}
+      };
+      report('preparing');
+      let nativePostEvidence;
+      try {
+        const result = await postQqText({ bot, target, text, signal: sendSignal, beforeSend, verifyAccount,
+          onNativeFailure: evidence => { nativePostEvidence = evidence; },
+          assertCurrent: () => {
+            if (this.#bot !== bot || !this.#status.ready) throw qqRefusal('bot-not-connected');
+          } });
+        bridge?.recordNativeReceipt(result.receipt, sendSignal);
+        report('accepted', 'native-receipt');
+        return result;
+      } catch (error) {
+        const reason = ['invalid-target', 'bad-request', 'cancelled', 'provider-unavailable',
+          'account-changed', 'consumer-unavailable', 'bot-not-connected', 'send-permission-denied',
+          'send-rate-limited', 'send-result-unknown'].includes(error?.code) ? error.code : 'operation-failed';
+        report(reason === 'send-result-unknown' ? 'unknown' : 'refused', reason, nativePostEvidence);
+        throw error;
+      }
+    }
     const nativeId = target?.kind === 'user'
       ? (typeof target?.route?.userOpenId === 'string' ? target.route.userOpenId.trim() : '')
       : target?.kind === 'group'

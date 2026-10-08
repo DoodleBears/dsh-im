@@ -291,6 +291,14 @@ export class QqController {
     const config = this.#configStore.get(botId);
     if (!config) throw new Error('Unknown QQ bot');
     return this.#withBotTransition(botId, async () => {
+      if (options.expectedFingerprint !== undefined) {
+        const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+        const verifyAccount = async () => {
+          const current = await this.#checkedRuntime(botId, options.expectedFingerprint, checked.signal);
+          if (current.runtime !== checked.runtime) throw qqRefusal('account-changed');
+        };
+        return checked.runtime.sendProactiveText(target, text, { ...options, signal: checked.signal, verifyAccount });
+      }
       const runtime = this.#runtimes.get(botId);
       if (!runtime?.status?.ready || typeof runtime.sendProactiveText !== 'function') {
         const error = new Error(t('QQ机器人尚未连接'));
@@ -326,7 +334,8 @@ export class QqController {
   async describeDeliveryAccount(botId) {
     return this.#withBotTransition(botId, async () => ({
       version: 1, botId, channel: 'qq', account: await this.#deliveryAccount(botId), connected: true,
-      capabilities: ['exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked',
+      capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'proactive-fence-checked',
+        'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked',
         'reply-receipt-checked', 'reply-fence-checked', 'source-file-checked', 'source-image-checked',
         'reply-file-checked', 'reply-image-fence-checked', 'reply-file-receipt-checked',
         'source-generic-file-checked', 'reply-file-fence-checked', 'source-voice-transcript-checked', 'source-voice-audio-checked'],

@@ -93,6 +93,7 @@ export function createImHostPlugin(internals = {}) {
         ctx.provide('dshIm', Object.freeze({
           contractVersion: 1,
           receiptVersion: 1,
+          postFenceVersion: 1,
           inboundVersion: 1,
           fileVersion: 1,
           replyContextVersion: 1,
