@@ -445,6 +445,7 @@ export class MultiBotDshFeishuController {
 
     return this.#serializeConfig(async () => {
       this.#assertOpen();
+      signal?.throwIfAborted();
       const bot = await this.#verifyApp({
         appId: normalizedAppId,
         appSecret: normalizedSecret,
@@ -465,6 +466,7 @@ export class MultiBotDshFeishuController {
       }
       const secretRef = existing?.secretRef ?? secretRefFor(botId);
       const previousSecret = await atConnectionStage('credential.read', () => this.#credentials.resolve(secretRef), 'credential-store').catch(() => undefined);
+      signal?.throwIfAborted();
       const config = {
         ...existing,
         ...(consumerMode === 'external-consumer' ? { consumerMode } : {}),
@@ -488,6 +490,7 @@ export class MultiBotDshFeishuController {
       await atConnectionStage('credential.save', () => this.#credentials.set(secretRef, normalizedSecret), 'credential-store');
       let saved;
       try {
+        signal?.throwIfAborted();
         saved = await this.#configStore.saveBot(config);
       } catch (error) {
         await this.#restoreCredential(secretRef, previousSecret);

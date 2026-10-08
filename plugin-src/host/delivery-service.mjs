@@ -148,8 +148,8 @@ export class DeliveryService {
   #adapters = new Map();
   #unavailableSessionSyncChannels;
 
-  constructor({ unavailableSessionSyncChannels = [] } = {}) {
-    this.appSetup = new AppSetupService({ describeBot: (id) => this.describeBot(id) });
+  constructor({ unavailableSessionSyncChannels = [], logger } = {}) {
+    this.appSetup = new AppSetupService({ describeBot: (id) => this.describeBot(id), logger });
     if (!Array.isArray(unavailableSessionSyncChannels)
       || unavailableSessionSyncChannels.some((channel) => (
         typeof channel !== 'string' || !CHANNEL_PATTERN.test(channel)

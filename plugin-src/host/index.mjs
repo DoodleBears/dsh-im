@@ -89,7 +89,9 @@ export function createImHostPlugin(internals = {}) {
         .map(([channel]) => channel)
         .filter((channel) => channel !== 'office'
           && config[channel]?.harnessBaseUrl !== undefined);
-      const deliveryService = makeDeliveryService({ unavailableSessionSyncChannels });
+      const setupLogger = typeof ctx?.logger === 'function'
+        ? ctx.logger('dsh-im:app-setup') : (ctx?.logger ?? console);
+      const deliveryService = makeDeliveryService({ unavailableSessionSyncChannels, logger: setupLogger });
       if (typeof ctx?.provide === 'function') {
         ctx.provide('dshIm', Object.freeze({
           contractVersion: 1,

@@ -57,6 +57,7 @@ function fixture({
   callbackProbe,
   verifyApp,
   credentialSet,
+  credentialResolve,
   deleteState,
 } = {}) {
   const configStore = new MemoryConfigStore(bots);
@@ -81,6 +82,7 @@ function fixture({
     })),
     credentials: {
       async resolve(ref) {
+        await credentialResolve?.(ref);
         if (failResolveRefs.has(ref)) throw new Error('credential provider unavailable');
         return values.has(ref) ? { value: values.get(ref), source: 'file' } : undefined;
       },
@@ -182,7 +184,9 @@ test('inline setup creates an external-consumer app before its first connection 
   const { AppSetupService, installAppSetupRpc } = await import('../../../plugin-src/host/app-setup.mjs');
   const { managementFetch } = await import('../../fixtures/management-rpc.mjs');
   const fx = fixture();
-  const setup = new AppSetupService({ describeBot: (id) => fx.controller.describeDeliveryAccount(id) });
+  const diagnostics = [];
+  const setup = new AppSetupService({ describeBot: (id) => fx.controller.describeDeliveryAccount(id),
+    logger: { info: (record) => diagnostics.push(JSON.parse(record)) } });
   setup.register('feishu', fx.controller);
   let rpc;
   installAppSetupRpc({ connection: { fetch: managementFetch((_channel, handler) => { rpc = handler; }) } }, setup);
@@ -201,6 +205,15 @@ test('inline setup creates an external-consumer app before its first connection 
     assert.equal(fx.runtimes.get('bot_generated_1')[0].config.consumerMode, 'external-consumer');
     assert.equal(JSON.stringify(created).includes('private-inline-secret'), false);
     assert.equal(JSON.stringify(created).includes('secretRef'), false);
+    assert.deepEqual(diagnostics.map((record) => record.phase), ['started', 'creating', 'ready']);
+    for (const record of diagnostics) {
+      assert.equal(record.event, 'im-app-setup');
+      assert.equal(record.initiator, 'client');
+      assert.equal(record.channel, 'feishu');
+      assert.ok(Number.isFinite(record.durationMs) && record.durationMs >= 0);
+    }
+    assert.equal(JSON.stringify(diagnostics).includes('private-inline-secret'), false);
+    assert.equal(JSON.stringify(diagnostics).includes('cli_inline'), false);
   } finally { await fx.controller.close(); }
 });
 
@@ -209,14 +222,20 @@ function callbackRepairQrUrl(appId, domain = 'feishu') {
   return `https://${host}/page/launcher?tp=sdk&clientID=${encodeURIComponent(appId)}&addons=encoded`;
 }
 
-test('cancelling inline credential verification prevents an account and resumes as cancelled', async () => {
+for (const phase of ['verification', 'credential-read', 'credential-save']) test(`cancelling inline ${phase} prevents an account and resumes as cancelled`, async () => {
   const { AppSetupService, installAppSetupRpc } = await import('../../../plugin-src/host/app-setup.mjs');
   const { managementFetch } = await import('../../fixtures/management-rpc.mjs');
   let release;
   let verifying = false;
   const gate = new Promise((resolve) => { release = resolve; });
-  const fx = fixture({ verifyApp: async () => { verifying = true; await gate; return { name: 'New app', openId: 'ou_new', activated: 1 }; } });
-  const setup = new AppSetupService({ describeBot: (id) => fx.controller.describeDeliveryAccount(id) });
+  const fx = fixture({
+    verifyApp: async () => { if (phase === 'verification') { verifying = true; await gate; } return { name: 'New app', openId: 'ou_new', activated: 1 }; },
+    credentialResolve: async () => { if (phase === 'credential-read') { verifying = true; await gate; } },
+    credentialSet: async ({ ref, value, values }) => { values.set(ref, value); if (phase === 'credential-save') { verifying = true; await gate; } },
+  });
+  const diagnostics = [];
+  const setup = new AppSetupService({ describeBot: (id) => fx.controller.describeDeliveryAccount(id),
+    logger: { info: (record) => diagnostics.push(JSON.parse(record)) } });
   setup.register('feishu', fx.controller);
   let rpc;
   installAppSetupRpc({ connection: { fetch: managementFetch((_channel, handler) => { rpc = handler; }) } }, setup);
@@ -233,6 +252,9 @@ test('cancelling inline credential verification prevents an account and resumes 
     assert.equal((await rpc('setup.poll', { attemptId })).value.state, 'cancelled');
     assert.equal(fx.configStore.list().length, 0);
     assert.equal(fx.values.size, 0);
+    assert.ok(diagnostics.some((record) => record.phase === 'cancelled'));
+    assert.ok(diagnostics.some((record) => record.phase === 'refused' && record.reason === 'cancelled'));
+    assert.equal(JSON.stringify(diagnostics).includes('cancelled-secret'), false);
   } finally { release(); await fx.controller.close(); }
 });
 

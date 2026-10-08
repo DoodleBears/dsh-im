@@ -10,8 +10,20 @@ export class AppSetupService {
   #channels = new Map();
   #attempts = new Map();
   #describeBot;
+  #logger;
 
-  constructor({ describeBot }) { this.#describeBot = describeBot; }
+  constructor({ describeBot, logger }) {
+    this.#describeBot = describeBot;
+    this.#logger = logger;
+  }
+
+  #record(phase, channel, startedAt, reason) {
+    try {
+      this.#logger?.info?.(JSON.stringify({ event: 'im-app-setup', initiator: 'client',
+        ...(channel === 'feishu' ? { channel } : {}), phase,
+        durationMs: Math.max(0, Date.now() - startedAt), ...(reason ? { reason } : {}) }));
+    } catch {}
+  }
 
   register(channel, controller) {
     if (channel !== 'feishu') return () => {};
@@ -21,7 +33,10 @@ export class AppSetupService {
       if (this.#channels.get(channel) !== registration) return;
       this.#channels.delete(channel);
       for (const attempt of this.#attempts.values()) {
-        if (attempt.registration === registration) attempt.controller.abort();
+        if (attempt.registration === registration) {
+          attempt.controller.abort();
+          this.#record('disposed', channel, attempt.startedAt);
+        }
       }
     };
   }
@@ -33,6 +48,18 @@ export class AppSetupService {
   }
 
   async call(method, payload, signal) {
+    const startedAt = Date.now();
+    try { return await this.#call(method, payload, signal); }
+    catch (error) {
+      const reason = ['bad-request', 'capability-unavailable', 'setup-expired', 'setup-limit', 'setup-account-exists'].includes(error?.code)
+        ? error.code : signal?.aborted || this.#attempts.get(payload?.attemptId)?.controller.signal.aborted
+          ? 'cancelled' : 'setup-failed';
+      this.#record('refused', this.#attempts.get(payload?.attemptId)?.channel, startedAt, reason);
+      throw error;
+    }
+  }
+
+  async #call(method, payload, signal) {
     signal?.throwIfAborted();
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw failure('bad-request');
     if (method === 'setup.start') {
@@ -40,16 +67,27 @@ export class AppSetupService {
       const registration = this.#channels.get(payload.channel);
       if (!registration) throw failure('capability-unavailable');
       for (const [id, attempt] of this.#attempts) {
-        if (attempt.expiresAt <= Date.now()) this.#attempts.delete(id);
+        if (attempt.expiresAt <= Date.now()) {
+          attempt.controller.abort();
+          this.#attempts.delete(id);
+          this.#record('expired', attempt.channel, attempt.startedAt);
+        }
       }
       if (this.#attempts.size >= 32) throw failure('setup-limit');
       const attempt = { attemptId: randomUUID(), channel: payload.channel, registration, controller: new AbortController(),
-        state: 'credentials', expiresAt: Date.now() + TTL };
+        state: 'credentials', startedAt: Date.now(), expiresAt: Date.now() + TTL };
       this.#attempts.set(attempt.attemptId, attempt);
+      this.#record('started', attempt.channel, attempt.startedAt);
       return this.#view(attempt);
     }
     const attempt = this.#attempts.get(payload.attemptId);
-    if (!attempt || attempt.expiresAt <= Date.now()) throw failure('setup-expired');
+    if (!attempt) throw failure('setup-expired');
+    if (attempt.expiresAt <= Date.now()) {
+      attempt.controller.abort();
+      this.#attempts.delete(attempt.attemptId);
+      this.#record('expired', attempt.channel, attempt.startedAt);
+      throw failure('setup-expired');
+    }
     if (this.#channels.get(attempt.channel) !== attempt.registration) throw failure('capability-unavailable');
     if (['setup.poll', 'setup.cancel'].includes(method)
       && Object.keys(payload).some((key) => key !== 'attemptId')) throw failure('bad-request');
@@ -61,6 +99,7 @@ export class AppSetupService {
       attempt.controller.abort();
       await attempt.operation?.catch(() => undefined);
       if (attempt.state !== 'ready') attempt.state = 'cancelled';
+      this.#record(attempt.state === 'ready' ? 'retained' : 'cancelled', attempt.channel, attempt.startedAt);
       return this.#view(attempt);
     }
     if (method !== 'setup.credentials' || attempt.state !== 'credentials'
@@ -69,6 +108,7 @@ export class AppSetupService {
       || typeof payload.appSecret !== 'string' || !payload.appSecret.trim() || payload.appSecret.length > 4096
       || !['lark', 'feishu'].includes(payload.domain)) throw failure('bad-request');
     attempt.state = 'creating';
+    this.#record('creating', attempt.channel, attempt.startedAt);
     attempt.operation = this.#create(attempt, payload);
     try { return await attempt.operation; }
     finally { delete attempt.operation; }
@@ -100,6 +140,7 @@ export class AppSetupService {
         ...(description.account.name ? { name: description.account.name } : {}) },
       connected: description.connected, capabilities: [...description.capabilities] };
     attempt.state = 'ready';
+    this.#record('ready', attempt.channel, attempt.startedAt);
   }
 
   #view(attempt) {
