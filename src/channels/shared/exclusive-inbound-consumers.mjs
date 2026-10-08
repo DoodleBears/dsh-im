@@ -5,14 +5,15 @@ export class ExclusiveInboundConsumers {
   #entries = new Map();
 
   acceptsImages(botId) { return this.#entries.get(botId)?.sourceImages === true; }
+  acceptsFiles(botId) { return this.#entries.get(botId)?.sourceFiles === true; }
 
-  register(botId, { fingerprint, onEvent, signal, sourceImages = false }) {
+  register(botId, { fingerprint, onEvent, signal, sourceImages = false, sourceFiles = false }) {
     if (this.#entries.has(botId)) throw refusal('consumer-conflict');
-    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function' || typeof sourceImages !== 'boolean')
+    if (!/^[a-f0-9]{64}$/.test(fingerprint ?? '') || typeof onEvent !== 'function' || typeof sourceImages !== 'boolean' || typeof sourceFiles !== 'boolean')
       throw refusal('bad-request');
     signal?.throwIfAborted();
     const controller = new AbortController();
-    const entry = { fingerprint, onEvent, sourceImages, controller, dispose: undefined };
+    const entry = { fingerprint, onEvent, sourceImages, sourceFiles, controller, dispose: undefined };
     const dispose = () => {
       if (this.#entries.get(botId) === entry) this.#entries.delete(botId);
       controller.abort(refusal('consumer-unavailable'));

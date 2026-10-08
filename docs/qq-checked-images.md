@@ -30,6 +30,6 @@ Issue #331 adds `source-generic-file-checked` and `reply-file-fence-checked`. On
 
 Generic results validate a safe filename, bounded independent bytes and a non-image/audio/video MIME. Upload uses `fileType:4` and `srvSendMsg:false`, then the same account/source/consumer and caller fence immediately before one original-group POST. The final native response supplies the receipt; unknown is never retried. The current SDK exposes file methods while older official media documentation says type 4 is unavailable. Actual application permission, native payload and download host require real QQ acceptance; automated tests do not qualify them.
 
-#331 增加 `source-generic-file-checked` 与 `reply-file-fence-checked`；消费者仅显式传入 `sourceFiles:true` 时才接收可信群 @ 消息自身的 `content_type:file` 附件。原生分类映射为不透明的 `application/octet-stream`，不声称提供 MIME。引用和相邻消息不能建立关联；混合图文须同时开启两项能力。复用现有私有 HTTPS 域名限制、描述符、当前账号／消费者检查、禁止重定向、超时及 25 MiB 上限；仅图片检查图片签名。
+#331 增加 `source-generic-file-checked` 与 `reply-file-fence-checked`；消费者仅显式传入 `sourceFiles:true` 时才接收可信群 @ 消息自身的 `content_type:file` 附件。原生分类映射为不透明的 `application/octet-stream`，不声称提供 MIME。引用和相邻消息不能建立关联；混合图片与文件须同时开启两项能力。复用现有私有 HTTPS 域名限制、描述符、当前账号／消费者检查、禁止重定向、超时及 25 MiB 上限；仅图片检查图片签名。
 
 普通文件结果验证安全文件名、有界独立字节及非图片／音频／视频 MIME，以 `fileType:4`、`srvSendMsg:false` 上传，再在最终单次原群 POST 前重查账号／来源／消费者及调用者授权。回执取自最终原生消息响应，unknown 不重试。新 SDK 提供文件方法，而旧版官方文档仍写类型 4 未开放；应用权限、实际载荷和下载域名须经真实 QQ 验收，自动回归不证明资格。
