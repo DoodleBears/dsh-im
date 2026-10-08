@@ -305,6 +305,30 @@ function checkedFixture() {
   return {service, adapter, fingerprint};
 }
 
+test('checked reactions fence registration, platform and required consumer callback', async () => {
+  const fx = checkedFixture();
+  await assert.rejects(fx.service.reactionChecked('bot_one', {}, 'received', {}), { code: 'bad-request' });
+  fx.adapter.reactionChecked = async (_id, _route, _reaction, options) => {
+    options.signal.throwIfAborted();
+    if (!options.beforeSend()) throw Object.assign(new Error('stale'), { code: 'stale-route' });
+    return { accepted: true };
+  };
+  const dispose = fx.service.registerAdapter(fx.adapter);
+  const options = { expectedFingerprint: fx.fingerprint, beforeSend: () => true };
+  assert.deepEqual(await fx.service.reactionChecked('bot_one', {}, 'received', options), { accepted: true });
+  await assert.rejects(fx.service.reactionChecked('bot_one', {}, 'answered', { ...options, beforeSend: () => false }), { code: 'stale-route' });
+  let release; let entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const react = fx.adapter.reactionChecked;
+  fx.adapter.reactionChecked = async (...args) => { entered(); await gate; return react(...args); };
+  const pending = fx.service.reactionChecked('bot_one', {}, 'received', options);
+  const refusal = assert.rejects(pending, { code: 'provider-unavailable' });
+  await started; dispose(); release(); await refusal;
+  fx.adapter.channel = 'slack'; fx.service.registerAdapter(fx.adapter);
+  await assert.rejects(fx.service.reactionChecked('bot_one', {}, 'received', options), { code: 'capability-unavailable' });
+});
+
 async function checkedTarget(fx) {
   const target = {targetId: 'self', kind: 'user', route: {openId: 'ou_self'}};
   await fx.service.createTarget('bot_one', target);

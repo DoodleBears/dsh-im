@@ -1,4 +1,5 @@
 import { consumeExternalCardAction } from './external-cards.mjs';
+import { reactExternalMessage } from './external-reactions.mjs';
 import { externalSenderName } from './external-names.mjs';
 import { qualifyExternalReply } from './reply-context.mjs';
 import { readExternalHistory } from './history-reader.mjs';
@@ -749,6 +750,16 @@ export class FeishuRuntime {
     if (typeof messageId !== 'string' || !messageId || messageId.length > 512 || conversationId !== receiveId)
       throw Object.assign(new Error('send-result-unknown'), { code: 'send-result-unknown' });
     return { sent: true, receipt: { version: 1, messageId, conversationId } };
+  }
+
+  async reactionChecked(identity, route, reaction, { signal, beforeSend } = {}) {
+    const client = this.#client;
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      if (!client || this.#client !== client || this.#consumerMode !== 'external-consumer')
+        throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+    };
+    return reactExternalMessage(client, identity, route, reaction, { signal, beforeSend, assertCurrent });
   }
 
   async approvalCardChecked(identity, route, card, { signal, beforeSend, update = false } = {}) {

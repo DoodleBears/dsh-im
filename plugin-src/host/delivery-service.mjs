@@ -52,6 +52,9 @@ const DELIVERY_ERROR_CODES = new Set([
   'resource-unavailable',
   'artifact-too-large',
   'card-provider-rejected',
+  'reaction-permission-denied',
+  'reaction-provider-rejected',
+  'reaction-result-unknown',
 ]);
 
 const SESSION_SYNC_METHODS = Object.freeze([
@@ -369,6 +372,25 @@ export class DeliveryService {
     });
     try { this.#assertRegistered(registration); } catch (error) { dispose(); throw error; }
     return dispose;
+  }
+
+  async reactionChecked(botId, route, reaction, options = {}) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '') ||
+      !['received', 'answered'].includes(reaction) || typeof options.beforeSend !== 'function')
+      throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (registration.adapter.channel !== 'feishu' || typeof registration.adapter.reactionChecked !== 'function')
+      throw deliveryError('capability-unavailable');
+    this.#assertRegistered(registration);
+    try {
+      return await registration.adapter.reactionChecked(id, structuredClone(route), reaction, {
+        ...options, signal: options.signal ? AbortSignal.any([options.signal, registration.controller.signal])
+          : registration.controller.signal,
+        beforeSend: () => { this.#assertRegistered(registration); return options.beforeSend(); },
+      });
+    } catch (error) { throw publicOperationError(error, 'reaction-result-unknown'); }
   }
 
   async approvalCardChecked(botId, route, card, options = {}) {

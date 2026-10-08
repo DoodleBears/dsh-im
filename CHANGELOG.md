@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- 可选 `reactionVersion: 1` checked Service 在原消息上写入 `GLANCE`／`DONE`，重查账户、来源和授权，失败不自动重试；真实平台权限与样式待新 Human QA 窗口确认，不改变已发布 pin（[BotHarness #1040](https://github.com/BotHarness/BotHarness/issues/1040), [contract](docs/checked-lark-reactions.md)）。
+  An optional checked reaction Service writes native `GLANCE` / `DONE` on the original message after account, source and authorization checks, without automatic retry; live permission and rendering qualification remain pending a fresh Human QA window ([BotHarness #1040](https://github.com/BotHarness/BotHarness/issues/1040), [contract](docs/checked-lark-reactions.md)).
+
 - Discord 的 checked external consumer 增加有界频道／已有公开 Thread Human 文本历史读取：核对原生 App 正文可见性、来源和权限，使用账号／来源／查询绑定的签名 cursor；普通 @ 收件条件不变，本候选未发布（[BotHarness #937](https://github.com/BotHarness/BotHarness/issues/937)）。
   Discord checked external consumers add bounded channel/existing-public-thread Human-text history, with native App content visibility, source and permission checks plus signed account/source/query-bound continuations. Mention-only intake stays unchanged; this candidate is unreleased ([BotHarness #937](https://github.com/BotHarness/BotHarness/issues/937)).
 
@@ -20,6 +23,9 @@ This file records the notable changes in each dsh-im release. Its format follows
   The same-Host public `dshIm` Service adds versioned account descriptions and checked plain-text sends. Feishu/Lark account identity is authenticated against the platform, destinations are checked against a frozen content digest, legacy `send` remains compatible, and unsupported channels return an explicit error.
 
 ### Fixed / 修复
+
+- checked Lark reaction 将 SDK HTTP 异常中的明确权限拒绝归为失败，保持未知传输结果与不重试约束；首个真实窗口确认权限缺失，样式仍未合格。
+  Checked Lark reactions classify explicit permission denials in SDK HTTP exceptions as failures, retaining unknown transport outcomes and no-retry behavior; the first live window found missing permission and did not qualify rendering.
 
 - Feishu/Lark 独占外部文本接收在原消息、发送人和话题路由核验后补充原生发送人名称；可选名称读取最多等待 1.5 秒，权限缺失、名称缺失或查询失败保留 ID 回退和原收件行为，取消或连接替换仍拒绝过期交付。此候选修复未发布，真实 BotHarness 验收单独记录于 BotHarness/BotHarness#1070。
   Feishu/Lark exclusive external text intake enriches the native sender name after checking the exact message, sender and topic route. Optional reads wait at most 1.5 seconds; unavailable permissions, names or lookups preserve ID fallback and intake, while cancellation or connection replacement still refuses stale delivery. This candidate fix is unreleased; real BotHarness qualification is tracked separately in BotHarness/BotHarness#1070.

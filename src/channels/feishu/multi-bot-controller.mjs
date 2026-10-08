@@ -594,7 +594,7 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'feishu', account,
         connected: isConnected(connectionStatus(this.#runtimes.get(botId))),
-        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer'] };
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer', 'reaction-write-checked'] };
     });
   }
 
@@ -680,6 +680,27 @@ export class MultiBotDshFeishuController {
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
       return runtime.replyChecked(route, text, { signal, receipt, beforeSend });
     });
+  }
+
+  async reactionChecked(botId, route, reaction, { expectedFingerprint, signal, beforeSend } = {}) {
+    this.#assertOpen();
+    const prepared = await this.#withBotTransition(botId, async () => {
+      this.#assertOpen();
+      signal?.throwIfAborted();
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      if (account.fingerprint !== expectedFingerprint)
+        throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      const runtime = this.#runtimes.get(botId);
+      if (config.consumerMode !== 'external-consumer' || !isConnected(connectionStatus(runtime)) ||
+        typeof runtime.reactionChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      const lease = this.#inboundConsumers.signalFor(botId, expectedFingerprint);
+      return { runtime, appId: config.appId, signal: signal ? AbortSignal.any([signal, lease]) : lease };
+    });
+    // Platform feedback must not occupy the Bot transition queue while writing.
+    return prepared.runtime.reactionChecked({ appId: prepared.appId }, route, reaction,
+      { signal: prepared.signal, beforeSend });
   }
 
   async approvalCardChecked(botId, route, card, { expectedFingerprint, signal, beforeSend, update = false } = {}) {
