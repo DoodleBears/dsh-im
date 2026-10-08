@@ -699,7 +699,7 @@ export class FeishuRuntime {
     });
   }
 
-  async sendProactiveText(target, text, { signal, format = 'plain', receipt = false } = {}) {
+  async sendProactiveText(target, text, { signal, format = 'plain', receipt = false, beforeSend } = {}) {
     if (!this.#status.ready || !this.#client) {
       const error = new Error('飞书机器人尚未连接');
       error.code = 'bot-not-connected';
@@ -730,6 +730,12 @@ export class FeishuRuntime {
     const content = format === 'markdown'
       ? { schema: '2.0', body: { elements: [{ tag: 'markdown', content: text }] } }
       : { text };
+    // Account verification yields in the Controller. Recheck the caller here,
+    // immediately before the native effect, including synchronous revocation.
+    if (beforeSend !== undefined && beforeSend() !== true)
+      throw Object.assign(new Error('send-permission-denied'), { code: 'send-permission-denied' });
+    signal?.throwIfAborted();
+    this.#abortController.signal.throwIfAborted();
     const response = await this.#client.im.v1.message.create({
       params: { receive_id_type: receiveIdType },
       data: {

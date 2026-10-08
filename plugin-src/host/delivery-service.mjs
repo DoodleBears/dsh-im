@@ -502,9 +502,14 @@ export class DeliveryService {
       this.#assertRegistered(registration);
       const deliverySignal = signal ? AbortSignal.any([signal, registration.controller.signal]) : registration.controller.signal;
       const fence = () => {
-        cancellation(deliverySignal);
+        cancellation(signal);
         this.#assertRegistered(registration);
-        return beforeSend === undefined || beforeSend() === true;
+        cancellation(deliverySignal);
+        const allowed = beforeSend === undefined || beforeSend() === true;
+        cancellation(signal);
+        this.#assertRegistered(registration);
+        cancellation(deliverySignal);
+        return allowed;
       };
       if (!fence()) throw deliveryError('send-permission-denied');
       const result = await adapter.sendText(id, target, text, { signal: deliverySignal, expectedFingerprint,
