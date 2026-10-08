@@ -238,7 +238,9 @@ export class QqRuntime {
         const account = verifiedQqAccount(this.#config.appId, await bot.api.get('/users/@me'));
         controller.signal.throwIfAborted();
         this.#externalBridge = new QqExternalConsumer({ bot, account, botId: this.#config.botId,
-          accept: this.#externalConsumer });
+          accept: this.#externalConsumer,
+          reportNativeObservation: record => this.#logger.info?.('[dsh-im:qq] native reply observation', record),
+        });
       } catch (error) {
         await this.stop();
         throw error;
