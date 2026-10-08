@@ -189,6 +189,55 @@ test('public QQ post diagnostics distinguish a native refusal from a local fence
   assert.equal(JSON.stringify(records).includes('private'), false);
 });
 
+test('runtime diagnostics require a native refusal from the current post attempt', async t => {
+  const records = [];
+  const bot = new PlatformBot();
+  let dispatches = 0;
+  bot.apiClient.request = async () => {
+    dispatches++;
+    throw new ApiError('private native error', 403, '/private', 40034105);
+  };
+  const runtime = new QqRuntime({
+    config: { botId: 'qq_test', appId: '12345678', consumerMode: 'external-consumer' },
+    appSecret: 'test-secret', state: {}, harness: {}, connectTimeoutMs: 100,
+    createBot: () => bot, logger: { info: (_label, record) => records.push(record) },
+  });
+  t.after(() => runtime.stop());
+  await runtime.start();
+  const target = { kind: 'group', route: { groupOpenId: 'app-scoped-group' } };
+  const options = { expectedFingerprint: (await runtime.describeDeliveryAccount()).fingerprint,
+    beforeSend: () => true, verifyAccount: async () => {} };
+  let previous;
+  await assert.rejects(() => runtime.sendProactiveText(target, 'private text', options), error => {
+    previous = error;
+    return error.code === 'send-permission-denied';
+  });
+  assert.equal(dispatches, 1);
+  assert.equal(records.at(-1).providerCode, 40034105);
+  const forged = Object.assign(new Error('private local error'), { code: 'send-permission-denied',
+    nativePost: { httpStatus: 403, providerCode: 40034105 } });
+  for (const error of [forged, previous]) {
+    records.length = 0;
+    await assert.rejects(() => runtime.sendProactiveText(target, 'private text', {
+      ...options, beforeSend: () => { throw error; },
+    }), { code: 'send-permission-denied' });
+    assert.equal(dispatches, 1);
+    assert.equal(records.at(-1).phase, 'refused');
+    assert.equal(records.at(-1).stage, undefined);
+    assert.equal(records.at(-1).httpStatus, undefined);
+    assert.equal(records.at(-1).providerCode, undefined);
+    assert.equal(JSON.stringify(records).includes('private'), false);
+  }
+  for (const code of [null, '', false, '  ', '1e2', -1]) {
+    bot.apiClient.request = async () => { throw new ApiError('private', 500, '/private', code); };
+    await assert.rejects(() => runtime.sendProactiveText(target, 'private text', options),
+      { code: 'send-result-unknown' });
+    assert.equal(records.at(-1).stage, 'native-post');
+    assert.equal(records.at(-1).httpStatus, 500);
+    assert.equal(records.at(-1).providerCode, undefined);
+  }
+});
+
 test('public QQ proactive post refuses absent fences and changed targets before any effect', async t => {
   const fx = await proactiveFixture(t);
   let tokenRequests = 0;

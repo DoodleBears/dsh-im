@@ -202,8 +202,10 @@ export class QqRuntime {
         } catch {}
       };
       report('preparing');
+      let nativePostEvidence;
       try {
         const result = await postQqText({ bot, target, text, signal: sendSignal, beforeSend, verifyAccount,
+          onNativeFailure: evidence => { nativePostEvidence = evidence; },
           assertCurrent: () => {
             if (this.#bot !== bot || !this.#status.ready) throw qqRefusal('bot-not-connected');
           } });
@@ -214,7 +216,7 @@ export class QqRuntime {
         const reason = ['invalid-target', 'bad-request', 'cancelled', 'provider-unavailable',
           'account-changed', 'consumer-unavailable', 'bot-not-connected', 'send-permission-denied',
           'send-rate-limited', 'send-result-unknown'].includes(error?.code) ? error.code : 'operation-failed';
-        report(reason === 'send-result-unknown' ? 'unknown' : 'refused', reason, error?.nativePost);
+        report(reason === 'send-result-unknown' ? 'unknown' : 'refused', reason, nativePostEvidence);
         throw error;
       }
     }
