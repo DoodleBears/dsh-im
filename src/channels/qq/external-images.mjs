@@ -4,7 +4,7 @@ import { QQ_IMAGE_HOSTS } from './qq-bridge.mjs';
 
 export const QQ_EXTERNAL_IMAGE_LIMIT = 25 * 1024 * 1024;
 const imageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
-const refusal = code => Object.assign(new Error(code), { code });
+const refusal = (code, reason) => Object.assign(new Error(code), { code, ...(reason ? { reason } : {}) });
 
 /** Native caption and attachment order are separate; no native interleaving is inferred. */
 export function qqSourceAttachments(message, event, { sourceImages = true, sourceFiles = false, referenceKey } = {}) {
@@ -14,15 +14,16 @@ export function qqSourceAttachments(message, event, { sourceImages = true, sourc
     // Tencent's native `file` label is a category, not a MIME declaration.
     const mediaType = native?.content_type === 'file' && sourceFiles
       ? 'application/octet-stream' : sourceImages && imageTypes.has(native?.content_type) ? native.content_type : null;
-    if (!mediaType || typeof native.url !== 'string' || native.url.length > 16384)
-      throw refusal('invalid-inbound');
+    if (!mediaType) throw refusal('invalid-inbound', 'file-category-invalid');
+    if (typeof native.url !== 'string' || native.url.length > 16384)
+      throw refusal('invalid-inbound', 'file-url-invalid');
     let url;
-    try { url = new URL(native.url); } catch { throw refusal('invalid-inbound'); }
+    try { url = new URL(native.url); } catch { throw refusal('invalid-inbound', 'file-url-invalid'); }
     if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')
       || !QQ_IMAGE_HOSTS.some(host => url.hostname === host.slice(1) || url.hostname.endsWith(host)))
       throw refusal('resource-unavailable');
     if (native.size !== undefined && (!Number.isSafeInteger(native.size) || native.size <= 0))
-      throw refusal('invalid-inbound');
+      throw refusal('invalid-inbound', 'file-size-invalid');
     if (native.size > QQ_EXTERNAL_IMAGE_LIMIT) throw refusal('artifact-too-large');
     const id = createHash('sha256').update(JSON.stringify([
       event.fingerprint, event.conversation.id, event.messageId, index,

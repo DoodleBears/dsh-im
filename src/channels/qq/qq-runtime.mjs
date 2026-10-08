@@ -374,6 +374,9 @@ export class QqRuntime {
         if (controller.signal.aborted) return;
         lastInbound.refusalCode = typeof error?.code === 'string' && /^[a-z-]{1,64}$/.test(error.code)
           ? error.code : 'message-handling-failed';
+        if (['quote-envelope-invalid', 'quote-reference-invalid', 'quote-elements-invalid',
+          'file-category-invalid', 'file-url-invalid', 'file-size-invalid'].includes(error?.reason))
+          lastInbound.refusalReason = error.reason;
         this.#logger.error?.(
           `[dsh-im:qq] bot ${this.#config.botId} message handling failed:`,
           extractConnectionEvidence(error).details,
