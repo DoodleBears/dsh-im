@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { BotWorkspaceStore, createWorkspaceAwareController } from '../../../src/channels/shared/bot-workspace-store.mjs';
 
 import { WeixinController } from '../../../src/channels/weixin/weixin-controller.mjs';
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-test('inline WeChat setup pairs through Provider transport and starts only an external consumer', async () => {
+test('inline WeChat setup pairs through the production workspace controller and starts only an external consumer', async () => {
   const { AppSetupService, installAppSetupRpc } = await import('../../../plugin-src/host/app-setup.mjs');
   const { managementFetch } = await import('../../fixtures/management-rpc.mjs');
   const credentials = credentialsFixture();
@@ -16,13 +20,24 @@ test('inline WeChat setup pairs through Provider transport and starts only an ex
   const controller = new WeixinController({
     api: {
       beginLogin: async () => ({ qrcode: 'private-qr-token', qrcodeUrl: 'https://liteapp.weixin.qq.com/q/inline' }),
-      pollLogin: async () => scanned,
+      pollLogin: async ({ signal }) => new Promise(resolve => {
+        scanned.then(resolve);
+        if (signal.aborted) resolve({ status: 'expired' });
+        else signal.addEventListener('abort', () => resolve({ status: 'expired' }), { once: true });
+      }),
     }, credentials: credentials.provider, configStore: configs.store, createRuntime: runtimes.createRuntime,
   });
+  const workspaceHome = await mkdtemp(join(tmpdir(), 'inline-wechat-workspace-'));
+  const workspaceController = createWorkspaceAwareController(controller, {
+    workspaces: new BotWorkspaceStore(join(workspaceHome, 'workspaces.json')),
+    stateFor: () => undefined,
+    agentPresetCatalog: async () => ({ items: [] }),
+    modelCatalog: async () => ({ items: [] }),
+  });
   const logs = [];
-  const setup = new AppSetupService({ describeBot: id => controller.describeDeliveryAccount(id),
+  const setup = new AppSetupService({ describeBot: id => workspaceController.describeDeliveryAccount(id),
     logger: { info: entry => logs.push(entry) } });
-  setup.register('weixin', controller);
+  setup.register('weixin', workspaceController);
   let rpc;
   installAppSetupRpc({ connection: { fetch: managementFetch((_channel, handler) => { rpc = handler; }) } }, setup);
   try {
@@ -46,7 +61,7 @@ test('inline WeChat setup pairs through Provider transport and starts only an ex
     assert.equal(result.value.qrDataUrl, undefined);
     assert.equal((await rpc('setup.cancel', { attemptId: started.value.attemptId })).value.state, 'ready');
     assert.equal(controller.status().totals.connected, 1);
-  } finally { confirm({ status: 'expired' }); await controller.close(); }
+  } finally { confirm({ status: 'expired' }); await controller.close(); await rm(workspaceHome, { recursive: true, force: true }); }
 });
 
 async function waitFor(read, predicate, attempts = 100) {

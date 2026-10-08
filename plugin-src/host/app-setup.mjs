@@ -181,7 +181,7 @@ export class AppSetupService {
   }
 
   async #pollQr(attempt) {
-    const status = attempt.registration.controller.registrationStatus(attempt.qrAttemptId);
+    const status = await attempt.registration.controller.registrationStatus(attempt.qrAttemptId);
     if (!status) throw failure('setup-expired');
     if (status.status === 'connected') {
       if (!status.botId) throw failure('setup-failed');
