@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { normalizeFeishuGroupResponseMode } from './group-response-mode.mjs';
-import { normalizeFeishuStepPushMode } from './step-push-mode.mjs';
+import { normalizeFeishuStepPushMode, normalizeFeishuStepCardPanels } from './step-push-mode.mjs';
 import { normalizeFeishuVoiceConfig } from './voice-config.mjs';
 import { normalizeSlashPanelConfig } from './slash-command-panel.mjs';
 
@@ -52,6 +52,7 @@ function normalizeBot(value, { legacy = false } = {}) {
     mentionTopicReply: value.mentionTopicReply !== false,
     stepPush: value.stepPush === true,
     stepPushMode: normalizeFeishuStepPushMode(value.stepPushMode),
+    stepCardPanels: normalizeFeishuStepCardPanels(value.stepCardPanels),
     voice: normalizeFeishuVoiceConfig(value.voice),
     slashPanel: normalizeSlashPanelConfig(value.slashPanel),
     groupMessagePermissionGranted: value.groupMessagePermissionGranted === true,

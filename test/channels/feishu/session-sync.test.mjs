@@ -79,6 +79,44 @@ async function fixture(t, { state, targets = [target], create, patch, history = 
   };
 }
 
+test('mirror snapshots match the delivered expansion even if preferences change during PATCH', async t => {
+  const original = { thinkingExpanded: true, toolsExpanded: false };
+  const next = { thinkingExpanded: false, toolsExpanded: true };
+  let switched = false;
+  const panels = content => JSON.parse(content).body.elements.filter(element => element.tag === 'collapsible_panel');
+  const f = await fixture(t, {
+    sync: false, bridgeOptions: { stepCardPanels: original },
+    patch: async request => {
+      if (!switched && panels(request.data.content).length === 2) {
+        switched = true;
+        f.bridge.setStepCardPanels(next);
+      }
+    },
+  });
+  f.emit(start()); f.emit(user()); await f.drain();
+  f.emit(answer('earlier explanation')); await f.drain();
+  const tool = { type: 'tool/call', seq: 103, data: { turn: 1, name: 'bash', arguments: '{"command":"echo first"}' } };
+  f.emit(tool); await f.drain();
+  assert.equal(switched, true);
+  let entry = [...f.mirrors.values()][0];
+  assert.equal(entry.lastContent, f.visible.get(entry.cardIds.at(-1)));
+  assert.deepEqual(panels(entry.lastContent).map(panel => panel.expanded), [true, false]);
+  f.emit({ ...tool, seq: 104 }); await f.drain();
+  entry = [...f.mirrors.values()][0];
+  assert.equal(entry.lastContent, f.visible.get(entry.cardIds.at(-1)));
+  assert.deepEqual(panels(entry.lastContent).map(panel => panel.expanded), [false, true]);
+  f.close();
+  const final = { ...answer('recovered answer'), seq: 105 };
+  const ended = { ...end(), seq: 106 };
+  const recovered = await fixture(t, { sync: false, state: f.state,
+    bridgeOptions: { stepCardPanels: original }, history: [start(), user(), tool, final, ended] });
+  await recovered.drain();
+  const last = recovered.patches.at(-1).data.content;
+  assert.equal(panels(last)[0].expanded, false);
+  assert.match(last, /recovered answer/);
+  assert.equal(f.mirrors.size, 0);
+});
+
 for (const input of [user, scheduled]) {
   for (const phase of ['create', 'final patch']) {
     test(`${input === scheduled ? 'scheduled ' : ''}mirror ${phase} failure preserves final text fallback and permits next turn`, async t => {

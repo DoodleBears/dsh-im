@@ -24,6 +24,40 @@ import {
 } from '../../../src/channels/feishu/feishu-cards.mjs';
 import { setImHostLanguage } from '../../../src/channels/shared/i18n.mjs';
 
+test('streaming card expansion keeps legacy defaults and respects all four panel combinations', () => {
+  const blocks = [{ kind: 'notes', lines: ['过程说明'] }, { kind: 'tools', lines: ['工具摘要'] }, { kind: 'message', text: '最终答案' }];
+  const panels = (card) => card.body.elements.filter((element) => element.tag === 'collapsible_panel');
+  assert.deepEqual(panels(JSON.parse(stepStreamCard(blocks))).map((panel) => panel.expanded), [false, true]);
+  for (const thinkingExpanded of [false, true]) {
+    for (const toolsExpanded of [false, true]) {
+      const stepCardPanels = { thinkingExpanded, toolsExpanded };
+      const running = JSON.parse(stepStreamCard(blocks, { stepCardPanels }));
+      assert.deepEqual(panels(running).map((panel) => panel.expanded), [thinkingExpanded, toolsExpanded]);
+      for (const status of ['completed', 'stopped', 'sealed']) {
+        const card = JSON.parse(stepStreamCard(blocks, { status, stepCardPanels }));
+        const [details] = panels(card);
+        assert.equal(details.expanded, false);
+        assert.deepEqual(details.elements.map((panel) => panel.expanded), [false, false]);
+        assert.equal(card.body.elements[0].content, '最终答案');
+        assert.match(JSON.stringify(details), /过程说明/);
+        assert.match(JSON.stringify(details), /工具摘要/);
+      }
+    }
+  }
+  assert.equal(panels(JSON.parse(stepStreamCard([{ kind: 'notes', lines: [] }], { stepCardPanels: { thinkingExpanded: true } }))).length, 0);
+});
+
+test('streaming card splitting measures the selected panel expansion at the byte boundary', () => {
+  const blocks = [{ kind: 'tools', lines: ['first'] }, { kind: 'tools', lines: ['second'] }];
+  const limit = Buffer.byteLength(stepStreamCard(blocks));
+  const stepCardPanels = { thinkingExpanded: false, toolsExpanded: false };
+  assert.equal(splitStepStreamCardBlocks(blocks, limit).length, 1);
+  const chunks = splitStepStreamCardBlocks(blocks, limit, undefined, stepCardPanels);
+  assert.equal(chunks.length, 2, 'false uses more serialized bytes than true');
+  assert.deepEqual(chunks.flat(), blocks);
+  assert.ok(chunks.every((chunk) => Buffer.byteLength(stepStreamCard(chunk, { stepCardPanels })) <= limit));
+});
+
 test('approval cards replace actions with the resolved text and preserve operation details', () => {
   const details = {
     toolName: 'write',

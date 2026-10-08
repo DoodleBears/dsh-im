@@ -21,6 +21,8 @@ import {
   DEFAULT_FEISHU_STEP_PUSH_MODE,
   isFeishuStepPushMode,
   normalizeFeishuStepPushMode,
+  isFeishuStepCardPanels,
+  normalizeFeishuStepCardPanels,
 } from './step-push-mode.mjs';
 import { normalizeFeishuVoiceConfig } from './voice-config.mjs';
 import {
@@ -106,6 +108,7 @@ function configuredBotFingerprint(config) {
     mentionTopicReply: config.mentionTopicReply !== false,
     stepPush: config.stepPush === true,
     stepPushMode: normalizeFeishuStepPushMode(config.stepPushMode),
+    stepCardPanels: normalizeFeishuStepCardPanels(config.stepCardPanels),
     voice: config.voice,
     slashPanel: normalizeSlashPanelConfig(config.slashPanel),
     groupMessagePermissionGranted: config.groupMessagePermissionGranted === true,
@@ -816,6 +819,20 @@ export class MultiBotDshFeishuController {
     }));
   }
 
+  async updateStepCardPanels(botId, stepCardPanels) {
+    this.#assertOpen();
+    if (!isFeishuStepCardPanels(stepCardPanels)) {
+      throw new TypeError('Invalid Feishu step card panels');
+    }
+    return this.#serializeConfig(() => this.#withBotTransition(botId, async () => {
+      const config = this.#requireBot(botId);
+      const saved = await this.#configStore.saveBot({ ...config, stepCardPanels });
+      this.#runtimes.get(botId)?.setStepCardPanels?.(saved.stepCardPanels);
+      this.#touch();
+      return this.status(botId);
+    }));
+  }
+
   async updateVoice(botId, voice) {
     this.#assertOpen();
     if (voice !== null && (typeof voice !== 'object' || Array.isArray(voice))) {
@@ -901,6 +918,7 @@ export class MultiBotDshFeishuController {
         mentionTopicReply: config.mentionTopicReply !== false,
         stepPush: config.stepPush === true,
         stepPushMode: normalizeFeishuStepPushMode(config.stepPushMode),
+        stepCardPanels: normalizeFeishuStepCardPanels(config.stepCardPanels),
         voice: normalizeFeishuVoiceConfig(config.voice),
         slashPanel: normalizeSlashPanelConfig(config.slashPanel),
         groupMessagePermissionGranted: config.groupMessagePermissionGranted === true,

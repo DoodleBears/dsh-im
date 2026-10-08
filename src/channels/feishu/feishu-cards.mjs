@@ -16,6 +16,7 @@
 
 import { posix, win32 } from 'node:path';
 import { t } from '../shared/i18n.mjs';
+import { normalizeFeishuStepCardPanels } from './step-push-mode.mjs';
 
 export const MENU_PAGE_SIZE = 10;
 
@@ -1000,15 +1001,16 @@ export const STEP_STREAM_CARD_MAX_BYTES = 24_000;
  * Build one streaming step card from the accumulated process blocks:
  *   { kind: 'message', text }         — interim note / warning / context line
  *   { kind: 'tools', lines: string[] } — tool-call summary panel
- * `status`: 'running' keeps panels expanded and ends with an italic status
+ * `status`: 'running' uses the configured panel expansion and ends with an italic status
  * line; 'completed' / 'stopped' collapse the panels and swap the status text;
  * 'sealed' is an overflow spill chunk with no status line at all. Finished
  * turns (and sealed spill chunks) merge every tool/thinking panel into one
  * collapsed "process details" panel so the sealed card stays compact.
  */
 
-export function stepStreamCard(rawBlocks, { status = 'running' } = {}) {
+export function stepStreamCard(rawBlocks, { status = 'running', stepCardPanels } = {}) {
   const running = status === 'running';
+  const panels = normalizeFeishuStepCardPanels(stepCardPanels);
   const elements = [];
   const panelElements = [];
   for (const block of Array.isArray(rawBlocks) ? rawBlocks : []) {
@@ -1021,10 +1023,8 @@ export function stepStreamCard(rawBlocks, { status = 'running' } = {}) {
         title: block.kind === 'tools'
           ? t('🛠️ 工具摘要（{count}）', { count })
           : t('💭 思考过程（{count}）', { count }),
-        // Tool summaries stay visible while the turn runs; thinking notes
-        // remain folded at all times. Finished turns keep both panels but
-        // tuck them inside one collapsed "process details" wrapper.
-        expanded: block.kind === 'tools' && running,
+        // Finished turns keep both panels inside the collapsed details wrapper.
+        expanded: running && (block.kind === 'tools' ? panels.toolsExpanded : panels.thinkingExpanded),
       });
       if (running) elements.push(panel);
       else panelElements.push(panel);
@@ -1265,6 +1265,7 @@ export function splitStepStreamCardBlocks(
   blocks,
   limit = STEP_STREAM_CARD_MAX_BYTES,
   maxTables = STEP_STREAM_CARD_MAX_TABLES,
+  stepCardPanels,
 ) {
   // A single block can carry more tables than a card accepts — one short answer
   // with six small tables — and splitting only between blocks cannot help. Each
@@ -1277,7 +1278,7 @@ export function splitStepStreamCardBlocks(
   const chunks = [];
   let current = [];
   for (const block of list) {
-    const tooLarge = Buffer.byteLength(stepStreamCard([...current, block]), 'utf8') > limit;
+    const tooLarge = Buffer.byteLength(stepStreamCard([...current, block], { stepCardPanels }), 'utf8') > limit;
     const tooManyTables = stepStreamCardTableCount([...current, block]) > maxTables;
     if (current.length > 0 && (tooLarge || tooManyTables)) {
       chunks.push(current);
