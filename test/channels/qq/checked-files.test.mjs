@@ -125,7 +125,7 @@ test('installed QQ file contract acquires a private source and sends a distinct 
   assert.deepEqual(fx.bot().sent[0].body.media, { file_info: 'private-upload-ticket' });
 });
 
-test('QQ native files require explicit opt-in and never borrow a neighbouring or quoted message', async t => {
+test('QQ native files require explicit opt-in and never borrow a neighbouring message or an unproven quote', async t => {
   const disabled = await fixture(t, { sourceFiles: false });
   await disabled.bot().deliver(mention());
   assert.deepEqual(disabled.admitted, []);
@@ -138,6 +138,39 @@ test('QQ native files require explicit opt-in and never borrow a neighbouring or
     { attachments: [{ url: 'https://example.test/private', content_type: 'file' }] },
   ]) await fx.bot().deliver(mention(change));
   assert.deepEqual(fx.admitted, []);
+});
+
+test('installed QQ contract acquires an explicitly quoted native file under the current mention authority', async t => {
+  t.mock.method(globalThis, 'fetch', async () => new Response(input));
+  const fx = await fixture(t, { production: true });
+  const native = mention();
+  const elements = [{ msg_idx: 'quoted-file-index', attachments: native.attachments }];
+  await fx.bot().deliver(mention({ attachments: undefined, msgType: 103,
+    refMsgIdx: 'quoted-file-index', msgElements: elements,
+    raw: { id: 'file-source', group_openid: 'app-group', author: { member_openid: 'app-member' },
+      message_type: 103, msg_elements: elements,
+      message_scene: { ext: ['ref_msg_idx=quoted-file-index'] } } }));
+  assert.equal(fx.admitted.length, 1);
+  const event = fx.admitted[0];
+  assert.equal(event.messageId, 'file-source');
+  assert.equal(event.attachments[0].messageId, 'file-source');
+  assert.equal(event.attachments[0].name, 'input.csv');
+  assert.match(event.text, /Quoted file/);
+  assert.equal(JSON.stringify(event).includes('private-ticket'), false);
+  const chunks = [];
+  for await (const bytes of await fx.service.externalFileChecked(fx.botId, event.reply, event.attachments[0], fx.options))
+    chunks.push(bytes);
+  assert.deepEqual(Buffer.concat(chunks), input);
+  const result = await fx.service.externalFileChecked(fx.botId, event.reply,
+    { id: 'quoted-result', name: 'total.csv', mediaType: 'text/csv', bytes: Buffer.from('total_quantity\n5\n') },
+    { ...fx.options, reply: true });
+  assert.equal(result.receipt.conversationId, 'app-group');
+  assert.equal(fx.bot().sent[0].body.msg_id, 'file-source');
+  const evidence = (await fx.controller.status()).bots[0].health.lastInbound;
+  assert.equal(evidence.messageType, 103);
+  assert.equal(evidence.quotedFiles, 1);
+  assert.equal(evidence.quoteIndexMatches, true);
+  assert.equal(JSON.stringify(evidence).includes('private-ticket'), false);
 });
 
 test('private QQ file acquisition enforces exact descriptors, bounded bytes and current authority', async t => {
@@ -159,6 +192,38 @@ test('private QQ file acquisition enforces exact descriptors, bounded bytes and 
     response = make;
     await assert.rejects(() => fx.service.externalFileChecked(fx.botId, event.reply, event.attachments[0], fx.options), { code });
   }
+});
+
+test('quoted QQ files reject missing native proof, conflicting indices and neighbouring messages', async t => {
+  let downloads = 0;
+  t.mock.method(globalThis, 'fetch', async () => { downloads++; return new Response(input); });
+  const native = mention();
+  const elements = [{ msg_idx: 'quoted-file-index', attachments: native.attachments }];
+  const raw = { id: native.messageId, group_openid: native.groupOpenid, author: { member_openid: native.senderId },
+    message_type: 103, msg_elements: elements, message_scene: { ext: ['ref_msg_idx=quoted-file-index'] } };
+  const quoted = { attachments: undefined, msgType: 103, refMsgIdx: 'quoted-file-index', msgElements: elements, raw };
+  const disabled = await fixture(t, { sourceFiles: false });
+  await disabled.bot().deliver(mention(quoted));
+  assert.deepEqual(disabled.admitted, []);
+  const fx = await fixture(t);
+  for (const change of [
+    { raw: undefined }, { rawEventType: 'GROUP_MESSAGE_CREATE' }, { senderIsBot: true },
+    { refMsgIdx: 'another-index' }, { msgElements: [{ ...elements[0], msg_idx: 'another-index' }] },
+    { attachments: native.attachments },
+    { attachments: {} },
+    { raw: { ...raw, id: 'another-mention' } }, { raw: { ...raw, group_openid: 'another-app-group' } },
+    { raw: { ...raw, message_scene: { ext: ['ref_msg_idx=another-index'] } } },
+    { raw: { ...raw, msg_elements: [elements[0], elements[0]] } },
+    { raw: { ...raw, msg_elements: [{ msg_idx: 'quoted-file-index' }] } },
+    { raw: { ...raw, msg_elements: [{ ...elements[0], msg_elements: elements }] } },
+    { raw: { ...raw, msg_elements: [{ ...elements[0], attachments: [{ content_type: 'voice', url: privateUrl }] }] } },
+  ]) await fx.bot().deliver(mention({ ...quoted, ...change }));
+  assert.deepEqual(fx.admitted, []);
+  assert.equal(downloads, 0);
+  assert.deepEqual(fx.bot().sent, []);
+  const evidence = (await fx.controller.status()).bots[0].health.lastInbound;
+  assert.equal(evidence.refusalCode, 'invalid-inbound');
+  assert.equal(JSON.stringify(evidence).includes(privateUrl), false);
 });
 
 test('revoked QQ file upload never dispatches and a lost native file response remains unknown', async t => {
