@@ -365,6 +365,18 @@ export class QqRuntime {
         quoteIndexMatches: typeof message?.refMsgIdx === 'string' && message.refMsgIdx.length > 0
           && elements.length === 1 && elements[0]?.msg_idx === message.refMsgIdx,
       };
+      if (message?.msgType === 103) {
+        const attachmentShape = value => value === undefined ? 'absent' : value === null ? 'null'
+          : Array.isArray(value) ? value.length ? 'nonempty-array' : 'empty-array' : 'other';
+        lastInbound.quoteShape = {
+          directAttachments: attachmentShape(message.attachments),
+          rawDirectAttachments: attachmentShape(message.raw?.attachments),
+          elementFields: elements[0] && typeof elements[0] === 'object'
+            ? Object.keys(elements[0]).filter(key => /^[a-z_]{1,32}$/.test(key)).sort().slice(0, 16) : [],
+          normalizedElementMatches: Array.isArray(message.msgElements) && message.msgElements.length === 1
+            && elements.length === 1 && message.msgElements[0]?.msg_idx === elements[0]?.msg_idx,
+        };
+      }
       this.#status.lastInbound = lastInbound;
       const task = this.#config.consumerMode === 'external-consumer'
         ? this.#externalBridge?.accept(message, controller.signal)
