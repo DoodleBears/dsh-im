@@ -733,11 +733,18 @@ export class FeishuRuntime {
     const activeSignal = signal
       ? AbortSignal.any([signal, this.#abortController.signal])
       : this.#abortController.signal;
-    const response = await waitForFeishuOperation(() => {
+    let finalFenceError;
+    const response = await waitForFeishuOperation((operationSignal) => {
       // The waiter queues the SDK operation; recheck caller authorization here,
       // with no asynchronous gap before the native effect.
-      if (beforeSend !== undefined && beforeSend() !== true)
-        throw Object.assign(new Error('send-permission-denied'), { code: 'send-permission-denied' });
+      try {
+        if (beforeSend !== undefined && beforeSend() !== true)
+          throw Object.assign(new Error('send-permission-denied'), { code: 'send-permission-denied' });
+        operationSignal.throwIfAborted();
+      } catch (error) {
+        finalFenceError = error;
+        throw error;
+      }
       return this.#client.im.v1.message.create({
         params: { receive_id_type: receiveIdType },
         data: {
@@ -750,6 +757,10 @@ export class FeishuRuntime {
       signal: activeSignal,
       timeoutMs: this.#requestTimeoutMs,
       stage: `proactive text send (${this.#requestTimeoutMs}ms)`,
+    }).catch(error => {
+      // A fence callback can synchronously abort the waiter before throwing its
+      // typed refusal. Preserve that pre-dispatch result; no SDK call occurred.
+      throw finalFenceError ?? error;
     });
     if (response?.code && response.code !== 0) {
       const error = new Error(`Feishu proactive delivery failed: ${response.msg || response.code}`);

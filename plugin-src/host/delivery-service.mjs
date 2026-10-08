@@ -525,7 +525,11 @@ export class DeliveryService {
         cancellation(signal);
         this.#assertRegistered(registration);
         cancellation(deliverySignal);
-        if (callerBeforeSend !== undefined && callerBeforeSend() !== true)
+        const allowed = callerBeforeSend === undefined || callerBeforeSend() === true;
+        cancellation(signal);
+        this.#assertRegistered(registration);
+        cancellation(deliverySignal);
+        if (!allowed)
           throw deliveryError('send-permission-denied');
         return true;
       };
