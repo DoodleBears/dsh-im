@@ -699,7 +699,7 @@ export class FeishuRuntime {
     }, options);
   }
 
-  async sendProactiveText(target, text, { signal, format = 'plain', receipt = false } = {}) {
+  async sendProactiveText(target, text, { signal, format = 'plain', receipt = false, beforeSend } = {}) {
     if (!this.#status.ready || !this.#client) {
       const error = new Error('飞书机器人尚未连接');
       error.code = 'bot-not-connected';
@@ -733,14 +733,20 @@ export class FeishuRuntime {
     const activeSignal = signal
       ? AbortSignal.any([signal, this.#abortController.signal])
       : this.#abortController.signal;
-    const response = await waitForFeishuOperation(() => this.#client.im.v1.message.create({
-      params: { receive_id_type: receiveIdType },
-      data: {
-        receive_id: receiveId,
-        msg_type: format === 'markdown' ? 'interactive' : 'text',
-        content: JSON.stringify(content),
-      },
-    }), {
+    const response = await waitForFeishuOperation(() => {
+      // The waiter queues the SDK operation; recheck caller authorization here,
+      // with no asynchronous gap before the native effect.
+      if (beforeSend !== undefined && beforeSend() !== true)
+        throw Object.assign(new Error('send-permission-denied'), { code: 'send-permission-denied' });
+      return this.#client.im.v1.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: {
+          receive_id: receiveId,
+          msg_type: format === 'markdown' ? 'interactive' : 'text',
+          content: JSON.stringify(content),
+        },
+      });
+    }, {
       signal: activeSignal,
       timeoutMs: this.#requestTimeoutMs,
       stage: `proactive text send (${this.#requestTimeoutMs}ms)`,
