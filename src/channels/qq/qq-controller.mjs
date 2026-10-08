@@ -314,15 +314,16 @@ export class QqController {
       version: 1, botId, channel: 'qq', account: await this.#deliveryAccount(botId), connected: true,
       capabilities: ['exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked',
         'reply-receipt-checked', 'reply-fence-checked', 'source-file-checked', 'source-image-checked',
-        'reply-file-checked', 'reply-image-fence-checked', 'reply-file-receipt-checked'],
+        'reply-file-checked', 'reply-image-fence-checked', 'reply-file-receipt-checked',
+        'source-generic-file-checked', 'reply-file-fence-checked'],
     }));
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceImages = false } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceImages = false, sourceFiles = false } = {}) {
     return this.#withBotTransition(botId, async () => {
       const account = await this.#deliveryAccount(botId, signal);
       if (account.fingerprint !== expectedFingerprint) throw qqRefusal('account-changed');
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceImages });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceImages, sourceFiles });
       try {
         const saved = await this.#configStore.save({ ...this.#configStore.get(botId), consumerMode: 'external-consumer' });
         const secret = await this.#resolveSecret(saved.secretRef);
@@ -371,7 +372,9 @@ export class QqController {
       };
       if (options.reply) return checked.runtime.replyImageChecked(route, value, { ...options,
         signal: checked.signal, verifyAccount });
-      return checked.runtime.readSourceImage(route, value, { ...options, signal: checked.signal, verifyAccount });
+      return value?.mediaType === 'application/octet-stream'
+        ? checked.runtime.readSourceFile(route, value, { ...options, signal: checked.signal, verifyAccount })
+        : checked.runtime.readSourceImage(route, value, { ...options, signal: checked.signal, verifyAccount });
     });
   }
 
@@ -551,6 +554,7 @@ export class QqController {
       ...(config.consumerMode === 'external-consumer' ? {
         externalConsumer: (event, signal) => this.#inboundConsumers.accept(config.botId, event, signal),
         sourceImages: () => this.#inboundConsumers.acceptsImages(config.botId),
+        sourceFiles: () => this.#inboundConsumers.acceptsFiles(config.botId),
       } : {}),
     }));
     if (!runtime || typeof runtime.start !== 'function' || typeof runtime.stop !== 'function') {

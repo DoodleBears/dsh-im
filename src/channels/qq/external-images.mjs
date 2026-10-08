@@ -7,11 +7,14 @@ const imageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'
 const refusal = code => Object.assign(new Error(code), { code });
 
 /** Native caption and attachment order are separate; no native interleaving is inferred. */
-export function qqSourceImages(message, event) {
+export function qqSourceImages(message, event, { sourceImages = true, sourceFiles = false } = {}) {
   if (!Array.isArray(message.attachments) || !message.attachments.length || message.attachments.length > 32)
     throw refusal('invalid-inbound');
   const files = message.attachments.map((native, index) => {
-    if (!imageTypes.has(native?.content_type) || typeof native.url !== 'string' || native.url.length > 16384)
+    // Tencent's native `file` label is a category, not a MIME declaration.
+    const mediaType = native?.content_type === 'file' && sourceFiles
+      ? 'application/octet-stream' : sourceImages && imageTypes.has(native?.content_type) ? native.content_type : null;
+    if (!mediaType || typeof native.url !== 'string' || native.url.length > 16384)
       throw refusal('invalid-inbound');
     let url;
     try { url = new URL(native.url); } catch { throw refusal('invalid-inbound'); }
@@ -25,9 +28,9 @@ export function qqSourceImages(message, event) {
       event.fingerprint, event.conversation.id, event.messageId, index,
     ])).digest('hex');
     const name = typeof native.filename === 'string' && native.filename.trim() && native.filename.length <= 512
-      && !/[\x00-\x1f\x7f/\\]/.test(native.filename) ? native.filename : 'image';
+      && !/[\x00-\x1f\x7f/\\]/.test(native.filename) ? native.filename : native.content_type === 'file' ? 'file' : 'image';
     const attachment = { id, messageId: event.messageId, resourceKey: id, name,
-      mediaType: native.content_type, ...(native.size === undefined ? {} : { sizeBytes: native.size }) };
+      mediaType, ...(native.size === undefined ? {} : { sizeBytes: native.size }) };
     return { attachment, url: native.url };
   });
   return { files, event: { ...event, attachments: files.map(file => file.attachment),
@@ -77,7 +80,7 @@ export function checkedQqImageFile(file) {
 }
 
 /** Upload cancellation prevents the later send; the SDK upload itself has no AbortSignal. */
-export async function uploadQqCheckedImage(bot, target, file, bytes, signal) {
+export async function uploadQqCheckedImage(bot, target, file, bytes, signal, fileType = 1) {
   let timer;
   let aborted;
   const interrupted = new Promise((_, reject) => {
@@ -88,7 +91,7 @@ export async function uploadQqCheckedImage(bot, target, file, bytes, signal) {
   });
   try {
     const uploaded = await Promise.race([interrupted,
-      bot.uploadMedia({ target, fileType: 1, buffer: bytes, fileName: file.name, srvSendMsg: false })]);
+      bot.uploadMedia({ target, fileType, buffer: bytes, fileName: file.name, srvSendMsg: false })]);
     if (typeof uploaded?.file_info !== 'string' || !uploaded.file_info || uploaded.file_info.length > 16384)
       throw refusal('file-upload-failed');
     return uploaded.file_info;
