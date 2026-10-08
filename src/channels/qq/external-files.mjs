@@ -32,7 +32,9 @@ export function qqQuotedFileMessage(message) {
     || (raw.attachments !== undefined && (!Array.isArray(raw.attachments) || raw.attachments.length))
     || !Array.isArray(message.msgElements) || message.msgElements.length !== 1
     || message.msgElements[0]?.msg_idx !== key
-    || Object.keys(element).some(field => !['msg_idx', 'content', 'attachments'].includes(field))
+    || Object.keys(element).some(field => !['msg_idx', 'content', 'message_type', 'attachments'].includes(field))
+    || (element.message_type !== undefined && (!Number.isSafeInteger(element.message_type)
+      || element.message_type < 0 || element.message_type === 103))
     || !Array.isArray(element.attachments) || !element.attachments.length
     || element.attachments.some(file => file?.content_type !== 'file')
     || typeof message.content !== 'string' || !message.content.trim())

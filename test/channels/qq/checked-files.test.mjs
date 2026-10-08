@@ -144,7 +144,7 @@ test('installed QQ contract acquires an explicitly quoted native file under the 
   t.mock.method(globalThis, 'fetch', async () => new Response(input));
   const fx = await fixture(t, { production: true });
   const native = mention();
-  const elements = [{ msg_idx: 'quoted-file-index', attachments: native.attachments }];
+  const elements = [{ msg_idx: 'quoted-file-index', content: '', message_type: 4, attachments: native.attachments }];
   await fx.bot().deliver(mention({ attachments: undefined, msgType: 103,
     refMsgIdx: 'quoted-file-index', msgElements: elements,
     raw: { id: 'file-source', group_openid: 'app-group', author: { member_openid: 'app-member' },
@@ -172,7 +172,7 @@ test('installed QQ contract acquires an explicitly quoted native file under the 
   assert.equal(evidence.quoteIndexMatches, true);
   assert.deepEqual(evidence.quoteShape, {
     directAttachments: 'absent', rawDirectAttachments: 'absent',
-    elementFields: ['attachments', 'msg_idx'], normalizedElementMatches: true,
+    elementFields: ['attachments', 'content', 'message_type', 'msg_idx'], normalizedElementMatches: true,
     files: [{ urlPresent: true, httpsUrl: true, sizeType: 'number', sizeValid: true }],
   });
   assert.equal(JSON.stringify(evidence).includes('private-ticket'), false);
@@ -221,6 +221,9 @@ test('quoted QQ files reject missing native proof, conflicting indices and neigh
     { raw: { ...raw, msg_elements: [elements[0], elements[0]] } },
     { raw: { ...raw, msg_elements: [{ msg_idx: 'quoted-file-index' }] } },
     { raw: { ...raw, msg_elements: [{ ...elements[0], msg_elements: elements }] } },
+    { raw: { ...raw, msg_elements: [{ ...elements[0], message_type: 103 }] } },
+    { raw: { ...raw, msg_elements: [{ ...elements[0], message_type: '4' }] } },
+    { raw: { ...raw, msg_elements: [{ ...elements[0], message_type: -1 }] } },
     { raw: { ...raw, msg_elements: [{ ...elements[0], attachments: [{ content_type: 'voice', url: privateUrl }] }] } },
   ]) await fx.bot().deliver(mention({ ...quoted, ...change }));
   assert.deepEqual(fx.admitted, []);
