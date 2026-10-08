@@ -51,6 +51,7 @@ export class QqRuntime {
   #starting = null;
   #externalConsumer;
   #sourceImages;
+  #sourceFiles;
   #externalBridge = null;
 
   constructor({
@@ -67,6 +68,7 @@ export class QqRuntime {
     typingMiddleware = typingIndicator,
     externalConsumer,
     sourceImages = () => false,
+    sourceFiles = () => false,
   }) {
     if (!config || !appSecret || !harness || !state) {
       throw new TypeError('QqRuntime requires config, app secret, Harness, and state');
@@ -84,6 +86,7 @@ export class QqRuntime {
     this.#typingMiddleware = typingMiddleware;
     this.#externalConsumer = externalConsumer;
     this.#sourceImages = sourceImages;
+    this.#sourceFiles = sourceFiles;
   }
 
   get status() {
@@ -138,6 +141,11 @@ export class QqRuntime {
   readSourceImage(route, attachment, options) {
     if (!this.#externalBridge) throw qqRefusal('consumer-unavailable');
     return this.#externalBridge.readImage(route, attachment, options);
+  }
+
+  readSourceFile(route, attachment, options) {
+    if (!this.#externalBridge) throw qqRefusal('consumer-unavailable');
+    return this.#externalBridge.readFile(route, attachment, options);
   }
 
   replyImageChecked(route, file, options) {
@@ -264,6 +272,7 @@ export class QqRuntime {
         this.#externalBridge = new QqExternalConsumer({ bot, account, botId: this.#config.botId,
           accept: this.#externalConsumer,
           sourceImages: this.#sourceImages,
+          sourceFiles: this.#sourceFiles,
           reportNativeObservation: record => this.#logger.info?.('[dsh-im:qq] native reply observation', record),
         });
       } catch (error) {
