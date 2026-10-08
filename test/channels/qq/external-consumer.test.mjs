@@ -226,9 +226,21 @@ test('runtime observes native reply candidates independently without enabling Ec
   assert.equal(admitted.length, 1);
   assert.equal(observations.length, 1);
   assert.equal(observations[0].receiptMatched, true);
+  observations.length = 0;
+  bot.apiClient.request = async () => ({ id: 'native-post-id' });
+  await runtime.sendProactiveText({ kind: 'group', route: { groupOpenId: 'app-scoped-group' } }, 'post', {
+    expectedFingerprint: (await runtime.describeDeliveryAccount()).fingerprint,
+    beforeSend: () => true, verifyAccount: async () => {},
+  });
+  assert.equal(observations.filter(record => record?.event === 'qq.native-reply.observation').length, 0);
+  await bot.deliver(mention({ ...native, messageId: 'native-post-id' }));
+  const postObservations = observations.filter(record => record?.event === 'qq.native-reply.observation');
+  assert.equal(postObservations.length, 1);
+  assert.equal(postObservations[0].receiptMatched, true);
+  observations.length = 0;
   await runtime.stop();
   await bot.deliver(mention({ ...native, messageId: 'after-stop' }));
-  assert.equal(observations.length, 1);
+  assert.equal(observations.length, 0);
 });
 
 test('public QQ reply cancellation at the qualified-runtime handoff refuses before native dispatch', async () => {

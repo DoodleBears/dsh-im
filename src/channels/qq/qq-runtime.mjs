@@ -184,6 +184,7 @@ export class QqRuntime {
   async sendProactiveText(target, text, { signal, expectedFingerprint, beforeSend, verifyAccount } = {}) {
     if (expectedFingerprint !== undefined) {
       const bot = this.#bot;
+      const bridge = this.#externalBridge;
       if (!bot || !this.#status.ready || !this.#abortController) throw qqRefusal('bot-not-connected');
       const sendSignal = signal ? AbortSignal.any([signal, this.#abortController.signal]) : this.#abortController.signal;
       const started = Date.now();
@@ -200,6 +201,7 @@ export class QqRuntime {
           assertCurrent: () => {
             if (this.#bot !== bot || !this.#status.ready) throw qqRefusal('bot-not-connected');
           } });
+        bridge?.recordNativeReceipt(result.receipt, sendSignal);
         report('accepted', 'native-receipt');
         return result;
       } catch (error) {

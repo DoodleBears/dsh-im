@@ -85,6 +85,9 @@ export class QqExternalConsumer {
     this.#sourceVoiceTranscripts = sourceVoiceTranscripts;
     this.#sourceVoiceAudio = sourceVoiceAudio;
   }
+  recordNativeReceipt(receipt, signal) {
+    this.#observations.sent(receipt.conversationId, receipt.messageId, signal);
+  }
   async accept(message, signal) {
     this.#observations.receive(message, signal);
     const voice = this.#sourceVoiceTranscripts() === true || this.#sourceVoiceAudio() === true
