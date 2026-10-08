@@ -381,6 +381,12 @@ export class QqRuntime {
         .filter(isQqVoiceAttachment);
       if (voices.length) lastInbound.voice = {
         count: Math.min(voices.length, 2),
+        quotedAttachmentCount: Math.min(quotedAttachments.length, 8),
+        quotedCategories: quotedAttachments.slice(0, 4).map(file => {
+          const type = file?.content_type;
+          return typeof type === 'string' && /^(?:voice|file|image|audio\/[a-z0-9!#$&^_.+-]+|image\/[a-z0-9!#$&^_.+-]+)$/i.test(type)
+            ? type.slice(0, 64) : typeof type;
+        }),
         platformTranscriptPresent: voices.some(file => typeof file.asr_refer_text === 'string' && !!file.asr_refer_text.trim()),
         platformWavPresent: voices.some(file => typeof file.voice_wav_url === 'string' && !!file.voice_wav_url),
       };
