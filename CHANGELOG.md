@@ -6,6 +6,34 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+## [4.38.0] - 2026-10-09
+
+### Added / 新增
+
+- 飞书机器人「更多设置 → 通用」新增独立的「展开思考过程」和「展开工具摘要」开关。设置按机器人持久化，更新时无需重连，普通回复与双向同步的实时过程卡使用同一偏好；默认思考过程收起、工具摘要展开。（[#326](https://github.com/xmanrui/dsh-im/issues/326)）
+  Feishu bots add independent “Expand thinking process” and “Expand tool summaries” switches under More settings → General. Preferences persist per bot and update without reconnecting, applying to live process cards for both ordinary replies and bidirectional Session sync. Thinking stays collapsed and tools expanded by default. ([#326](https://github.com/xmanrui/dsh-im/issues/326))
+
+### Fixed / 修复
+
+- 待处理审批默认在一小时后自动拒绝，不再无限占用队列或留下 Web 端审批。拒绝提交失败时保留审批状态并退避重试、明确提示尚未确认；已在提交的人工决定优先，过期后不再接受新的批准。感谢 [@luochen211](https://github.com/luochen211) 的贡献（[#319](https://github.com/xmanrui/dsh-im/pull/319)）。
+  Pending approvals now default to automatic rejection after one hour instead of indefinitely occupying the queue or leaving shared Web approvals pending. Failed rejection submissions retain state, retry with backoff, and clearly report the unconfirmed outcome. An already-submitting human decision takes precedence, and expired approvals accept no new allow decision. Thanks to [@luochen211](https://github.com/luochen211) ([#319](https://github.com/xmanrui/dsh-im/pull/319)).
+- Matrix 加密引擎停止时先等待房间密钥请求及其持久化任务完成，再释放加密会话；后台密钥请求失败被捕获并记录，避免关闭阶段的异步任务竞争。（[#337](https://github.com/xmanrui/dsh-im/pull/337)）
+  Matrix crypto shutdown drains room-key requests and their persistence tasks before freeing crypto sessions. Background key-request failures are caught and logged, preventing shutdown races. ([#337](https://github.com/xmanrui/dsh-im/pull/337))
+
+### Changed / 变更
+
+- 简化机器人通用设置，消息处理模式和飞书面板开关改为修改后自动保存；保存期间避免重复提交，失败时恢复已保存值并显示错误。飞书两个过程卡开关以统一布局展示。
+  Bot General settings are streamlined: message mode and Feishu panel switches save automatically on change, block duplicate submissions while saving, and restore the saved value with an error on failure. Both Feishu process-card controls share a consistent layout.
+- 插件图标调整为更粗的蓝绿圆环，并更新文档截图。
+  The plugin icon now uses thicker blue and green rings, with refreshed documentation screenshots.
+
+### Notes / 使用说明
+
+- 面板展开偏好仅影响飞书实时过程卡；已完成、已停止和分片封存的卡片仍自动收起过程详情，不会改变原生 CoT 或分步消息的展示模式。
+  Panel expansion preferences apply only to Feishu live process cards. Completed, stopped, and sealed overflow cards still collapse process details; native CoT and discrete step-post modes remain unchanged.
+- 依赖声明与 DSH `0.2.0-rc.2` 兼容声明保持不变；升级后重启 Host 并刷新管理页面，以加载同版 Host 和客户端设置。
+  Dependency declarations and declared DSH `0.2.0-rc.2` compatibility remain unchanged. Restart the Host and refresh the management page after upgrading so Host and client settings use the same version.
+
 ## [4.37.0] - 2026-10-07
 
 ### Added / 新增
@@ -1642,7 +1670,8 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 改进 npm 发布包结构，保留 CLI 入口并避免安装脚本拦截。
   Improved npm package contents to preserve the CLI entry point and avoid install-script blocking.
 
-[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.37.0...HEAD
+[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.38.0...HEAD
+[4.38.0]: https://github.com/xmanrui/dsh-im/compare/v4.37.0...v4.38.0
 [4.37.0]: https://github.com/xmanrui/dsh-im/compare/v4.36.1...v4.37.0
 [4.36.1]: https://github.com/xmanrui/dsh-im/compare/v4.36.0...v4.36.1
 [4.36.0]: https://github.com/xmanrui/dsh-im/compare/v4.35.1...v4.36.0
