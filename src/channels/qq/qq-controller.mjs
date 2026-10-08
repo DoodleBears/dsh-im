@@ -370,7 +370,7 @@ export class QqController {
         const current = await this.#checkedRuntime(botId, options.expectedFingerprint, checked.signal);
         if (current.runtime !== checked.runtime) throw qqRefusal('account-changed');
       };
-      if (options.reply) return checked.runtime.replyImageChecked(route, value, { ...options,
+      if (options.reply) return checked.runtime.replyFileChecked(route, value, { ...options,
         signal: checked.signal, verifyAccount });
       return value?.mediaType === 'application/octet-stream'
         ? checked.runtime.readSourceFile(route, value, { ...options, signal: checked.signal, verifyAccount })
