@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ApiError, getNextMsgSeq, messagePath } from '@tencent-connect/qqbot-nodejs/protocol';
+import { QqNativeReplyObservations, qqNativeIdentifier as identifier } from './native-reply-observations.mjs';
 
 export function qqRefusal(code) { return Object.assign(new Error(code), { code }); }
 
@@ -14,11 +15,6 @@ function nativeReplyFailure(error) {
   if ([22006, 304061, 40034006, 40054007, 40054010].includes(code)) return qqRefusal('bad-request');
   if (code === 40034024) return qqRefusal('stale-route');
   return qqRefusal('reply-result-unknown');
-}
-
-function identifier(value) {
-  return typeof value === 'string' && value.length > 0 && value.length <= 512
-    && value.trim() === value && !/[\s\u0000-\u001f]/u.test(value);
 }
 
 export function verifiedQqAccount(appId, user) {
@@ -72,11 +68,14 @@ export class QqExternalConsumer {
   #account;
   #botId;
   #accept;
+  #observations;
   #sources = new Map();
-  constructor({ bot, account, botId, accept }) {
+  constructor({ bot, account, botId, accept, reportNativeObservation = () => {} }) {
     this.#bot = bot; this.#account = account; this.#botId = botId; this.#accept = accept;
+    this.#observations = new QqNativeReplyObservations({ account, report: reportNativeObservation });
   }
   async accept(message, signal) {
+    this.#observations.receive(message, signal);
     const event = normalizeQqExternalText(message, { botId: this.#botId, account: this.#account });
     if (!event) return;
     signal.throwIfAborted();
@@ -120,6 +119,7 @@ export class QqExternalConsumer {
     } catch (error) { throw nativeReplyFailure(error); }
     // Once dispatch begins, cancellation or a missing response cannot prove non-delivery.
     if (signal?.aborted || !identifier(response?.id)) throw qqRefusal('reply-result-unknown');
+    this.#observations.sent(qualified.conversationId, response.id, signal);
     return { sent: true, ...(receipt ? { receipt: { version: 1, messageId: response.id,
       conversationId: qualified.conversationId } } : { messageId: response.id }) };
   }

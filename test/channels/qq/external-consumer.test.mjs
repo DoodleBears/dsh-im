@@ -72,6 +72,36 @@ function mention(overrides = {}) {
     ...overrides };
 }
 
+test('runtime observes native reply candidates independently without enabling Echo or ordinary-message admission', async t => {
+  const bot = new PlatformBot();
+  const admitted = [];
+  const observations = [];
+  const runtime = new QqRuntime({
+    config: { botId: 'qq_test', appId: '12345678', consumerMode: 'external-consumer' },
+    appSecret: 'test-secret', state: {}, harness: {}, connectTimeoutMs: 100,
+    createBot: () => bot, externalConsumer: async event => {
+      admitted.push(event); return { accepted: true };
+    },
+    logger: { info: (_label, record) => observations.push(record) },
+  });
+  t.after(() => runtime.stop());
+  await runtime.start();
+  await bot.deliver(mention());
+  await runtime.replyChecked(admitted[0].reply, 'answer', { receipt: true });
+  assert.deepEqual(observations, []);
+  const native = mention({ rawEventType: 'GROUP_MESSAGE_CREATE', messageId: 'native-reply-id',
+    senderIsBot: true, senderId: 'native-bot-id' });
+  await bot.deliver(native);
+  await bot.deliver(native);
+  await bot.deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', messageId: 'ordinary' }));
+  assert.equal(admitted.length, 1);
+  assert.equal(observations.length, 1);
+  assert.equal(observations[0].receiptMatched, true);
+  await runtime.stop();
+  await bot.deliver(mention({ ...native, messageId: 'after-stop' }));
+  assert.equal(observations.length, 1);
+});
+
 test('public QQ reply cancellation at the qualified-runtime handoff refuses before native dispatch', async () => {
   const bot = new PlatformBot();
   const abort = new AbortController();
