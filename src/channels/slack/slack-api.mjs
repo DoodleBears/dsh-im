@@ -231,6 +231,17 @@ export class SlackApi {
     return this.#request('auth.test', { ...options, tokenKind: 'bot' });
   }
 
+  hasBotScope(scope) { return this.#botScopes?.has(scope) === true; }
+
+  joinedConversations({ cursor, signal } = {}) {
+    if (cursor !== undefined && (typeof cursor !== 'string' || !cursor || cursor.length > 1800))
+      throw new TypeError('Invalid Slack conversation cursor');
+    return this.#request('users.conversations', { tokenKind: 'bot', signal, body: {
+      types: 'public_channel,private_channel', exclude_archived: true, limit: 20,
+      ...(cursor ? { cursor } : {}),
+    } });
+  }
+
   async botInfo({ botId, signal } = {}) {
     const value = await this.#request('bots.info', { tokenKind: 'bot', signal,
       body: { bot: slackId(botId, 'bot id') } });
@@ -559,7 +570,7 @@ export class SlackApi {
     const token = tokenKind === 'app' ? this.#appToken : this.#botToken;
     if (!token) throw new TypeError(`Slack ${tokenKind} token is required for ${method}`);
     const formEncoded = ['files.getUploadURLExternal', 'files.info', 'bots.info', 'users.info',
-      'conversations.info', 'conversations.history', 'conversations.replies'].includes(method);
+      'conversations.info', 'conversations.history', 'conversations.replies', 'users.conversations'].includes(method);
     let response;
     try {
       response = await this.#fetch(new URL(method, this.#baseUrl), {

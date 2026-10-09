@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- 公开 checked 群发现／主动发送扩展到 Discord 与 Slack：Discord 重新核验服务器角色、频道覆盖和禁言；Slack 只列已加入的公开／私有群，核对写权限和群发言限制。Lark 支持自身机器人在分页可发言名单中的受限群。所有新发送要求最后一刻授权检查、原生回执，未知结果不重试；无需先保存目标或接收消息。Slack 应用模板增加 `channels:read`、`groups:read`；现有安装需在平台补齐权限后使用群发现（[BotHarness #1115](https://github.com/BotHarness/DeepSeekBot/issues/1115)）。
+  Public checked group discovery/posting now covers Discord and Slack: Discord rechecks guild roles, channel overwrites and timeouts; Slack lists joined public/private channels and checks authenticated write scope and posting restrictions. Lark supports restricted groups whose paginated native speaking list includes the own Bot. New sends require a final authorization fence and native receipt, retain unknown results without retry, and need no saved target or inbound message. The Slack app template adds `channels:read` and `groups:read`; existing installations need those platform permissions for group discovery ([BotHarness #1115](https://github.com/BotHarness/DeepSeekBot/issues/1115)).
+
 - Slack 的 checked external consumer 接收发给 App 的 Human 私聊（`conversation.kind: 'dm'`），私聊回复不再开 thread；Slack 与 Discord 的 checked 回复新增 `mentionUserIds`，只能 @ 原消息作者或原消息里 @ 过的人，并声明 `reply-mention-checked`；Slack 收件时用 `users.info` 补全被 @ 的人名（[BotHarness #1125](https://github.com/BotHarness/BotHarness/issues/1125)、[#1126](https://github.com/BotHarness/BotHarness/issues/1126)）。
   Slack checked external consumers accept Human DMs to the App (`conversation.kind: 'dm'`) and answer them without a thread. Slack and Discord checked replies accept `mentionUserIds`, limited to the source author and people the source mentions; matching inline `<@ID>` tags stay in place and missing ones are prefixed, and advertise `reply-mention-checked`. Slack intake names mentioned people through `users.info` ([BotHarness #1125](https://github.com/BotHarness/BotHarness/issues/1125), [#1126](https://github.com/BotHarness/BotHarness/issues/1126)).
 
@@ -26,6 +29,12 @@ This file records the notable changes in each dsh-im release. Its format follows
   The same-Host public `dshIm` Service adds versioned account descriptions and checked plain-text sends. Feishu/Lark account identity is authenticated against the platform, destinations are checked against a frozen content digest, legacy `send` remains compatible, and unsupported channels return an explicit error.
 
 ### Fixed / 修复
+
+- checked 群主动发送在最终消费者授权回调后重新检查 Controller 关闭与取消，阻止回调内关闭 Provider 后仍发出消息。
+  Checked group posting rechecks Controller closure and cancellation after the final consumer callback, preventing a send when that callback closes the Provider.
+
+- checked 群主动发送在账户核验失败时返回公开的 `send-preflight-unavailable`，不直接暴露 Provider 内部错误；未启动发送与发送后未知结果保持区分。
+  Checked group posting reports account-check failures as public `send-preflight-unavailable` errors instead of exposing internal Provider errors, distinguishing unstarted sends from unknown dispatch outcomes.
 
 - Feishu/Lark 独占外部文本接收在原消息、发送人和话题路由核验后补充原生发送人名称；可选名称读取最多等待 1.5 秒，权限缺失、名称缺失或查询失败保留 ID 回退和原收件行为，取消或连接替换仍拒绝过期交付。此候选修复未发布，真实 BotHarness 验收单独记录于 BotHarness/BotHarness#1070。
   Feishu/Lark exclusive external text intake enriches the native sender name after checking the exact message, sender and topic route. Optional reads wait at most 1.5 seconds; unavailable permissions, names or lookups preserve ID fallback and intake, while cancellation or connection replacement still refuses stale delivery. This candidate fix is unreleased; real BotHarness qualification is tracked separately in BotHarness/BotHarness#1070.

@@ -8,6 +8,7 @@ import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
 import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
 import { DiscordApi } from './discord-api.mjs';
 import { createDiscordHistoryReader } from './history-reader.mjs';
+import { listDiscordReachable, postDiscordReachable } from './reachable-conversations.mjs';
 import { createDiscordBridgeStatus, DiscordHarnessBridge } from './discord-bridge.mjs';
 import { discordRefusal, verifiedDiscordAccount, discordMessageContentAllowed, inspectDiscordSourceChannel, normalizeDiscordExternalText,
   qualifyDiscordReply, sendDiscordReply, sendDiscordCheckedText } from './external-consumer.mjs';
@@ -654,6 +655,17 @@ export class DiscordRuntime {
       combined.throwIfAborted();
       if (generation !== this.#generation || this.#stopped || !this.#status.ready) throw discordRefusal('capability-unavailable');
     } };
+  }
+
+  async listReachableConversations({ signal, cursor } = {}) {
+    return listDiscordReachable(this.#checkedLifetime(signal), cursor);
+  }
+
+  async postConversationChecked(conversationId, text, options = {}) {
+    const checked = this.#checkedLifetime(options.signal);
+    if (options.expectedFingerprint !== checked.account.fingerprint) throw discordRefusal('account-changed');
+    if (options.format !== undefined && options.format !== 'plain') throw discordRefusal('capability-unavailable');
+    return postDiscordReachable(checked, conversationId, text, options);
   }
 
   async qualifyReplyChecked(route, { signal } = {}) {

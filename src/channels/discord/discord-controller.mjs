@@ -13,7 +13,7 @@ export class DiscordController extends TokenBotController {
       deriveIdentity: deriveDiscordBotIdentity,
       maskPlatformId: maskDiscordBotId,
       checkedDelivery: {
-        capabilities: ['proactive-text-checked', 'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked',
+        capabilities: ['reachable-conversations-checked', 'proactive-text-checked', 'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked',
           'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'reply-mention-checked',
           'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'],
         inspectAccount: async (token, config, { signal }) => {

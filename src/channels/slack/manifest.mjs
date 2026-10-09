@@ -17,6 +17,8 @@ oauth_config:
     bot:
       - app_mentions:read
       - chat:write
+      - channels:read
+      - groups:read
       - channels:history
       - files:read
       - files:write
