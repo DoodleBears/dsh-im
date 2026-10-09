@@ -396,6 +396,33 @@ test('a qualified QQ app takes over group mentions and replies with a native rec
   assert.equal(fx.standaloneRuns(), standaloneRuns);
 });
 
+test('public QQ retains explicit self mentions in full reception without admitting ordinary or Bot messages', async t => {
+  const fx = await fixture(t);
+  const fingerprint = (await fx.controller.describeDeliveryAccount(fx.botId)).account.fingerprint;
+  const admitted = [];
+  await fx.controller.consumeInbound(fx.botId, { expectedFingerprint: fingerprint,
+    onEvent: async event => { admitted.push(event); return { accepted: true }; },
+  });
+  for (const fields of [
+    {}, { mentions: [{ is_you: false }] }, { mentions: [{ is_you: 'true' }] },
+    { raw: { mentions: [{ is_you: true }] } },
+    { senderIsBot: true, mentions: [{ is_you: true }] },
+  ]) await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', ...fields }));
+  assert.equal(admitted.length, 0);
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE',
+    mentions: [{ is_you: true, member_openid: 'app-qualified-bot' }],
+  }));
+  assert.equal(admitted.length, 1);
+  assert.equal(admitted[0].mentionedAccount, true);
+  assert.equal(admitted[0].text, mention().content);
+  assert.equal(fx.controller.status().bots[0].health.lastInbound.explicitSelfMention, true);
+  const result = await fx.controller.replyChecked(fx.botId, admitted[0].reply, 'reply', {
+    expectedFingerprint: fingerprint, receipt: true, beforeSend: () => true,
+  });
+  assert.equal(result.receipt.messageId, 'native-reply-id');
+  assert.equal(fx.bot().sent.length, 1);
+});
+
 test('QQ fences source routes, pending canonical admission, native send uncertainty, and revoked leases', async t => {
   const fx = await fixture(t);
   const fingerprint = (await fx.controller.describeDeliveryAccount(fx.botId)).account.fingerprint;

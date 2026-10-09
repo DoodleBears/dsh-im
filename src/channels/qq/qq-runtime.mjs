@@ -408,6 +408,8 @@ export class QqRuntime {
         eventType: ['GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE', 'C2C_MESSAGE_CREATE'].includes(message?.rawEventType)
           ? message.rawEventType : 'other',
         messageType: Number.isSafeInteger(message?.msgType) ? message.msgType : null,
+        mentionCount: Array.isArray(message?.mentions) ? Math.min(message.mentions.length, 128) : 0,
+        explicitSelfMention: Array.isArray(message?.mentions) && message.mentions.some(mention => mention?.is_you === true),
         textPresent: typeof message?.content === 'string' && !!message.content.trim(),
         directAttachments: Array.isArray(message?.attachments) ? Math.min(message.attachments.length, 33) : 0,
         quotedElements: Math.min(elements.length, 2), quotedFiles: Math.min(quotedFiles.length, 33),
