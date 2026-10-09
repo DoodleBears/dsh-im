@@ -30,6 +30,8 @@ import {
 import {
   isFeishuStepPushMode,
   normalizeFeishuStepPushMode,
+  isFeishuStepCardPanels,
+  normalizeFeishuStepCardPanels,
 } from '../../../../src/channels/feishu/step-push-mode.mjs';
 import { normalizeFeishuVoiceConfig } from '../../../../src/channels/feishu/voice-config.mjs';
 import {
@@ -315,6 +317,7 @@ function publicBotEntry(entry) {
     mentionTopicReply: source.mentionTopicReply !== false,
     stepPush: source.stepPush === true,
     stepPushMode: normalizeFeishuStepPushMode(source.stepPushMode),
+    stepCardPanels: normalizeFeishuStepCardPanels(source.stepCardPanels),
     voice: normalizeFeishuVoiceConfig(source.voice),
     slashPanel: normalizeSlashPanelConfig(source.slashPanel),
     groupMessagePermissionGranted: source.groupMessagePermissionGranted === true,
@@ -503,6 +506,13 @@ function validPayload(endpoint, payload) {
       && isFeishuStepPushMode(payload.stepPushMode)
       ? null
       : '请选择分步直推的呈现方式。';
+  }
+  if (endpoint === FEISHU_ENDPOINTS.setStepCardPanels) {
+    return hasOnlyKeys(payload, new Set(['botId', 'stepCardPanels']))
+      && safeOpaqueId(payload.botId)
+      && isFeishuStepCardPanels(payload.stepCardPanels)
+      ? null
+      : '请选择实时过程卡面板的展开状态。';
   }
   if (endpoint === FEISHU_ENDPOINTS.setVoice) {
     const voice = payload?.voice;
@@ -833,6 +843,14 @@ export function createFeishuRpcHandler(controller, { encodeQr = qrCodeDataUrl } 
         }
         value = await toPublicFeishuStatus(
           await controller.updateStepPushMode(payload.botId, payload.stepPushMode),
+          { encodeQr: cachedEncodeQr },
+        );
+      } else if (endpoint === FEISHU_ENDPOINTS.setStepCardPanels) {
+        if (typeof controller.updateStepCardPanels !== 'function') {
+          throw new Error('Step card panel update is unavailable');
+        }
+        value = await toPublicFeishuStatus(
+          await controller.updateStepCardPanels(payload.botId, payload.stepCardPanels),
           { encodeQr: cachedEncodeQr },
         );
       } else if (endpoint === FEISHU_ENDPOINTS.setVoice) {

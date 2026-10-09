@@ -6,8 +6,45 @@ import { join } from 'node:path';
 import { PluginConfigStore } from '../../../src/channels/feishu/plugin-config-store.mjs';
 import { MultiBotDshFeishuController } from '../../../src/channels/feishu/multi-bot-controller.mjs';
 import { normalizeFeishuVoiceConfig } from '../../../src/channels/feishu/voice-config.mjs';
+import { createFeishuRpcHandler, FEISHU_ENDPOINTS } from '../../../plugin-src/host/channels/feishu/rpc.mjs';
+import { normalizeBotsSnapshot } from '../../../plugin-src/client/channels/feishu/api.js';
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test('panel management RPC preserves legacy defaults, validates input, and updates only the saved bot without reconnecting', async (t) => {
+  const existing = bot('bot_panels', 'panels');
+  const other = bot('bot_other', 'other');
+  const fx = fixture({ bots: [existing, other], secrets: { [existing.secretRef]: 'secret', [other.secretRef]: 'secret2' } });
+  t.after(() => fx.controller.close());
+  await fx.controller.initialize();
+  const rpc = createFeishuRpcHandler(fx.controller);
+  const runtime = fx.runtimes.get(existing.id)[0];
+  const updates = [];
+  runtime.setStepCardPanels = (value) => updates.push(value);
+  const snapshot = () => rpc(FEISHU_ENDPOINTS.status, {});
+  assert.deepEqual((await snapshot()).value.bots[0].stepCardPanels, { thinkingExpanded: false, toolsExpanded: true });
+  const panels = { thinkingExpanded: true, toolsExpanded: false };
+  const result = await rpc(FEISHU_ENDPOINTS.setStepCardPanels, { botId: existing.id, stepCardPanels: panels });
+  assert.equal(result.ok, true);
+  assert.deepEqual(normalizeBotsSnapshot(result.value).bots[0].stepCardPanels, panels);
+  assert.deepEqual(fx.configStore.getBot(existing.id).stepCardPanels, panels);
+  assert.deepEqual(updates, [panels]);
+  assert.equal(runtime.stops, 0);
+  assert.equal(fx.runtimes.get(existing.id).length, 1);
+  assert.deepEqual(result.value.bots[1].stepCardPanels, { thinkingExpanded: false, toolsExpanded: true });
+  for (const stepCardPanels of [null, [], {}, { thinkingExpanded: true }, { thinkingExpanded: 'true', toolsExpanded: false }, { ...panels, extra: true }]) {
+    const bad = await rpc(FEISHU_ENDPOINTS.setStepCardPanels, { botId: existing.id, stepCardPanels });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.error.code, 'bad-request');
+  }
+  assert.equal((await rpc(FEISHU_ENDPOINTS.setStepCardPanels, { botId: existing.id, stepCardPanels: panels, stepPush: true })).ok, false);
+  assert.equal((await rpc(FEISHU_ENDPOINTS.setStepCardPanels, { botId: 'missing', stepCardPanels: panels })).ok, false);
+  assert.deepEqual(updates, [panels]);
+  fx.configStore.saveBot = async () => { throw new Error('disk full'); };
+  await assert.rejects(fx.controller.updateStepCardPanels(existing.id, { thinkingExpanded: false, toolsExpanded: true }), /disk full/);
+  assert.deepEqual(updates, [panels], 'failed persistence must not change the runtime');
+  assert.deepEqual((await snapshot()).value.bots[0].stepCardPanels, panels);
+});
 
 async function waitFor(predicate, timeoutMs = 1000) {
   const deadline = Date.now() + timeoutMs;

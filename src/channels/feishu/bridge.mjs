@@ -122,6 +122,7 @@ import {
 import {
   FEISHU_STEP_PUSH_MODES,
   normalizeFeishuStepPushMode,
+  normalizeFeishuStepCardPanels,
 } from './step-push-mode.mjs';
 import { FeishuLiveCot } from './live-cot.mjs';
 
@@ -680,6 +681,7 @@ export class FeishuHarnessBridge {
   #stepPush = false;
   /** Step push presentation: discrete posts, a CardKit card, or native live CoT. */
   #stepPushMode = FEISHU_STEP_PUSH_MODES.POST;
+  #stepCardPanels;
   /** Per-conversation step push state: key → { lastSentAt, count, breakerLogged }. */
   #stepPushSendState = new Map();
   /** Live streaming step cards: key → per-turn card state (streaming_card mode). */
@@ -745,6 +747,7 @@ export class FeishuHarnessBridge {
     mentionTopicReply = true,
     stepPush = false,
     stepPushMode = FEISHU_STEP_PUSH_MODES.POST,
+    stepCardPanels,
     stepPushClock = null,
     repair,
     repairPollIntervalMs = REPAIR_POLL_INTERVAL_MS,
@@ -805,6 +808,7 @@ export class FeishuHarnessBridge {
     this.#mentionTopicReply = mentionTopicReply !== false;
     this.#stepPush = stepPush === true;
     this.#stepPushMode = normalizeFeishuStepPushMode(stepPushMode);
+    this.#stepCardPanels = normalizeFeishuStepCardPanels(stepCardPanels);
     this.#stepPushClock = stepPushClock ?? DEFAULT_STEP_PUSH_CLOCK;
     this.#voice = voice ?? null;
     this.#repair = repair ?? null;
@@ -899,6 +903,10 @@ export class FeishuHarnessBridge {
 
   setStepPushMode(value) {
     this.#stepPushMode = normalizeFeishuStepPushMode(value);
+  }
+
+  setStepCardPanels(value) {
+    this.#stepCardPanels = normalizeFeishuStepCardPanels(value);
   }
 
   setVoice(voice) {
@@ -4845,7 +4853,7 @@ export class FeishuHarnessBridge {
    * their lifecycle is owned by the ask path, not the mirror recovery.
    * lastContent keeps stepStreamCard's raw JSON string (single-encoded).
    */
-  async #persistMirrorState(card, liveBlocks, status) {
+  async #persistMirrorState(card, liveBlocks, status, stepCardPanels) {
     const sessionId = card.sessionSyncSessionId;
     if (!sessionId || typeof this.#state.setMirror !== 'function') return;
     await this.#state.setMirror(card.sessionSyncKey, {
@@ -4853,7 +4861,7 @@ export class FeishuHarnessBridge {
       chatId: card.chatId,
       cardIds: [...card.cardIds],
       claimedAt: Date.now(),
-      lastContent: stepStreamCard(liveBlocks, { status }),
+      lastContent: stepStreamCard(liveBlocks, { status, stepCardPanels }),
       blocks: structuredClone(card.blocks), answerStart: card.answerStart, answerEnd: card.answerEnd,
       lastSeq: this.#sessionSyncTurns.get(card.sessionSyncKey)?.lastSeq ?? -1,
       pendingStep: this.#sessionSyncTurns.get(card.sessionSyncKey)?.pendingStep ?? null,
@@ -4861,7 +4869,7 @@ export class FeishuHarnessBridge {
   }
 
   /** Sync only this interaction's cards; earlier interactions remain sealed. */
-  async #syncStepCardChunks(card, chunks, status) {
+  async #syncStepCardChunks(card, chunks, status, stepCardPanels) {
     const answerVersion = card.answerVersion ?? 0;
     const activeIds = card.cardIds.slice(card.activeCardStart);
     const groups = chunks.length ? [...chunks] : [[]];
@@ -4874,6 +4882,7 @@ export class FeishuHarnessBridge {
     // payload halfway through this render or be marked as already delivered.
     const contents = groups.map((blocks, index) => stepStreamCard(blocks, {
       status: index === groups.length - 1 ? status : 'sealed',
+      stepCardPanels,
     }));
     for (let index = 0; index < contents.length; index += 1) {
       let id = activeIds[index];
@@ -4898,12 +4907,13 @@ export class FeishuHarnessBridge {
 
   async #renderStepCardNow(chatId, card) {
     if (card.broken) return;
-    const chunks = splitStepStreamCardBlocks(card.blocks);
+    const stepCardPanels = this.#stepCardPanels;
+    const chunks = splitStepStreamCardBlocks(card.blocks, undefined, undefined, stepCardPanels);
     if (!chunks.length && card.messageId === null) return;
     const live = chunks[chunks.length - 1] ?? [];
     try {
-      await this.#syncStepCardChunks(card, chunks, 'running');
-      await this.#persistMirrorState(card, live, 'running');
+      await this.#syncStepCardChunks(card, chunks, 'running', stepCardPanels);
+      await this.#persistMirrorState(card, live, 'running', stepCardPanels);
       card.lastRenderAt = this.#stepPushClock.now();
     } catch (error) {
       card.broken = true;
@@ -4943,9 +4953,10 @@ export class FeishuHarnessBridge {
     if (body.trim()) {
       this.#writeStepCardAnswer(card, body);
     }
-    const chunks = splitStepStreamCardBlocks(card.blocks);
+    const stepCardPanels = this.#stepCardPanels;
+    const chunks = splitStepStreamCardBlocks(card.blocks, undefined, undefined, stepCardPanels);
     try {
-      await this.#syncStepCardChunks(card, chunks, status);
+      await this.#syncStepCardChunks(card, chunks, status, stepCardPanels);
       return { ok: true, cardIds: card.cardIds };
     } catch (error) {
       // Only trust the streamed draft when the LAST SUCCESSFUL render actually
@@ -4996,8 +5007,9 @@ export class FeishuHarnessBridge {
     if (card.broken) return;
     if (card.messageId === null) return;
     try {
-      const chunks = splitStepStreamCardBlocks(card.blocks);
-      await this.#syncStepCardChunks(card, chunks, 'sealed');
+      const stepCardPanels = this.#stepCardPanels;
+      const chunks = splitStepStreamCardBlocks(card.blocks, undefined, undefined, stepCardPanels);
+      await this.#syncStepCardChunks(card, chunks, 'sealed', stepCardPanels);
     } catch (error) {
       this.#logger.warn?.(
         '[dsh-feishu] step streaming card rotate seal failed:',

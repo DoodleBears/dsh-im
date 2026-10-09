@@ -6,6 +6,32 @@ import test from 'node:test';
 import { PluginConfigStore } from '../../../src/channels/feishu/plugin-config-store.mjs';
 import { assertRestrictiveMode } from '../../support/filesystem.mjs';
 
+test('panel settings preserve old config on load and persist independent booleans per bot', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-feishu-panels-'));
+  const path = join(dir, 'config.json');
+  const bots = ['one', 'two'].map((id) => ({ id, appId: `cli_${id}`, secretRef: `SECRET_${id}`, ownerOpenIds: ['ou_owner'], stepPush: true, stepPushMode: 'live_cot' }));
+  const old = JSON.stringify({ version: 2, bots });
+  await writeFile(path, old);
+  const store = await new PluginConfigStore(path).load();
+  assert.equal(await readFile(path, 'utf8'), old, 'reading old config must not rewrite it');
+  assert.deepEqual(store.getBot('one').stepCardPanels, { thinkingExpanded: false, toolsExpanded: true });
+  for (const thinkingExpanded of [false, true]) {
+    for (const toolsExpanded of [false, true]) {
+      const panels = { thinkingExpanded, toolsExpanded };
+      await store.saveBot({ ...store.getBot('one'), stepCardPanels: panels });
+      const reloaded = await new PluginConfigStore(path).load();
+      assert.deepEqual(reloaded.getBot('one').stepCardPanels, panels);
+      assert.deepEqual(reloaded.getBot('two').stepCardPanels, { thinkingExpanded: false, toolsExpanded: true });
+      assert.equal(reloaded.getBot('one').stepPushMode, 'live_cot');
+      assert.equal(reloaded.getBot('one').stepPush, true);
+    }
+  }
+  await store.saveBot({ ...store.getBot('one'), stepCardPanels: { thinkingExpanded: 'true', toolsExpanded: null } });
+  assert.deepEqual(store.getBot('one').stepCardPanels, { thinkingExpanded: false, toolsExpanded: true });
+  await store.saveBot({ ...store.getBot('one'), stepCardPanels: { toolsExpanded: false } });
+  assert.deepEqual(store.getBot('one').stepCardPanels, { thinkingExpanded: false, toolsExpanded: false });
+});
+
 test('PluginConfigStore persists non-secret onboarding facts', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-feishu-config-'));
   const path = join(dir, 'nested', 'config.json');
