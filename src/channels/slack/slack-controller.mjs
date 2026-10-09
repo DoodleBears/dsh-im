@@ -302,7 +302,10 @@ export class SlackController {
       return runtime.postConversationChecked(conversationId, text, { ...options, beforeSend: () => {
         if (this.#closed) throw slackRefusal('provider-unavailable');
         options.signal?.throwIfAborted();
-        return options.beforeSend?.() === true;
+        const allowed = options.beforeSend?.() === true;
+        if (this.#closed) throw slackRefusal('provider-unavailable');
+        options.signal?.throwIfAborted();
+        return allowed;
       } });
     });
   }
