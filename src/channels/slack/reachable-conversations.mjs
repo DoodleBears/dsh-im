@@ -51,10 +51,9 @@ export async function listSlackReachable(checked, cursor) {
   } catch (error) { throw failure(error, signal); }
 }
 
-export async function checkSlackPost(checked, conversationId, beforeSend) {
+export async function checkSlackPost(checked, conversationId) {
   if (!/^[CG][A-Z0-9]{4,30}$/.test(conversationId)) throw slackRefusal('bad-request');
   try { await inspect(checked, conversationId); }
   catch (error) { throw failure(error, checked.signal); }
-  if (beforeSend() !== true) throw slackRefusal('send-permission-denied');
   checked.assertCurrent();
 }

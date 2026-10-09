@@ -102,6 +102,25 @@ test('Slack public group operations authenticate Bot scopes and use conversation
   assert.equal(f.sends.length, 1);
 });
 
+test('Slack native dispatch observes current authorization even when revocation is queued at the final fence', async t => {
+  const f = await fixture(t);
+  let permissionRead = false;
+  let allowed = true;
+  const authorizationAtDispatch = [];
+  f.api.conversationInfo = async () => { permissionRead = true; return f.channel; };
+  f.api.postMessage = async input => {
+    authorizationAtDispatch.push(allowed);
+    return { channel: input.channelId, ts: '1791557737.000001' };
+  };
+  await f.service.postConversationChecked(f.botId, channelId, 'Final authorization race', {
+    ...f.options, beforeSend: () => {
+      if (permissionRead) queueMicrotask(() => { allowed = false; });
+      return allowed;
+    },
+  });
+  assert.deepEqual(authorizationAtDispatch, [true]);
+});
+
 test('Slack membership and write restrictions are rechecked before the final fence; ambiguous sends are not retried', async t => {
   const f = await fixture(t);
   await f.service.listReachableConversations(f.botId, f.options);

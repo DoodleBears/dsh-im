@@ -548,7 +548,9 @@ export class SlackRuntime {
     if (typeof text !== 'string' || !text.trim() || text.length > 40000) throw slackRefusal('bad-request');
     if (options.format !== undefined && options.format !== 'plain') throw slackRefusal('capability-unavailable');
     const checked = this.#reachableLifetime(options.signal, options.expectedFingerprint);
-    await checkSlackPost(checked, conversationId, options.beforeSend);
+    await checkSlackPost(checked, conversationId);
+    if (options.beforeSend?.() !== true) throw slackRefusal('send-permission-denied');
+    checked.assertCurrent();
     try {
       const sent = await this.#postChecked({ channelId: conversationId, text, signal: checked.signal });
       return { sent: true, receipt: { version: 1, messageId: sent.ts, conversationId: sent.channel } };

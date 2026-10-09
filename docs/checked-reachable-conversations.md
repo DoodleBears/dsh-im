@@ -1,8 +1,8 @@
 # Checked posts without saved targets
 
-The same-Host public delivery Service keeps `contractVersion: 1` and optionally advertises `reachableConversationVersion: 1`. The first adapter slice is Feishu/Lark: qualified connected accounts advertise `reachable-conversations-checked`. Other accounts retain their saved-target APIs.
+The same-Host public delivery Service keeps `contractVersion: 1` and optionally advertises `reachableConversationVersion: 1`. Qualified connected Feishu/Lark, Discord and Slack accounts advertise `reachable-conversations-checked`. Other accounts retain their saved-target APIs. [The current platform guide](checked-reachable-posts.md) owns the adapter-specific permissions, page bounds and limitations.
 
-`listReachableConversations(botId, { expectedFingerprint, signal, cursor? })` returns `{ version: 1, conversations: [{ id, kind: 'group', name }], hasMore, cursor? }`. A page contains at most 100 conversations; an opaque cursor is at most 2048 characters. The native chat list proves membership and the native moderation query qualifies speaking permission. This initial slice includes `all_members` groups. Restricted moderator groups are not yet included.
+`listReachableConversations(botId, { expectedFingerprint, signal, cursor? })` returns `{ version: 1, conversations: [{ id, kind: 'group', name }], hasMore, cursor? }`. A page contains at most 100 conversations; an opaque cursor is at most 2048 characters. Each adapter qualifies native membership and speaking permission; discovery never substitutes for a fresh send preflight.
 
 `postConversationChecked(botId, conversationId, text, { expectedFingerprint, signal, beforeSend })` needs no saved target. The synchronous `beforeSend` callback is mandatory. Current membership and speaking permission are checked again, followed by the caller and registration fence immediately before the native message create. A success returns `{ sent: true, receipt: { version: 1, messageId, conversationId } }` with exact group correspondence.
 
