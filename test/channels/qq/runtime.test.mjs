@@ -24,6 +24,43 @@ class FakeBot extends EventEmitter {
   async sendText(target, text) { this.sent.push({ target, text }); }
 }
 
+test('QQ native notification hints are private, bounded observations without message authority', async () => {
+  const bot = new FakeBot();
+  const logs = [];
+  const runtime = new QqRuntime({
+    config: { botId: 'qq_bot', appId: 'app', ownerUserOpenid: 'owner' },
+    appSecret: 'secret', harness: { ensureRunning: async () => true }, state: {},
+    createBot: () => bot, typingMiddleware: () => 'typing', connectTimeoutMs: 100,
+    logger: { info: (...args) => logs.push(args) },
+  });
+  await runtime.start();
+  const raw = (eventType, data, instance = bot) =>
+    bot.emit('rawEvent', { bot: instance, eventType, data, receivedAt: Date.now(), state: {} });
+  raw('GROUP_MSG_RECEIVE', { group_openid: 'private-group', op_member_openid: 'private-member', content: 'private-content' });
+  raw('GROUP_MSG_REJECT', { group_openid: 'private-group' });
+  assert.equal(logs.length, 2);
+  assert.deepEqual(logs.map((entry) => entry[1].phase), ['enabled-observed', 'disabled-observed']);
+  assert.equal(logs[0][1].event, 'qq-group-notification');
+  assert.match(logs[0][1].groupDigest, /^[a-f0-9]{64}$/);
+  assert.equal(logs[0][1].groupDigest, logs[1][1].groupDigest);
+  assert.equal(logs[0][1].authority, 'observation-only');
+  assert.ok(!JSON.stringify(logs).includes('private-'));
+  const status = runtime.status;
+  raw('GROUP_MESSAGE_CREATE', { group_openid: 'private-group', content: 'ignored' });
+  raw('GROUP_MSG_RECEIVE', { group_openid: '' });
+  raw('GROUP_MSG_RECEIVE', { group_openid: 'x'.repeat(513) });
+  raw('GROUP_MSG_RECEIVE', { group_openid: 'private-group' }, new FakeBot());
+  assert.equal(logs.length, 2);
+  assert.deepEqual(runtime.status, status);
+  assert.deepEqual(bot.sent, []);
+  for (let index = 0; index < 100; ++index)
+    raw('GROUP_MSG_RECEIVE', { group_openid: `private-${index}` });
+  assert.equal(logs.length, 64);
+  await runtime.stop();
+  raw('GROUP_MSG_REJECT', { group_openid: 'private-group' });
+  assert.equal(logs.length, 64);
+});
+
 test('QQ runtime waits for gateway ready, installs typing, and stops its client', async () => {
   const bot = new FakeBot();
   let botOptions;

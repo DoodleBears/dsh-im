@@ -462,3 +462,9 @@ Discord 仅为已验证的独占 consumer 增加 `source-file-checked`、`reply-
 读取重新查询准确原消息，核对全部保留元信息，并使用刷新后的 HTTPS CDN 附件地址下载，不转发 Bot 凭据、不跟随跳转。下载受当前 lease、取消、声明／实际字节校验及 20 MiB 上限约束。canonical 持久化和 Workspace Grant 权限仍由 consumer 负责。
 
 明确选择的新结果最多 20 MiB；发送前重查来源身份、频道／thread 归属及 VIEW_CHANNEL、READ_MESSAGE_HISTORY、SEND_MESSAGES(_IN_THREADS)、ATTACH_FILES。Host 的 `beforeSend` 校验在唯一一次不自动重试的 multipart 请求前执行，`fail_if_not_exists=true`。返回的原生作者、频道、原消息引用、附件身份／名称／大小必须一致。明确拒绝与 `reply-result-unknown` 分开记录；未知结果不得盲目重试。结果只回原生原频道／thread，无回退目标或新 thread。本候选不升级产品 pin、不发布版本。验收见 [BotHarness #1002](https://github.com/BotHarness/BotHarness/issues/1002)。
+
+## QQ 群通知原生观察（BotHarness #1154）
+
+通过官方 SDK 的 raw-event hook，把 `GROUP_MSG_RECEIVE`、`GROUP_MSG_REJECT` 记录为有界开发诊断。每次连接最多记录 64 次观察，仅包含本地 Bot 身份、群定位的 SHA-256 摘要、本地观察时间及开启／关闭提示；不记录群／成员 OpenID、原始事件内容或凭据，忽略非法事件与已停止／替换连接的回调。这些事件不进入 Source／Inbox，不改变能力或授权，不触发发送或重试保留结果，也不能证明当前主动发送资格；仍需不依赖来源的实际 API 接收回执及原群确认。连接开始前发生的开关变化不能补查。
+
+第一方依据：[QQ 事件订阅与群通知事件](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html)。

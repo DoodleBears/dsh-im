@@ -1,4 +1,5 @@
 import { isQqVoiceAttachment } from './voice-attachment.mjs';
+import { createHash } from 'node:crypto';
 import { extractConnectionEvidence, createConnectionDiagnostics, atConnectionStage } from '../shared/connection-error.mjs';
 import { QQBot, contentSanitizer, typingIndicator } from '@tencent-connect/qqbot-nodejs';
 
@@ -447,6 +448,25 @@ export class QqRuntime {
         );
       });
     };
+    let notificationObservations = 0;
+    const onRawEvent = (context) => {
+      if (controller.signal.aborted || this.#bot !== bot || context?.bot !== bot
+        || notificationObservations >= 64) return;
+      if (!['GROUP_MSG_RECEIVE', 'GROUP_MSG_REJECT'].includes(context.eventType)) return;
+      const group = context.data?.group_openid;
+      if (typeof group !== 'string' || !group.trim() || group.length > 512) return;
+      notificationObservations += 1;
+      const evidence = {
+        event: 'qq-group-notification',
+        phase: context.eventType === 'GROUP_MSG_RECEIVE' ? 'enabled-observed' : 'disabled-observed',
+        authority: 'observation-only',
+        botId: this.#config.botId,
+        groupDigest: createHash('sha256').update(group).digest('hex'),
+        observedAt: new Date().toISOString(),
+      };
+      try { this.#logger.info?.('[dsh-im:qq:notification]', evidence); } catch {}
+    };
+    bot.on('rawEvent', onRawEvent);
     bot.on('ready', onReady);
     bot.on('resumed', onReady);
     bot.on('error', onError);
