@@ -17,6 +17,24 @@ const channelId = '444444444444444444';
 const otherId = '555555555555555555';
 const sentId = '999999999999999999';
 const logger = { warn() {}, error() {}, info() {} };
+test('public Discord posting refuses a Controller closed in the final consumer fence', async t => {
+  const f = await fixture(t, true);
+  let fences = 0;
+  let closing;
+  let error;
+  try {
+    await f.service.postConversationChecked(f.botId, channelId, 'Result', {
+      ...f.options, beforeSend: () => {
+        if (++fences === 2) closing = f.controller.close();
+        return true;
+      },
+    });
+  } catch (caught) { error = caught; }
+  await closing;
+  assert.equal(fences, 2);
+  assert.equal(f.sends.length, 0);
+  assert.ok(error);
+});
 class Socket {
   listeners = new Map(); readyState = 1;
   addEventListener(name, listener) { this.listeners.set(name, listener); }

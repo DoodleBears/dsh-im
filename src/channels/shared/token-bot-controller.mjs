@@ -346,7 +346,10 @@ export class TokenBotController {
       return runtime.postConversationChecked(conversationId, text, { ...options, beforeSend: () => {
         if (this.#closed) throw Object.assign(new Error('provider-unavailable'), { code: 'provider-unavailable' });
         options.signal?.throwIfAborted();
-        return options.beforeSend?.() === true;
+        const allowed = options.beforeSend?.() === true;
+        if (this.#closed) throw Object.assign(new Error('provider-unavailable'), { code: 'provider-unavailable' });
+        options.signal?.throwIfAborted();
+        return allowed;
       } });
     });
   }

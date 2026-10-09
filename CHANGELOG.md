@@ -30,6 +30,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- checked 群主动发送在最终消费者授权回调后重新检查 Controller 关闭与取消，阻止回调内关闭 Provider 后仍发出消息。
+  Checked group posting rechecks Controller closure and cancellation after the final consumer callback, preventing a send when that callback closes the Provider.
+
 - checked 群主动发送在账户核验失败时返回公开的 `send-preflight-unavailable`，不直接暴露 Provider 内部错误；未启动发送与发送后未知结果保持区分。
   Checked group posting reports account-check failures as public `send-preflight-unavailable` errors instead of exposing internal Provider errors, distinguishing unstarted sends from unknown dispatch outcomes.
 

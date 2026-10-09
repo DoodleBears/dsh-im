@@ -14,6 +14,24 @@ const identity = { team_id: 'T12345678', user_id: 'U12345678', bot_id: 'B1234567
 const bot = { id: identity.bot_id, user_id: identity.user_id, app_id: 'A12345678' };
 const channelId = 'C12345678';
 const logger = { info() {}, warn() {}, error() {}, debug() {} };
+test('public Slack posting refuses a Controller closed in the final consumer fence', async t => {
+  const f = await fixture(t, true);
+  let fences = 0;
+  let closing;
+  let error;
+  try {
+    await f.service.postConversationChecked(f.botId, channelId, 'Result', {
+      ...f.options, beforeSend: () => {
+        if (++fences === 2) closing = f.controller.close();
+        return true;
+      },
+    });
+  } catch (caught) { error = caught; }
+  await closing;
+  assert.equal(fences, 2);
+  assert.equal(f.sends.length, 0);
+  assert.ok(error);
+});
 class Socket {
   listeners = new Map(); readyState = 1;
   addEventListener(name, listener) { this.listeners.set(name, listener); }
