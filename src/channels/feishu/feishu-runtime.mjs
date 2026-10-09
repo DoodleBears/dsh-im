@@ -815,6 +815,7 @@ export class FeishuRuntime {
       activeSignal.throwIfAborted();
       if (beforeSend !== undefined && beforeSend() !== true)
         throw Object.assign(new Error('send-permission-denied'), { code: 'send-permission-denied' });
+      activeSignal.throwIfAborted();
       return this.#client.im.v1.message.create({
       params: { receive_id_type: receiveIdType },
       data: {

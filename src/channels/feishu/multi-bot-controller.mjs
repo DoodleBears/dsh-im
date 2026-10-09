@@ -716,7 +716,10 @@ export class MultiBotDshFeishuController {
       runtime => runtime.postConversationChecked(conversationId, text, { ...options, beforeSend: () => {
         this.#assertOpen('provider-unavailable');
         options.signal?.throwIfAborted();
-        return options.beforeSend?.() === true;
+        const allowed = options.beforeSend?.() === true;
+        this.#assertOpen('provider-unavailable');
+        options.signal?.throwIfAborted();
+        return allowed;
       } }));
   }
 
