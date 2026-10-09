@@ -312,6 +312,16 @@ async function checkedTarget(fx) {
   return createHash('sha256').update(JSON.stringify({kind: target.kind, route: target.route})).digest('hex');
 }
 
+test('checked saved-target sending honors the caller final authorization before any native effect', async () => {
+  const fx = checkedFixture();
+  fx.service.registerAdapter(fx.adapter);
+  const digest = await checkedTarget(fx);
+  await assert.rejects(fx.service.sendChecked('bot_one', 'self', 'hello', {
+    expectedFingerprint: fx.fingerprint, expectedTargetDigest: digest, beforeSend: () => false,
+  }), { code: 'send-permission-denied' });
+  assert.equal(fx.adapter.sends.length, 0);
+});
+
 test('checked sending rejects changed targets and account identities before a side effect', async () => {
   const fx = checkedFixture(); fx.service.registerAdapter(fx.adapter);
   const digest = await checkedTarget(fx);
