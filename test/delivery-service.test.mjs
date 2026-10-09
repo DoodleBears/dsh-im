@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { createDeliveryAdapter } from '../plugin-src/host/delivery-adapter.mjs';
 import { createDeliveryService } from '../plugin-src/host/delivery-service.mjs';
+import { FeishuRuntime } from '../src/channels/feishu/feishu-runtime.mjs';
 
 function memoryAdapter({ channel = 'telegram', botId = 'bot_one' } = {}) {
   const targets = new Map();
@@ -343,6 +344,83 @@ function checkedFixture() {
     connected: true, capabilities: ['proactive-text-checked'], account: {fingerprint}});
   return {service, adapter, fingerprint};
 }
+
+test('reachable group posting needs no saved target and returns a checked native receipt', async () => {
+  const fx = checkedFixture();
+  fx.adapter.describeAccount = async () => ({version: 1, connected: true,
+    capabilities: ['reachable-conversations-checked'], account: {fingerprint: fx.fingerprint}});
+  fx.adapter.listReachableConversations = async () => ({version: 1,
+    conversations: [{id: 'oc_new_group', kind: 'group', name: 'New QA group'}], hasMore: false});
+  let posts = 0;
+  fx.adapter.postConversationChecked = async (_botId, conversationId, text, options) => {
+    assert.equal(conversationId, 'oc_new_group');
+    assert.equal(text, 'First post');
+    assert.equal(options.beforeSend(), true);
+    posts++;
+    return {sent: true, receipt: {version: 1, messageId: 'om_first', conversationId}};
+  };
+  fx.service.registerAdapter(fx.adapter);
+  const options = {expectedFingerprint: fx.fingerprint};
+  assert.deepEqual(await fx.service.listReachableConversations('bot_one', options), {
+    version: 1, conversations: [{id: 'oc_new_group', kind: 'group', name: 'New QA group'}], hasMore: false,
+  });
+  assert.deepEqual(await fx.service.postConversationChecked('bot_one', 'oc_new_group', 'First post', {
+    ...options, beforeSend: () => true,
+  }), {sent: true, receipt: {version: 1, messageId: 'om_first', conversationId: 'oc_new_group'}});
+  assert.equal(posts, 1);
+  assert.deepEqual((await fx.service.listTargets('bot_one')).targets, []);
+});
+
+test('public reachable posting checks native group membership and speech permission again before sending', async () => {
+  let allowed = true;
+  let readUnavailable = false;
+  const sent = [];
+  const client = { im: { v1: {
+    chat: { list: async () => ({code: 0, data: {items: [{chat_id: 'oc_new', name: 'New group'}], has_more: false}}) },
+    chatModeration: { get: async ({path}) => {
+      if (readUnavailable) throw new Error('Native permission read unavailable');
+      return {code: path.chat_id === 'oc_new' ? 0 : 999,
+        data: {moderation_setting: allowed ? 'all_members' : 'only_owner', has_more: false}};
+    } },
+    message: { create: async payload => {sent.push(payload); return {code: 0,
+      data: {message_id: 'om_new', chat_id: payload.data.receive_id}};} },
+  } } };
+  const runtime = new FeishuRuntime({appId: 'cli_test', appSecret: 'test-only', ownerOpenIds: ['ou_owner'],
+    consumerMode: 'external-consumer', state: {hasSeen: () => false}, harness: {ensureRunning: async () => {}},
+    lark: {
+      Domain: {Feishu: 'feishu-domain'}, LoggerLevel: {info: 'info'},
+      Client: class { constructor() {return client;} },
+      EventDispatcher: class { register() {return this;} },
+      WSClient: class { constructor(options) {this.options = options;} async start() {this.options.onReady();}
+        getConnectionStatus() {return {state: 'connected'};} close() {} },
+    },
+  });
+  await runtime.start();
+  try {
+    const fx = checkedFixture();
+    fx.adapter.describeAccount = async () => ({version: 1, connected: true,
+      capabilities: ['reachable-conversations-checked'], account: {fingerprint: fx.fingerprint}});
+    fx.adapter.listReachableConversations = (_id, options) => runtime.listReachableConversations(options);
+    fx.adapter.postConversationChecked = (_id, conversationId, text, options) => runtime.postConversationChecked(conversationId, text, options);
+    fx.service.registerAdapter(fx.adapter);
+    const options = {expectedFingerprint: fx.fingerprint, beforeSend: () => true};
+    assert.deepEqual((await fx.service.listReachableConversations('bot_one', options)).conversations,
+      [{id: 'oc_new', kind: 'group', name: 'New group'}]);
+    allowed = false;
+    await assert.rejects(fx.service.postConversationChecked('bot_one', 'oc_new', 'No permission', options), {code: 'send-permission-denied'});
+    await assert.rejects(fx.service.postConversationChecked('bot_one', 'oc_unjoined', 'Unjoined', options), {code: 'send-permission-denied'});
+    assert.equal(sent.length, 0);
+    allowed = true;
+    readUnavailable = true;
+    await assert.rejects(fx.service.postConversationChecked('bot_one', 'oc_new', 'Read unavailable', options),
+      {code: 'send-preflight-unavailable'});
+    assert.equal(sent.length, 0);
+    readUnavailable = false;
+    const result = await fx.service.postConversationChecked('bot_one', 'oc_new', 'First native post', options);
+    assert.equal(result.receipt.messageId, 'om_new');
+    assert.equal(sent.length, 1);
+  } finally {await runtime.stop();}
+});
 
 test('Weixin checked post requires a current final fence and keeps client acknowledgement separate', async () => {
   const fx = checkedFixture(); fx.adapter.channel = 'weixin';
