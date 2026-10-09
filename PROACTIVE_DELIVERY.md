@@ -468,3 +468,6 @@ Discord 仅为已验证的独占 consumer 增加 `source-file-checked`、`reply-
 通过官方 SDK 的 raw-event hook，把 `GROUP_MSG_RECEIVE`、`GROUP_MSG_REJECT` 记录为有界开发诊断。每次连接最多记录 64 次观察，仅包含本地 Bot 身份、群定位的 SHA-256 摘要、本地观察时间及开启／关闭提示；不记录群／成员 OpenID、原始事件内容或凭据，忽略非法事件与已停止／替换连接的回调。这些事件不进入 Source／Inbox，不改变能力或授权，不触发发送或重试保留结果，也不能证明当前主动发送资格；仍需不依赖来源的实际 API 接收回执及原群确认。连接开始前发生的开关变化不能补查。
 
 第一方依据：[QQ 事件订阅与群通知事件](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html)。
+
+
+QQ 开启「获取群内全部消息」后使用 `GROUP_MESSAGE_CREATE` 载荷。checked 文字接收仅保留平台明确标记的自身 @（`mentions[].is_you === true`），不自动启用普通消息参与。公开连接诊断仅提供有界 @ 数量和自身 @ 布尔值，不含身份值或正文。
