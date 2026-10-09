@@ -240,7 +240,7 @@ export class SlackController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'slack', account,
         connected: this.#runtimes.get(botId)?.status?.ready === true,
-        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked',
+        capabilities: ['reachable-conversations-checked', 'proactive-text-checked', 'proactive-receipt-checked', 'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked',
           'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'reply-mention-checked',
           'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
     });
@@ -274,6 +274,37 @@ export class SlackController {
       throw slackRefusal('capability-unavailable');
     const lease = this.#inboundConsumers.signalFor(botId, expectedFingerprint);
     return { runtime, signal: signal ? AbortSignal.any([signal, lease]) : lease };
+  }
+
+  async #reachableRuntime(botId, options) {
+    const config = this.#configStore.get(botId);
+    if (!config) throw slackRefusal('unknown-bot');
+    const account = await this.#deliveryAccount(config, options.signal);
+    if (account.fingerprint !== options.expectedFingerprint) throw slackRefusal('account-changed');
+    const runtime = this.#runtimes.get(botId);
+    if (config.consumerMode !== 'external-consumer' || !runtime?.status?.ready) throw slackRefusal('capability-unavailable');
+    return runtime;
+  }
+
+  async listReachableConversations(botId, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const runtime = await this.#reachableRuntime(botId, options);
+      const result = await runtime.listReachableConversations(options);
+      if (this.#closed) throw slackRefusal('provider-unavailable');
+      options.signal?.throwIfAborted();
+      return result;
+    });
+  }
+
+  async postConversationChecked(botId, conversationId, text, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const runtime = await this.#reachableRuntime(botId, options);
+      return runtime.postConversationChecked(conversationId, text, { ...options, beforeSend: () => {
+        if (this.#closed) throw slackRefusal('provider-unavailable');
+        options.signal?.throwIfAborted();
+        return options.beforeSend?.() === true;
+      } });
+    });
   }
 
   async qualifyReplyChecked(botId, route, options = {}) {

@@ -4,6 +4,7 @@ import { t } from '../shared/i18n.mjs';
 import { createSlackHistoryReader } from './history-reader.mjs';
 import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
 import { SlackApi } from './slack-api.mjs';
+import { listSlackReachable, checkSlackPost } from './reachable-conversations.mjs';
 import { createSlackBridgeStatus, SlackHarnessBridge } from './slack-bridge.mjs';
 import { normalizeSlackExternalText, slackReplyMentions, verifiedSlackAccount, slackRefusal, slackTimestamp } from './external-consumer.mjs';
 
@@ -525,6 +526,36 @@ export class SlackRuntime {
       channelId,
       ...(threadTs ? { threadTs } : {}),
     }, text, options);
+  }
+
+  #reachableLifetime(signal, fingerprint) {
+    if (!this.#status.ready || !this.#account || !this.#api || !this.#abortController
+      || this.#config.consumerMode !== 'external-consumer') throw slackRefusal('capability-unavailable');
+    if (fingerprint !== this.#account.fingerprint) throw slackRefusal('account-changed');
+    const generation = this.#generation;
+    const combined = signal ? AbortSignal.any([signal, this.#abortController.signal]) : this.#abortController.signal;
+    return { api: this.#api, account: this.#account, signal: combined, assertCurrent: () => {
+      combined.throwIfAborted();
+      if (generation !== this.#generation || this.#stopped || !this.#status.ready) throw slackRefusal('capability-unavailable');
+    } };
+  }
+
+  async listReachableConversations({ signal, expectedFingerprint, cursor } = {}) {
+    return listSlackReachable(this.#reachableLifetime(signal, expectedFingerprint), cursor);
+  }
+
+  async postConversationChecked(conversationId, text, options = {}) {
+    if (typeof text !== 'string' || !text.trim() || text.length > 40000) throw slackRefusal('bad-request');
+    if (options.format !== undefined && options.format !== 'plain') throw slackRefusal('capability-unavailable');
+    const checked = this.#reachableLifetime(options.signal, options.expectedFingerprint);
+    await checkSlackPost(checked, conversationId, options.beforeSend);
+    try {
+      const sent = await this.#postChecked({ channelId: conversationId, text, signal: checked.signal });
+      return { sent: true, receipt: { version: 1, messageId: sent.ts, conversationId: sent.channel } };
+    } catch (error) {
+      if (error?.code === 'reply-permission-denied') throw slackRefusal('send-permission-denied');
+      throw slackRefusal('send-result-unknown');
+    }
   }
 
   async #verifyChannel(channelId, signal) {

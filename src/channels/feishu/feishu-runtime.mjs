@@ -708,12 +708,28 @@ export class FeishuRuntime {
     const client = this.#client;
     // This native endpoint requires the caller to be a member. Metadata or a
     // previously observed inbound message is insufficient proof of membership.
-    const response = await client.im.v1.chatModeration.get({path: {chat_id: conversationId},
-      params: {user_id_type: 'open_id', page_size: 100}});
-    signal?.throwIfAborted();
-    this.#abortController.signal.throwIfAborted();
-    if (this.#client !== client) throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
-    return response?.code === 0 && response.data?.moderation_setting === 'all_members';
+    let cursor;
+    let setting;
+    const seen = new Set();
+    for (let page = 0; page < 10; page++) {
+      const response = await client.im.v1.chatModeration.get({path: {chat_id: conversationId},
+        params: {user_id_type: 'open_id', page_size: 100, ...(cursor ? {page_token: cursor} : {})}});
+      signal?.throwIfAborted();
+      this.#abortController.signal.throwIfAborted();
+      if (this.#client !== client) throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+      if (response?.code !== 0) return false;
+      const data = response.data;
+      if (page === 0) setting = data?.moderation_setting;
+      if (data?.moderation_setting !== setting) return false;
+      if (setting === 'all_members') return true;
+      if (!this.#botOpenId || !['only_owner', 'moderator_list'].includes(setting) || !Array.isArray(data.items)) return false;
+      if (data.items.some(item => item.user_id_type === 'open_id' && item.user_id === this.#botOpenId)) return true;
+      if (data.has_more !== true) return false;
+      cursor = data.page_token;
+      if (typeof cursor !== 'string' || !cursor || cursor.length > 2048 || seen.has(cursor)) break;
+      seen.add(cursor);
+    }
+    throw Object.assign(new Error('send-preflight-unavailable'), { code: 'send-preflight-unavailable' });
   }
 
   async listReachableConversations({ signal, cursor } = {}) {

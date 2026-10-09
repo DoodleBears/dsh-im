@@ -316,6 +316,41 @@ export class TokenBotController {
     return { runtime, signal: signal ? AbortSignal.any([signal, lease]) : lease };
   }
 
+  async #reachableRuntime(botId, options) {
+    if (!this.#checkedDelivery?.capabilities?.includes('reachable-conversations-checked'))
+      throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+    const config = this.#configStore.get(botId);
+    if (!config) throw Object.assign(new Error('unknown-bot'), { code: 'unknown-bot' });
+    const account = await this.#checkedAccount(config, options.signal);
+    if (account.fingerprint !== options.expectedFingerprint)
+      throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+    const runtime = this.#runtimes.get(botId);
+    if (config.consumerMode !== 'external-consumer' || !runtime?.status?.ready)
+      throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+    return runtime;
+  }
+
+  async listReachableConversations(botId, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const runtime = await this.#reachableRuntime(botId, options);
+      const result = await runtime.listReachableConversations(options);
+      if (this.#closed) throw Object.assign(new Error('provider-unavailable'), { code: 'provider-unavailable' });
+      options.signal?.throwIfAborted();
+      return result;
+    });
+  }
+
+  async postConversationChecked(botId, conversationId, text, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const runtime = await this.#reachableRuntime(botId, options);
+      return runtime.postConversationChecked(conversationId, text, { ...options, beforeSend: () => {
+        if (this.#closed) throw Object.assign(new Error('provider-unavailable'), { code: 'provider-unavailable' });
+        options.signal?.throwIfAborted();
+        return options.beforeSend?.() === true;
+      } });
+    });
+  }
+
   async qualifyReplyChecked(botId, route, options = {}) {
     return this.#withBotTransition(botId, async () => {
       const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);

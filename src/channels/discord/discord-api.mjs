@@ -132,6 +132,16 @@ export class DiscordApi {
     return this.#request('applications/@me', { ...options, method: 'GET' });
   }
 
+  getCurrentGuilds({ after, signal } = {}) {
+    const query = new URLSearchParams({ limit: '2' });
+    if (after !== undefined) query.set('after', snowflake(after, 'guild boundary'));
+    return this.#request(`users/@me/guilds?${query}`, { method: 'GET', signal });
+  }
+
+  getGuildChannels({ guildId, signal } = {}) {
+    return this.#request(`guilds/${snowflake(guildId, 'guild id')}/channels`, { method: 'GET', signal });
+  }
+
   getGuild({ guildId, signal } = {}) {
     return this.#request(`guilds/${snowflake(guildId, 'guild id')}`, { method: 'GET', signal });
   }

@@ -749,7 +749,11 @@ export class MultiBotDshFeishuController {
 
   async postConversationChecked(botId, conversationId, text, options = {}) {
     return this.#withReachableRuntime(botId, options,
-      runtime => runtime.postConversationChecked(conversationId, text, options));
+      runtime => runtime.postConversationChecked(conversationId, text, { ...options, beforeSend: () => {
+        this.#assertOpen('provider-unavailable');
+        options.signal?.throwIfAborted();
+        return options.beforeSend?.() === true;
+      } }));
   }
 
   async sendProactiveText(botId, target, text, options = {}) {
