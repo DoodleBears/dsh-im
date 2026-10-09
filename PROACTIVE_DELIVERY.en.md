@@ -414,3 +414,9 @@ const page = await ctx.dshIm.historyChecked(botId, event.reply,
   { expectedFingerprint: account.account.fingerprint, signal: lifecycleSignal });
 // Persist/reconcile only after application authorization. Do not turn reads into intake.
 ```
+
+## QQ native group notification observations (BotHarness #1154)
+
+The official SDK's raw-event hook reports `GROUP_MSG_RECEIVE` and `GROUP_MSG_REJECT` as bounded developer diagnostics. Each connection records at most 64 observations with its local Bot identity, a SHA-256 group digest, local observation time and enabled/disabled hint. Group/member OpenIDs, raw event contents and credentials are omitted; malformed events and callbacks from stopped or replaced connections are ignored. These events do not enter a Source/Inbox, change capabilities or permission, trigger a send, retry a retained result or prove current proactive eligibility. An actual source-free API acceptance receipt and group-side confirmation are still required. The hook does not recover switches changed before this connection started.
+
+First-party reference: [QQ event subscription and group notification events](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html).
