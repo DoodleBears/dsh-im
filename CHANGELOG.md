@@ -30,6 +30,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- checked 群主动发送在账户核验失败时返回公开的 `send-preflight-unavailable`，不直接暴露 Provider 内部错误；未启动发送与发送后未知结果保持区分。
+  Checked group posting reports account-check failures as public `send-preflight-unavailable` errors instead of exposing internal Provider errors, distinguishing unstarted sends from unknown dispatch outcomes.
+
 - Feishu/Lark 独占外部文本接收在原消息、发送人和话题路由核验后补充原生发送人名称；可选名称读取最多等待 1.5 秒，权限缺失、名称缺失或查询失败保留 ID 回退和原收件行为，取消或连接替换仍拒绝过期交付。此候选修复未发布，真实 BotHarness 验收单独记录于 BotHarness/BotHarness#1070。
   Feishu/Lark exclusive external text intake enriches the native sender name after checking the exact message, sender and topic route. Optional reads wait at most 1.5 seconds; unavailable permissions, names or lookups preserve ID fallback and intake, while cancellation or connection replacement still refuses stale delivery. This candidate fix is unreleased; real BotHarness qualification is tracked separately in BotHarness/BotHarness#1070.
 
