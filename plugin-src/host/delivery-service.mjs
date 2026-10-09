@@ -426,24 +426,26 @@ export class DeliveryService {
     if (typeof conversationId !== 'string' || !conversationId || conversationId.length > 512
       || typeof text !== 'string' || !text.trim() || typeof options.beforeSend !== 'function')
       throw deliveryError('bad-request');
-    const { id, registration, signal } = await this.#reachableRegistration(botId, options);
-    const fence = () => {
-      this.#assertRegistered(registration);
-      cancellation(signal);
-      const allowed = options.beforeSend() === true;
-      this.#assertRegistered(registration);
-      cancellation(signal);
-      return allowed;
-    };
-    if (!fence()) throw deliveryError('send-permission-denied');
+    let failureCode = 'send-preflight-unavailable';
     try {
+      const { id, registration, signal } = await this.#reachableRegistration(botId, options);
+      const fence = () => {
+        this.#assertRegistered(registration);
+        cancellation(signal);
+        const allowed = options.beforeSend() === true;
+        this.#assertRegistered(registration);
+        cancellation(signal);
+        return allowed;
+      };
+      if (!fence()) throw deliveryError('send-permission-denied');
+      failureCode = 'send-result-unknown';
       const result = await registration.adapter.postConversationChecked(id, conversationId, text,
         { ...options, signal, beforeSend: fence });
       if (result?.sent !== true || result.receipt?.version !== 1 || result.receipt.conversationId !== conversationId
         || typeof result.receipt.messageId !== 'string' || !result.receipt.messageId || result.receipt.messageId.length > 512)
         throw deliveryError('send-result-unknown');
       return { sent: true, receipt: { version: 1, messageId: result.receipt.messageId, conversationId } };
-    } catch (error) { throw publicOperationError(error, 'send-result-unknown'); }
+    } catch (error) { throw publicOperationError(error, failureCode); }
   }
 
   async consumeInbound(botId, options = {}) {

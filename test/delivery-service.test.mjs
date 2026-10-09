@@ -4,6 +4,19 @@ import test from 'node:test';
 import { createDeliveryAdapter } from '../plugin-src/host/delivery-adapter.mjs';
 import { createDeliveryService } from '../plugin-src/host/delivery-service.mjs';
 
+test('reachable posting exposes a bounded preflight refusal without dispatching on account lookup failure', async () => {
+  const service = createDeliveryService();
+  const adapter = memoryAdapter();
+  adapter.describeAccount = async () => { throw new Error('private provider diagnostic'); };
+  adapter.listReachableConversations = async () => assert.fail('No discovery after failed account lookup');
+  adapter.postConversationChecked = async () => assert.fail('No dispatch after failed account lookup');
+  service.registerAdapter(adapter);
+  await assert.rejects(service.postConversationChecked('bot_one', 'oc_group', 'Result', {
+    expectedFingerprint: 'a'.repeat(64), beforeSend: () => true,
+  }), { code: 'send-preflight-unavailable', message: 'send-preflight-unavailable' });
+  assert.equal(adapter.sends.length, 0);
+});
+
 function memoryAdapter({ channel = 'telegram', botId = 'bot_one' } = {}) {
   const targets = new Map();
   const sends = [];

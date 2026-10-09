@@ -13,6 +13,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- checked 群主动发送在账户核验失败时返回公开的 `send-preflight-unavailable`，不直接暴露 Provider 内部错误；未启动发送与发送后未知结果保持区分。
+  Checked group posting reports account-check failures as public `send-preflight-unavailable` errors instead of exposing internal Provider errors, distinguishing unstarted sends from unknown dispatch outcomes.
+
 - checked 保存目标发送现在遵守调用方的最终授权回调；旧调用方未提供回调时仍沿用既有行为。
   Checked saved-target sending now honors the caller's final authorization callback while preserving existing behavior for callers that omit it.
 
