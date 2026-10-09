@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { normalizeDeliveryTarget } from './delivery-adapter.mjs';
+import { AppSetupService } from './app-setup.mjs';
 
 const BOT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const TARGET_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,128}$/;
@@ -58,6 +59,8 @@ const DELIVERY_ERROR_CODES = new Set([
   'private-context-rejected',
   'send-permission-denied',
   'send-rate-limited',
+  'typing-unavailable',
+  'typing-conflict',
   'card-provider-rejected',
 ]);
 
@@ -143,10 +146,12 @@ function sessionSyncState(value, available) {
 }
 
 export class DeliveryService {
+  appSetup;
   #adapters = new Map();
   #unavailableSessionSyncChannels;
 
-  constructor({ unavailableSessionSyncChannels = [] } = {}) {
+  constructor({ unavailableSessionSyncChannels = [], logger } = {}) {
+    this.appSetup = new AppSetupService({ describeBot: (id) => this.describeBot(id), logger });
     if (!Array.isArray(unavailableSessionSyncChannels)
       || unavailableSessionSyncChannels.some((channel) => (
         typeof channel !== 'string' || !CHANNEL_PATTERN.test(channel)
@@ -427,6 +432,29 @@ export class DeliveryService {
       return result;
     }
     catch (error) { const safe = publicOperationError(error); throw deliveryError(safe.code, safe.code); }
+  }
+
+  async beginTypingChecked(botId, route, options = {}) {
+    const id = botIdOf(botId);
+    if (!(options.signal instanceof AbortSignal)) throw deliveryError('bad-request');
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')
+      || typeof options.beforeSend !== 'function') throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (registration.adapter.channel !== 'weixin'
+      || typeof registration.adapter.beginTypingChecked !== 'function')
+      throw deliveryError('capability-unavailable');
+    const signal = AbortSignal.any([options.signal, registration.controller.signal]);
+    const beforeSend = () => {
+      cancellation(signal);
+      this.#assertRegistered(registration);
+      return options.beforeSend() === true;
+    };
+    try {
+      return await registration.adapter.beginTypingChecked(id, structuredClone(route), {
+        ...options, signal, beforeSend,
+      });
+    } catch (error) { throw publicOperationError(error, 'typing-unavailable'); }
   }
 
   async replyChecked(botId, route, text, options = {}) {

@@ -63,6 +63,7 @@ const MESSAGES = Object.freeze({
   'workspace-not-found': '工作区目录不存在。',
   'workspace-not-directory': '工作区路径不是目录。',
   'workspace-bot-not-found': '找不到要修改的机器人。',
+  'account-already-configured': '该微信账号已在本机配置，请选择已有应用。',
   'agent-preset-invalid': 'Agent Preset 无效。',
   'agent-preset-unavailable': 'Agent Preset 不存在或不可用。',
   'model-selection-invalid': '模型无效。',

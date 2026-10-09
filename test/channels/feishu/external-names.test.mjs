@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { externalSenderName } from '../../../src/channels/feishu/external-names.mjs';
+import { createExternalNameCache, externalConversationName, externalNames, externalSenderName } from '../../../src/channels/feishu/external-names.mjs';
 
 const evidence = Object.freeze({ version: 1, channel: 'feishu', botId: 'bot', fingerprint: 'a'.repeat(64),
   eventId: 'event', messageId: 'message', actor: Object.freeze({ kind: 'user', id: 'actor' }),
@@ -77,4 +77,42 @@ test('caller cancellation refuses even when the native lookup throws or ignores 
 test('existing checked sender names need no further lookup', async () => {
   const named = { ...evidence, actor: { ...evidence.actor, name: 'Already known' } };
   assert.equal(await externalSenderName(client(() => { throw new Error('must not query'); }), named), named);
+});
+
+const chatClient = (get, chat) => ({ im: { v1: { message: { get }, chat: { get: chat } } } });
+
+test('group names come from the native chat and are cached per account', async () => {
+  const cache = createExternalNameCache();
+  let calls = 0;
+  const api = chatClient(async () => ({ code: 0, data: { items: [source()] } }), async (request) => {
+    calls++;
+    assert.deepEqual(request, { path: { chat_id: 'chat' } });
+    return { code: 0, data: { name: ' BH Cloud QA ' } };
+  });
+  const first = await externalNames(api, evidence, { cache });
+  assert.deepEqual(first.conversation, { kind: 'group', id: 'chat', name: 'BH Cloud QA' });
+  assert.equal(first.actor.name, 'Doodle <QA>');
+  const second = await externalNames(chatClient(() => { throw new Error('must not query'); },
+    () => { throw new Error('must not query'); }), evidence, { cache });
+  assert.deepEqual(second.conversation, first.conversation);
+  assert.equal(second.actor.name, 'Doodle <QA>');
+  assert.equal(calls, 1);
+});
+
+test('a failed group lookup keeps the ID and is retried only after a short pause', async () => {
+  let now = 0;
+  const cache = createExternalNameCache({ now: () => now });
+  let calls = 0;
+  const api = chatClient(async () => ({}), async () => { calls++; return { code: 99991672 }; });
+  assert.equal(await externalConversationName(api, evidence, { cache }), evidence);
+  assert.equal(await externalConversationName(api, evidence, { cache }), evidence);
+  assert.equal(calls, 1);
+  now += 61_000;
+  await externalConversationName(api, evidence, { cache });
+  assert.equal(calls, 2);
+});
+
+test('direct messages need no group lookup', async () => {
+  const dm = { ...evidence, conversation: { kind: 'dm', id: 'chat' } };
+  assert.equal(await externalConversationName(chatClient(null, () => { throw new Error('must not query'); }), dm), dm);
 });

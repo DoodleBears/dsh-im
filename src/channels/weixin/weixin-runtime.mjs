@@ -1,4 +1,5 @@
 import { checkedWeixinRoute, weixinRefusal } from './external-consumer.mjs';
+import { CheckedWeixinTyping } from './external-typing.mjs';
 import { readWeixinExternalFile, replyWeixinExternalFile } from './external-files.mjs';
 import { createWeixinDiagnostics } from './connection-error.mjs';
 import { DEFAULT_WEIXIN_MAX_MESSAGE_CHARS, WeixinApiError, rejectedProviderResponse } from './weixin-api.mjs';
@@ -132,6 +133,7 @@ export class WeixinRuntime {
   #abortController = null;
   #monitor = null;
   #starting = null;
+  #typing;
 
   constructor({
     api,
@@ -164,6 +166,7 @@ export class WeixinRuntime {
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#maxMessageChars = maxMessageChars;
     this.#startRetryDelaysMs = startRetryDelays(startRetryDelaysMs);
+    this.#typing = new CheckedWeixinTyping({ api, baseUrl: config.baseUrl, token, logger });
   }
 
   get status() {
@@ -347,12 +350,26 @@ export class WeixinRuntime {
       : readWeixinExternalFile(this.#api, source, file, { signal, assertCurrent });
   }
 
+  async beginTypingChecked(route, { account, signal, beforeSend, onState } = {}) {
+    if (!this.#status.ready || !this.#abortController || typeof beforeSend !== 'function')
+      throw weixinRefusal('capability-unavailable');
+    const checked = await this.qualifyReplyChecked(route, { account, signal });
+    const source = this.#state.externalReplySource(checked.messageId);
+    return this.#typing.start({ toUserId: checked.actorId, contextToken: source.contextToken,
+      signal: AbortSignal.any([signal, this.#abortController.signal]), onState,
+      validate: () => {
+        checkedWeixinRoute(route, account, this.#state.externalReplySource(route.messageId));
+        return beforeSend() === true;
+      } });
+  }
+
   async stop() {
     const warnings = [];
     const monitor = this.#monitor;
     const bridge = this.#bridge;
     const wasStarted = Boolean(this.#abortController || monitor || this.#status.ready);
     this.#abortController?.abort();
+    await this.#typing.close();
     this.#abortController = null;
     this.#monitor = null;
     await bridge?.close?.();

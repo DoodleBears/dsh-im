@@ -111,6 +111,7 @@ test('Socket Mode ack waits for canonical acceptance and never creates a standal
     f.socket.packet({ type: 'events_api', envelope_id: 'env-1', payload: payload() });
     await flush();
     assert.equal(received.actor.name, 'QA Human');
+    assert.deepEqual(received.conversation, { kind: 'group', id: 'C12345678', name: 'qa' });
     assert.equal(f.socket.sent.length, 0);
     accept({ accepted: true }); await flush();
     assert.deepEqual(f.socket.sent, [{ envelope_id: 'env-1' }]);
