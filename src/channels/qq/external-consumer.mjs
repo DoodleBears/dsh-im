@@ -40,7 +40,10 @@ export function verifiedQqAccount(appId, user) {
 
 /** QQ group and member OpenIDs belong to this authenticated application. */
 export function normalizeQqExternalText(message, { botId, account }) {
-  if (message?.kind !== 'group' || message.rawEventType !== 'GROUP_AT_MESSAGE_CREATE'
+  const addressed = message?.rawEventType === 'GROUP_AT_MESSAGE_CREATE'
+    || (message?.rawEventType === 'GROUP_MESSAGE_CREATE' && Array.isArray(message.mentions)
+      && message.mentions.some(mention => mention?.is_you === true));
+  if (message?.kind !== 'group' || !addressed
     || message.senderIsBot || message.senderId === account.userId
     || message.attachments?.length || message.msgElements?.length
     || (message.msgType !== undefined && message.msgType !== 0)) return null;
@@ -84,6 +87,9 @@ export class QqExternalConsumer {
     this.#sourceFiles = sourceFiles;
     this.#sourceVoiceTranscripts = sourceVoiceTranscripts;
     this.#sourceVoiceAudio = sourceVoiceAudio;
+  }
+  recordNativeReceipt(receipt, signal) {
+    this.#observations.sent(receipt.conversationId, receipt.messageId, signal);
   }
   async accept(message, signal) {
     this.#observations.receive(message, signal);

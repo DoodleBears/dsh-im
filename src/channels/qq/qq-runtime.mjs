@@ -1,4 +1,5 @@
 import { isQqVoiceAttachment } from './voice-attachment.mjs';
+import { createHash } from 'node:crypto';
 import { extractConnectionEvidence, createConnectionDiagnostics, atConnectionStage } from '../shared/connection-error.mjs';
 import { QQBot, contentSanitizer, typingIndicator } from '@tencent-connect/qqbot-nodejs';
 
@@ -10,6 +11,7 @@ import { t } from '../shared/i18n.mjs';
 import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
 import { createQqBridgeStatus, QqHarnessBridge } from './qq-bridge.mjs';
 import { QqExternalConsumer, qqRefusal, verifiedQqAccount } from './external-consumer.mjs';
+import { postQqText } from './external-post.mjs';
 
 function timeoutError() {
   const error = new Error('QQ WebSocket did not become ready in time');
@@ -180,7 +182,45 @@ export class QqRuntime {
     return { sent: true };
   }
 
-  async sendProactiveText(target, text, { signal } = {}) {
+  async sendProactiveText(target, text, { signal, expectedFingerprint, beforeSend, verifyAccount } = {}) {
+    if (expectedFingerprint !== undefined) {
+      const bot = this.#bot;
+      const bridge = this.#externalBridge;
+      if (!bot || !this.#status.ready || !this.#abortController) throw qqRefusal('bot-not-connected');
+      const sendSignal = signal ? AbortSignal.any([signal, this.#abortController.signal]) : this.#abortController.signal;
+      const started = Date.now();
+      const report = (phase, reason, nativePost) => {
+        try {
+          this.#logger.info?.('[dsh-im:qq] checked post', { event: 'qq-external-post',
+            initiator: 'external-consumer', phase, durationMs: Math.max(0, Date.now() - started),
+            ...(reason ? { reason } : {}),
+            ...(nativePost ? { stage: 'native-post',
+              ...(Number.isInteger(nativePost.httpStatus) && nativePost.httpStatus >= 100 && nativePost.httpStatus <= 599
+                ? { httpStatus: nativePost.httpStatus } : {}),
+              ...(Number.isSafeInteger(nativePost.providerCode) && nativePost.providerCode >= 0
+                ? { providerCode: nativePost.providerCode } : {}),
+            } : {}) });
+        } catch {}
+      };
+      report('preparing');
+      let nativePostEvidence;
+      try {
+        const result = await postQqText({ bot, target, text, signal: sendSignal, beforeSend, verifyAccount,
+          onNativeFailure: evidence => { nativePostEvidence = evidence; },
+          assertCurrent: () => {
+            if (this.#bot !== bot || !this.#status.ready) throw qqRefusal('bot-not-connected');
+          } });
+        bridge?.recordNativeReceipt(result.receipt, sendSignal);
+        report('accepted', 'native-receipt');
+        return result;
+      } catch (error) {
+        const reason = ['invalid-target', 'bad-request', 'cancelled', 'provider-unavailable',
+          'account-changed', 'consumer-unavailable', 'bot-not-connected', 'send-permission-denied',
+          'send-rate-limited', 'send-result-unknown'].includes(error?.code) ? error.code : 'operation-failed';
+        report(reason === 'send-result-unknown' ? 'unknown' : 'refused', reason, nativePostEvidence);
+        throw error;
+      }
+    }
     const nativeId = target?.kind === 'user'
       ? (typeof target?.route?.userOpenId === 'string' ? target.route.userOpenId.trim() : '')
       : target?.kind === 'group'
@@ -350,6 +390,8 @@ export class QqRuntime {
         eventType: ['GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE', 'C2C_MESSAGE_CREATE'].includes(message?.rawEventType)
           ? message.rawEventType : 'other',
         messageType: Number.isSafeInteger(message?.msgType) ? message.msgType : null,
+        mentionCount: Array.isArray(message?.mentions) ? Math.min(message.mentions.length, 128) : 0,
+        explicitSelfMention: Array.isArray(message?.mentions) && message.mentions.some(mention => mention?.is_you === true),
         textPresent: typeof message?.content === 'string' && !!message.content.trim(),
         directAttachments: Array.isArray(message?.attachments) ? Math.min(message.attachments.length, 33) : 0,
         quotedElements: Math.min(elements.length, 2), quotedFiles: Math.min(quotedFiles.length, 33),
@@ -408,6 +450,25 @@ export class QqRuntime {
         );
       });
     };
+    let notificationObservations = 0;
+    const onRawEvent = (context) => {
+      if (controller.signal.aborted || this.#bot !== bot || context?.bot !== bot
+        || notificationObservations >= 64) return;
+      if (!['GROUP_MSG_RECEIVE', 'GROUP_MSG_REJECT'].includes(context.eventType)) return;
+      const group = context.data?.group_openid;
+      if (typeof group !== 'string' || !group.trim() || group.length > 512) return;
+      notificationObservations += 1;
+      const evidence = {
+        event: 'qq-group-notification',
+        phase: context.eventType === 'GROUP_MSG_RECEIVE' ? 'enabled-observed' : 'disabled-observed',
+        authority: 'observation-only',
+        botId: this.#config.botId,
+        groupDigest: createHash('sha256').update(group).digest('hex'),
+        observedAt: new Date().toISOString(),
+      };
+      try { this.#logger.info?.('[dsh-im:qq:notification]', evidence); } catch {}
+    };
+    bot.on('rawEvent', onRawEvent);
     bot.on('ready', onReady);
     bot.on('resumed', onReady);
     bot.on('error', onError);

@@ -44,6 +44,45 @@ function memoryAdapter({ channel = 'telegram', botId = 'bot_one' } = {}) {
   };
 }
 
+test('checked WeChat typing requires a live cancellation signal and registration fence', async () => {
+  const service = createDeliveryService();
+  const adapter = memoryAdapter({ channel: 'weixin' });
+  let received;
+  let current = true;
+  adapter.beginTypingChecked = async (_id, route, options) => {
+    assert.deepEqual(route, { messageId: 'native', actorId: 'owner', conversationId: 'owner' });
+    assert.equal(options.beforeSend(), true);
+    received = options;
+    return { accepted: true, stop: async () => {} };
+  };
+  const unregister = service.registerAdapter(adapter);
+  const route = { messageId: 'native', actorId: 'owner', conversationId: 'owner' };
+  const options = { expectedFingerprint: 'a'.repeat(64), beforeSend: () => current };
+  await assert.rejects(service.beginTypingChecked('bot_one', route, options), { code: 'bad-request' });
+  await service.beginTypingChecked('bot_one', route, { ...options, signal: new AbortController().signal });
+  current = false;
+  assert.equal(received.beforeSend(), false);
+  unregister();
+  assert.equal(received.signal.aborted, true);
+  assert.throws(() => received.beforeSend(), { code: 'cancelled' });
+});
+
+test('typing never substitutes a different platform and redacts unrecognized native failures', async () => {
+  const options = { expectedFingerprint: 'a'.repeat(64), signal: new AbortController().signal,
+    beforeSend: () => true };
+  const route = { messageId: 'native', actorId: 'owner', conversationId: 'owner' };
+  const service = createDeliveryService();
+  const telegram = memoryAdapter();
+  telegram.beginTypingChecked = async () => { assert.fail('wrong platform must not dispatch'); };
+  service.registerAdapter(telegram);
+  await assert.rejects(service.beginTypingChecked('bot_one', route, options), { code: 'capability-unavailable' });
+  const weixin = memoryAdapter({ channel: 'weixin', botId: 'own_wechat' });
+  weixin.beginTypingChecked = async () => { throw new Error('private native ticket'); };
+  service.registerAdapter(weixin);
+  await assert.rejects(service.beginTypingChecked('own_wechat', route, options),
+    error => error.code === 'typing-unavailable' && error.message === 'typing-unavailable');
+});
+
 test('DeliveryService shares target CRUD and sending through one adapter', async () => {
   const service = createDeliveryService();
   const adapter = memoryAdapter();

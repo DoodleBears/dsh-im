@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { normalizeDeliveryTarget } from './delivery-adapter.mjs';
+import { AppSetupService } from './app-setup.mjs';
 
 const BOT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const TARGET_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,128}$/;
@@ -57,6 +58,9 @@ const DELIVERY_ERROR_CODES = new Set([
   'private-context-unavailable',
   'private-context-rejected',
   'send-permission-denied',
+  'send-rate-limited',
+  'typing-unavailable',
+  'typing-conflict',
   'card-provider-rejected',
 ]);
 
@@ -142,10 +146,12 @@ function sessionSyncState(value, available) {
 }
 
 export class DeliveryService {
+  appSetup;
   #adapters = new Map();
   #unavailableSessionSyncChannels;
 
-  constructor({ unavailableSessionSyncChannels = [] } = {}) {
+  constructor({ unavailableSessionSyncChannels = [], logger } = {}) {
+    this.appSetup = new AppSetupService({ describeBot: (id) => this.describeBot(id), logger });
     if (!Array.isArray(unavailableSessionSyncChannels)
       || unavailableSessionSyncChannels.some((channel) => (
         typeof channel !== 'string' || !CHANNEL_PATTERN.test(channel)
@@ -428,6 +434,29 @@ export class DeliveryService {
     catch (error) { const safe = publicOperationError(error); throw deliveryError(safe.code, safe.code); }
   }
 
+  async beginTypingChecked(botId, route, options = {}) {
+    const id = botIdOf(botId);
+    if (!(options.signal instanceof AbortSignal)) throw deliveryError('bad-request');
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')
+      || typeof options.beforeSend !== 'function') throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (registration.adapter.channel !== 'weixin'
+      || typeof registration.adapter.beginTypingChecked !== 'function')
+      throw deliveryError('capability-unavailable');
+    const signal = AbortSignal.any([options.signal, registration.controller.signal]);
+    const beforeSend = () => {
+      cancellation(signal);
+      this.#assertRegistered(registration);
+      return options.beforeSend() === true;
+    };
+    try {
+      return await registration.adapter.beginTypingChecked(id, structuredClone(route), {
+        ...options, signal, beforeSend,
+      });
+    } catch (error) { throw publicOperationError(error, 'typing-unavailable'); }
+  }
+
   async replyChecked(botId, route, text, options = {}) {
     const id = botIdOf(botId);
     cancellation(options.signal);
@@ -486,20 +515,29 @@ export class DeliveryService {
       if (account.account?.fingerprint !== expectedFingerprint) throw deliveryError('account-changed');
       const receiptConversation = adapter.channel === 'feishu' && target.kind === 'group'
         ? target.route.chatId : adapter.channel === 'slack' && target.kind === 'conversation'
-          ? target.route.channelId : adapter.channel === 'weixin' && target.kind === 'user'
+          ? target.route.channelId : adapter.channel === 'qq' && target.kind === 'group'
+            ? target.route.groupOpenId : adapter.channel === 'weixin' && target.kind === 'user'
             ? target.route.toUserId : undefined;
       if (receipt && (!account.capabilities?.includes('proactive-receipt-checked') || !receiptConversation))
         throw deliveryError('capability-unavailable');
       if (receipt && adapter.channel === 'weixin' &&
         (!account.capabilities?.includes('proactive-fence-checked') || typeof beforeSend !== 'function'))
         throw deliveryError('capability-unavailable');
+      if (adapter.channel === 'qq' &&
+        (!account.capabilities?.includes('proactive-fence-checked') || typeof beforeSend !== 'function'))
+        throw deliveryError('capability-unavailable');
       cancellation(signal);
       this.#assertRegistered(registration);
       const deliverySignal = signal ? AbortSignal.any([signal, registration.controller.signal]) : registration.controller.signal;
       const fence = () => {
-        cancellation(deliverySignal);
+        cancellation(signal);
         this.#assertRegistered(registration);
-        return beforeSend === undefined || beforeSend() === true;
+        cancellation(deliverySignal);
+        const allowed = beforeSend === undefined || beforeSend() === true;
+        cancellation(signal);
+        this.#assertRegistered(registration);
+        cancellation(deliverySignal);
+        return allowed;
       };
       if (!fence()) throw deliveryError('send-permission-denied');
       const result = await adapter.sendText(id, target, text, { signal: deliverySignal, expectedFingerprint,

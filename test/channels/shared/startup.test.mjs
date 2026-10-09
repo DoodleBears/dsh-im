@@ -216,7 +216,8 @@ test('the composed host serves other real channels while Feishu is loading and a
   try {
     // Allow Cordis to enter its activation callback; Feishu stays gated.
     await new Promise(setImmediate);
-    assert.equal(f.routes.size, channels.length);
+    assert.deepEqual([...f.routes.keys()].sort(), ['/app-setup', ...channels.map(({ id }) => `/${id}`)].sort());
+    assert.equal((await f.routes.get('/app-setup').handler('setup.poll', { attemptId: 'missing' })).error.code, 'setup-expired');
     await allLoaded.promise;
     assert.equal((await f.call('feishu')).error.code, 'feishu-initializing');
     // Let the other channels finish their local workspace reconciliation.

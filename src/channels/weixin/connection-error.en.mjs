@@ -1,5 +1,6 @@
 // Shared diagnostic copy for the WeChat Host and settings client.
 export default {
+  "该微信账号已在本机配置，请选择已有应用。": "This WeChat account is already configured locally. Choose the existing app.",
   "微信配置格式错误：{file}。请查看诊断详情，修复后重启 DSH。": "The WeChat configuration is invalid: {file}. See the diagnostic details, fix the file, and restart DSH.",
   "配置文件": "Configuration file",
   "配置字段": "Configuration field",
