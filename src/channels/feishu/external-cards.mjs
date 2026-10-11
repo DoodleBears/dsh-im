@@ -13,7 +13,8 @@ export function externalApprovalCard(value) {
     { tag: 'button', type: 'primary', text: { tag: 'plain_text', content: 'Allow once / 允许一次' }, value: { namespace: 'botharness/approval-v1', requestId: value.requestId, action: 'allowed-once' } },
     { tag: 'button', type: 'danger', text: { tag: 'plain_text', content: 'Reject / 拒绝' }, value: { namespace: 'botharness/approval-v1', requestId: value.requestId, action: 'rejected' } },
   ] });
-  return JSON.stringify({ config: { wide_screen_mode: true }, header: { title: { tag: 'plain_text', content: value.title }, template: 'blue' }, elements });
+  // Both the initial card and later PATCH need shared mode for receiver-visible updates.
+  return JSON.stringify({ config: { wide_screen_mode: true, update_multi: true }, header: { title: { tag: 'plain_text', content: value.title }, template: 'blue' }, elements });
 }
 
 export function normalizeExternalCardAction(event, identity) {
