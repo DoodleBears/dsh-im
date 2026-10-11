@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- Lark checked 外部卡片新增独立的配对审核 namespace、角色选择与批准／拒绝，支持经原消息校验的群卡片与私聊卡片，共享更新会移除结束后的控件；沿用独占 Consumer，原生执行审批仍保持私聊限制。BotHarness Host 负责实时审核与委派权限，本候选真实 Lark 验收待完成（[BotHarness #1414](https://github.com/BotHarness/DeepSeekBot/issues/1414)）。
+  Lark checked external cards add a separate pairing-review namespace, Role selection and approve/reject controls for source-checked group and private cards, with final shared updates removing controls. The exclusive Consumer is retained and native execution approvals remain private. BotHarness Host owns current review/delegation checks; this candidate still awaits real Lark qualification ([BotHarness #1414](https://github.com/BotHarness/DeepSeekBot/issues/1414)).
+
 - Slack 的 checked external consumer 接收发给 App 的 Human 私聊（`conversation.kind: 'dm'`），私聊回复不再开 thread；Slack 与 Discord 的 checked 回复新增 `mentionUserIds`，只能 @ 原消息作者或原消息里 @ 过的人，并声明 `reply-mention-checked`；Slack 收件时用 `users.info` 补全被 @ 的人名（[BotHarness #1125](https://github.com/BotHarness/BotHarness/issues/1125)、[#1126](https://github.com/BotHarness/BotHarness/issues/1126)）。
   Slack checked external consumers accept Human DMs to the App (`conversation.kind: 'dm'`) and answer them without a thread. Slack and Discord checked replies accept `mentionUserIds`, limited to the source author and people the source mentions; matching inline `<@ID>` tags stay in place and missing ones are prefixed, and advertise `reply-mention-checked`. Slack intake names mentioned people through `users.info` ([BotHarness #1125](https://github.com/BotHarness/BotHarness/issues/1125), [#1126](https://github.com/BotHarness/BotHarness/issues/1126)).
 
