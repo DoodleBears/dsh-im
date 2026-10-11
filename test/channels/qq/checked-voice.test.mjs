@@ -181,3 +181,35 @@ test('QQ original voice bytes are lazy, source-bound and revoked with their cons
   await assert.rejects(() => fx.service.externalFileChecked(fx.botId, event.reply, attachment, fx.options));
   assert.equal(downloads, 1);
 });
+
+
+test('full-reception self mentions preserve checked quoted voice intake and own-app replies', async t => {
+  const fx = await fixture(t, { production: true });
+  const elements = [{ msg_idx: 'quoted-index', content: '', message_type: 4,
+    attachments: [{ content_type: 'voice', url: privateUrl, asr_refer_text: 'spoken request' }] }];
+  const native = mention({ rawEventType: 'GROUP_MESSAGE_CREATE', content: '',
+    attachments: undefined, msgType: 103, refMsgIdx: 'quoted-index', msgElements: elements,
+    raw: { id: 'file-source', group_openid: 'app-group', author: { member_openid: 'app-member' },
+      message_type: 103, msg_elements: elements, message_scene: { ext: ['ref_msg_idx=quoted-index'] } } });
+  for (const mentions of [undefined, null, {}, [{ is_you: 'true' }], [{ is_you: false }],
+    [{ id: 'native-bot' }], [{ nested: { is_you: true } }]]) {
+    await fx.bot().deliver({ ...native, mentions });
+    assert.equal(fx.admitted.length, 0);
+  }
+  await fx.bot().deliver({ ...native, mentions: [{ is_you: true }],
+    raw: { ...native.raw, author: { member_openid: 'app-member', bot: true } } });
+  await fx.bot().deliver({ ...native, mentions: [{ is_you: true }],
+    raw: { ...native.raw, group_openid: 'foreign-group' } });
+  assert.equal(fx.admitted.length, 0);
+  await fx.bot().deliver({ ...native, mentions: [{ is_you: true }] });
+  assert.equal(fx.admitted.length, 1);
+  const event = fx.admitted[0];
+  assert.deepEqual(event.voice, { transcript: 'platform' });
+  assert.match(event.text, /spoken request$/);
+  assert.equal(event.mentionedAccount, true);
+  assert.equal(event.fingerprint, fx.fingerprint);
+  const reply = await fx.service.replyChecked(fx.botId, event.reply, 'checked quote reply',
+    { ...fx.options, receipt: true });
+  assert.equal(reply.receipt.conversationId, 'app-group');
+  assert.equal(fx.bot().sent[0].body.msg_id, 'file-source');
+});

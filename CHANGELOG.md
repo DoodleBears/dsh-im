@@ -8,8 +8,8 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
-- QQ 的独占外部 Consumer 在全量事件中继续接收顶层 `is_you === true` 的 Human @，拒绝普通消息、其他 App 的提及、引用中的提及及机器人发送者；不启用普通采集或宣称自身 Echo 已验收（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
-  QQ exclusive external Consumers retain Human self mentions with top-level `is_you === true` in full-mode events while refusing ordinary messages, foreign/quoted mentions and Bot authors; this does not enable ordinary collection or qualify own Echo ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
+- QQ 的独占外部 Consumer 在全量事件中继续接收顶层 `is_you === true` 的 Human @，文字、引用文件与引用语音沿用相同提及校验，拒绝普通消息、其他 App 的提及、引用中的提及及机器人发送者；不启用普通采集或宣称自身 Echo 已验收（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
+  QQ exclusive external Consumers retain Human self mentions with top-level `is_you === true` in full-mode events, including checked quoted files and voice, while refusing ordinary messages, foreign/quoted mentions and Bot authors; this does not enable ordinary collection or qualify own Echo ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
 
 ### Added / 新增
 
