@@ -396,6 +396,38 @@ test('a qualified QQ app takes over group mentions and replies with a native rec
   assert.equal(fx.standaloneRuns(), standaloneRuns);
 });
 
+test('public QQ retains only strict top-level self mentions in full reception and replies through the owning app', async t => {
+  const fx = await fixture(t);
+  const account = await fx.controller.describeDeliveryAccount(fx.botId);
+  assert.equal(account.capabilities.includes('own-text-echo'), false);
+  const admitted = [];
+  await fx.controller.consumeInbound(fx.botId, { expectedFingerprint: account.account.fingerprint,
+    onEvent: async event => { admitted.push(event); return { accepted: true }; },
+  });
+  for (const fields of [
+    {}, { mentions: null }, { mentions: {} }, { mentions: [{ is_you: false }] },
+    { mentions: [{ is_you: 'true' }] }, { mentions: [{ is_you: 1 }] },
+    { mentions: [{ member_openid: 'native-bot-id' }] },
+    { raw: { mentions: [{ is_you: true }] } },
+    { senderIsBot: true, mentions: [{ is_you: true }] },
+    { senderId: 'native-bot-id', mentions: [{ is_you: true }] },
+    { rawEventType: 'C2C_MESSAGE_CREATE', mentions: [{ is_you: true }] },
+  ]) await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', ...fields }));
+  assert.equal(admitted.length, 0);
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE',
+    mentions: [null, { is_you: false }, { is_you: true, member_openid: 'app-qualified-bot' }],
+  }));
+  assert.equal(admitted.length, 1);
+  assert.equal(admitted[0].mentionedAccount, true);
+  assert.equal(admitted[0].text, mention().content);
+  assert.equal(fx.controller.status().bots[0].health.lastInbound.explicitSelfMention, true);
+  const result = await fx.controller.replyChecked(fx.botId, admitted[0].reply, 'reply', {
+    expectedFingerprint: account.account.fingerprint, receipt: true, beforeSend: () => true,
+  });
+  assert.deepEqual(result.receipt, { version: 1, conversationId: 'app-scoped-group', messageId: 'native-reply-id' });
+  assert.equal(fx.bot().sent.length, 1);
+});
+
 test('QQ fences source routes, pending canonical admission, native send uncertainty, and revoked leases', async t => {
   const fx = await fixture(t);
   const fingerprint = (await fx.controller.describeDeliveryAccount(fx.botId)).account.fingerprint;

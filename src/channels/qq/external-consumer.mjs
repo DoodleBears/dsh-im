@@ -1,3 +1,4 @@
+import { isQqAddressedGroupMessage } from './external-addressing.mjs';
 import { createHash } from 'node:crypto';
 import { ApiError, getNextMsgSeq, messagePath } from '@tencent-connect/qqbot-nodejs/protocol';
 import { QqNativeReplyObservations, qqNativeIdentifier as identifier } from './native-reply-observations.mjs';
@@ -40,7 +41,7 @@ export function verifiedQqAccount(appId, user) {
 
 /** QQ group and member OpenIDs belong to this authenticated application. */
 export function normalizeQqExternalText(message, { botId, account }) {
-  if (message?.kind !== 'group' || message.rawEventType !== 'GROUP_AT_MESSAGE_CREATE'
+  if (!isQqAddressedGroupMessage(message)
     || message.senderIsBot || message.senderId === account.userId
     || message.attachments?.length || message.msgElements?.length
     || (message.msgType !== undefined && message.msgType !== 0)) return null;

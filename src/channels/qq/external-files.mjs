@@ -1,3 +1,4 @@
+import { isQqAddressedGroupMessage } from './external-addressing.mjs';
 import { QQ_EXTERNAL_IMAGE_LIMIT } from './external-images.mjs';
 import { qqNativeIdentifier } from './native-reply-observations.mjs';
 
@@ -27,7 +28,7 @@ export function qqQuotedMediaMessage(message, { accepts, label, requireCaption =
   const refs = Array.isArray(raw?.message_scene?.ext)
     ? raw.message_scene.ext.filter(value => typeof value === 'string' && value.split('=', 1)[0].trim() === 'ref_msg_idx')
       .map(value => value.slice(value.indexOf('=') + 1).trim()) : [];
-  if (message.kind !== 'group' || message.rawEventType !== 'GROUP_AT_MESSAGE_CREATE'
+  if (!isQqAddressedGroupMessage(message)
     || raw?.message_type !== 103 || raw.id !== message.messageId || raw.group_openid !== message.groupOpenid
     || raw.author?.member_openid !== message.senderId || raw.author?.bot === true)
     throw refusal('invalid-inbound', 'quote-envelope-invalid');
