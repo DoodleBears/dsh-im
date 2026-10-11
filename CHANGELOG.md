@@ -6,6 +6,11 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+### Fixed / 修复
+
+- QQ 的独占外部 Consumer 在全量事件中继续接收顶层 `is_you === true` 的 Human @，拒绝普通消息、其他 App 的提及、引用中的提及及机器人发送者；不启用普通采集或宣称自身 Echo 已验收（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
+  QQ exclusive external Consumers retain Human self mentions with top-level `is_you === true` in full-mode events while refusing ordinary messages, foreign/quoted mentions and Bot authors; this does not enable ordinary collection or qualify own Echo ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
+
 ### Added / 新增
 
 - Lark checked 外部卡片新增独立的配对审核 namespace、角色选择与批准／拒绝，支持经原消息校验的群卡片与私聊卡片，共享更新会移除结束后的控件；沿用独占 Consumer，原生执行审批仍保持私聊限制。BotHarness Host 负责实时审核与委派权限，本候选真实 Lark 验收待完成（[BotHarness #1414](https://github.com/BotHarness/DeepSeekBot/issues/1414)）。
