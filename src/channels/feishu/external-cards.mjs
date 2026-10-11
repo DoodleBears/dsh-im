@@ -6,6 +6,7 @@ const identifier = (value, prefix) => typeof value === 'string' && value.length 
 const text = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
 
 export function externalApprovalCard(value) {
+  if (value?.kind === 'pairing') return externalPairingCard(value);
   if (!value || !uuid.test(value.requestId ?? '') || !text(value.title, 120) || !text(value.detail, 16000)
     || !['pending', 'web-required', 'allowed-once', 'rejected', 'expired', 'executed', 'execution-failed', 'execution-unknown', 'test'].includes(value.status)) refuse('bad-request');
   const elements = [{ tag: 'div', text: { tag: 'plain_text', content: value.detail } }];
@@ -17,18 +18,52 @@ export function externalApprovalCard(value) {
   return JSON.stringify({ config: { wide_screen_mode: true, update_multi: true }, header: { title: { tag: 'plain_text', content: value.title }, template: 'blue' }, elements });
 }
 
+export function externalPairingCard(value) {
+  if (!uuid.test(value?.requestId ?? '') || !text(value.title, 120) || !text(value.detail, 16000)
+    || !['pending', 'approved', 'rejected', 'expired', 'unavailable'].includes(value.status)
+    || !Array.isArray(value.roles) || value.roles.length > 20
+    || value.roles.some(role => !uuid.test(role?.id ?? '') || !text(role.name, 80) || !Number.isSafeInteger(role.revision) || role.revision < 1)
+    || !Number.isSafeInteger(value.page) || !Number.isSafeInteger(value.pages) || value.pages < 1 || value.pages > 3 || value.page < 0 || value.page >= value.pages
+    || (value.selectedRoleId !== undefined && !uuid.test(value.selectedRoleId))) refuse('bad-request');
+  const elements = [{ tag: 'div', text: { tag: 'plain_text', content: value.detail } }];
+  const action = (name, label, type = 'default') => ({ tag: 'button', type, text: { tag: 'plain_text', content: label },
+    value: { namespace: 'botharness/pairing-v1', requestId: value.requestId, action: name,
+      ...(name === 'approve-pairing' ? { roleId: value.selectedRoleId } : {}) } });
+  if (value.status === 'pending') {
+    if (value.roles.length) elements.push({ tag: 'action', actions: [{ tag: 'select_static',
+      placeholder: { tag: 'plain_text', content: `Choose Role / 选择角色 (${value.page + 1}/${value.pages})` },
+      options: value.roles.map(role => ({ text: { tag: 'plain_text', content: role.name }, value: role.id })),
+      value: { namespace: 'botharness/pairing-v1', requestId: value.requestId, action: 'select-role' } }] });
+    const buttons = [];
+    if (value.page > 0) buttons.push(action('previous-roles', 'Previous / 上一页'));
+    if (value.page + 1 < value.pages) buttons.push(action('next-roles', 'Next / 下一页'));
+    if (value.selectedRoleId) buttons.push(action('approve-pairing', 'Approve pairing / 批准配对', 'primary'));
+    buttons.push(action('reject-pairing', 'Reject / 拒绝', 'danger'));
+    elements.push({ tag: 'action', actions: buttons });
+  }
+  return JSON.stringify({ config: { wide_screen_mode: true, update_multi: true }, header: { title: { tag: 'plain_text', content: value.title }, template: 'blue' }, elements });
+}
+
 export function normalizeExternalCardAction(event, identity) {
   const appId = event?.header?.app_id ?? event?.app_id;
   if (appId !== undefined && appId !== identity.appId) refuse('account-changed');
   const value = event?.action?.value;
-  if (value?.namespace !== 'botharness/approval-v1') return null;
+  if (value?.namespace !== 'botharness/approval-v1' && value?.namespace !== 'botharness/pairing-v1') return null;
   const actorId = event?.operator?.open_id;
   const messageId = event?.context?.open_message_id;
   const conversationId = event?.context?.open_chat_id;
   if (!identifier(actorId, 'ou') || !identifier(messageId, 'om') || !identifier(conversationId, 'oc')
-    || event.action.tag !== 'button' || !uuid.test(value.requestId ?? '')
-    || !['allowed-once', 'rejected'].includes(value.action)
+    || !uuid.test(value.requestId ?? '')
     || !/^[a-f0-9]{64}$/.test(identity.fingerprint ?? '')) refuse('invalid-inbound');
+  if (value.namespace === 'botharness/pairing-v1') {
+    const roleId = value.action === 'select-role' ? event.action.option : value.roleId;
+    if (!['select-role', 'approve-pairing', 'reject-pairing', 'next-roles', 'previous-roles'].includes(value.action)
+      || event.action.tag !== (value.action === 'select-role' ? 'select_static' : 'button')
+      || (['select-role', 'approve-pairing'].includes(value.action) ? !uuid.test(roleId ?? '') : roleId !== undefined)) refuse('invalid-inbound');
+    return Object.freeze({ kind: 'pairing', version: 1, channel: 'feishu', botId: identity.botId, fingerprint: identity.fingerprint,
+      actorId, messageId, conversationId, requestId: value.requestId, action: value.action, ...(roleId ? { roleId } : {}) });
+  }
+  if (event.action.tag !== 'button' || !['allowed-once', 'rejected'].includes(value.action)) refuse('invalid-inbound');
   return Object.freeze({ version: 1, channel: 'feishu', botId: identity.botId, fingerprint: identity.fingerprint,
     actorId, messageId, conversationId, requestId: value.requestId, action: value.action });
 }
@@ -39,7 +74,7 @@ export async function replyExternalApprovalCard(client, route, card, { signal, a
   const current = await qualifyExternalReply(client, route, signal);
   if (current.actorId !== route.actorId) refuse('stale-route');
   const chat = await client.im.v1.chat.get({ path: { chat_id: route.conversationId } }, { signal });
-  if (chat?.code !== 0 || chat?.data?.chat_mode !== 'p2p') refuse('stale-route');
+  if (chat?.code !== 0 || !(card.kind === 'pairing' ? ['p2p', 'group'] : ['p2p']).includes(chat?.data?.chat_mode)) refuse('stale-route');
   assertCurrent?.();
   signal?.throwIfAborted();
   if (typeof beforeSend !== 'function' || beforeSend() !== true) refuse('stale-route');

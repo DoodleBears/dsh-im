@@ -30,6 +30,27 @@ test('cards render bounded plain text and only once/reject controls', () => {
   assert.throws(() => externalApprovalCard({ ...card, detail: 'a'.repeat(16001) }), { code: 'bad-request' });
 });
 
+const pairingCard = { ...card, kind: 'pairing', roles: [{ id: requestId, name: 'Member', revision: 2 }], page: 0, pages: 1 };
+test('pairing cards require explicit Role selection, retain a separate namespace and remove final controls', () => {
+  const first = JSON.parse(externalApprovalCard(pairingCard));
+  assert.equal(first.config.update_multi, true);
+  assert.equal(first.elements[1].actions[0].tag, 'select_static');
+  assert.deepEqual(first.elements.at(-1).actions.map(value => value.value.action), ['reject-pairing']);
+  const chosen = JSON.parse(externalApprovalCard({ ...pairingCard, selectedRoleId: requestId }));
+  assert.equal(chosen.elements.at(-1).actions[0].value.namespace, 'botharness/pairing-v1');
+  assert.equal(chosen.elements.at(-1).actions[0].value.roleId, requestId);
+  assert.equal(JSON.parse(externalApprovalCard({ ...pairingCard, status: 'approved' })).elements.length, 1);
+  assert.throws(() => externalApprovalCard({ ...pairingCard, roles: Array(21).fill(pairingCard.roles[0]) }), { code: 'bad-request' });
+});
+test('pairing select/button evidence uses the actual operator and context and cannot become execution approval', () => {
+  const selected = { ...event(), action: { tag: 'select_static', option: requestId,
+    value: { namespace: 'botharness/pairing-v1', requestId, action: 'select-role' } } };
+  assert.deepEqual(normalizeExternalCardAction(selected, identity), { kind: 'pairing', version: 1, channel: 'feishu', botId: 'qa', fingerprint: identity.fingerprint,
+    actorId: 'ou_alice', messageId: 'om_card', conversationId: 'oc_private', requestId, action: 'select-role', roleId: requestId });
+  assert.throws(() => normalizeExternalCardAction({ ...selected, action: { ...selected.action, option: 'not-a-role' } }, identity), { code: 'invalid-inbound' });
+  assert.throws(() => normalizeExternalCardAction({ ...selected, action: { ...selected.action, value: { ...selected.action.value, action: 'allowed-once' } } }, identity), { code: 'invalid-inbound' });
+});
+
 function clientFixture() {
   let creates = 0, patches = 0;
   const client = { im: { v1: { message: {
@@ -41,6 +62,15 @@ function clientFixture() {
   }, chat: { get: async () => ({ code: 0, data: { chat_mode: 'p2p' } }) } } } };
   return { client, counts: () => ({ creates, patches }) };
 }
+
+test('group-only pairing review is checked against the original source while native approvals remain private', async () => {
+  const f = clientFixture();
+  f.client.im.v1.chat.get = async () => ({ code: 0, data: { chat_mode: 'group' } });
+  assert.equal((await replyExternalApprovalCard(f.client, route, pairingCard, { beforeSend: () => true })).sent, true);
+  await assert.rejects(replyExternalApprovalCard(f.client, route, card, { beforeSend: () => true }), { code: 'stale-route' });
+  await assert.rejects(replyExternalApprovalCard(f.client, { ...route, actorId: 'ou_wrong' }, pairingCard, { beforeSend: () => true }), { code: 'stale-route' });
+  assert.deepEqual(f.counts(), { creates: 1, patches: 0 });
+});
 
 test('checked approval creation and final update are shared cards visible to the receiver', async () => {
   const f = clientFixture();
