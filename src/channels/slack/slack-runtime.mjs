@@ -428,6 +428,7 @@ export class SlackRuntime {
   #reconnectTimer = null;
   #reconnectAttempt = 0;
   #generation = 0;
+  #reactionWrites = new Map();
   #stopped = true;
   #starting = null;
   #externalConsumer;
@@ -612,6 +613,64 @@ export class SlackRuntime {
         throw slackRefusal('reply-permission-denied');
       throw slackRefusal('reply-result-unknown');
     }
+  }
+
+  async reactionChecked(route, reaction, { signal, beforeSend } = {}) {
+    const generation = this.#generation;
+    const key = `${route?.conversationId}:${route?.messageId}`;
+    const previous = this.#reactionWrites.get(key) ?? Promise.resolve();
+    const operation = previous.catch(() => {}).then(() => {
+      signal?.throwIfAborted();
+      if (generation !== this.#generation) throw slackRefusal('capability-unavailable');
+      return this.#writeReactionChecked(route, reaction, { signal, beforeSend });
+    });
+    this.#reactionWrites.set(key, operation);
+    const cleanup = () => {
+      if (this.#reactionWrites.get(key) === operation) this.#reactionWrites.delete(key);
+    };
+    operation.then(cleanup, cleanup);
+    return operation;
+  }
+
+  async #writeReactionChecked(route, reaction, { signal, beforeSend } = {}) {
+    if (!['received', 'answered'].includes(reaction) || typeof beforeSend !== 'function')
+      throw slackRefusal('bad-request');
+    const generation = this.#generation;
+    const api = this.#api;
+    const lifetime = this.#abortController?.signal;
+    if (!api || !lifetime) throw slackRefusal('capability-unavailable');
+    const combined = signal ? AbortSignal.any([signal, lifetime]) : lifetime;
+    const assertCurrent = () => {
+      combined.throwIfAborted();
+      if (generation !== this.#generation || this.#stopped || !this.#status.ready)
+        throw slackRefusal('capability-unavailable');
+      if (beforeSend() !== true) throw slackRefusal('stale-route');
+    };
+    await this.#replySource(route, combined);
+    assertCurrent();
+    const target = { channelId: route.conversationId, messageTs: route.messageId, signal: combined };
+    try {
+      await api.addReaction({ ...target, emojiName: reaction === 'received' ? 'eyes' : 'white_check_mark' });
+    } catch (error) {
+      if (error?.providerCode !== 'already_reacted') {
+        if (['missing_scope', 'not_in_channel', 'channel_not_found', 'is_archived', 'no_permission',
+          'not_authed', 'invalid_auth', 'token_revoked', 'account_inactive'].includes(error?.providerCode))
+          throw slackRefusal('reaction-permission-denied');
+        if (['invalid_name', 'message_not_found', 'no_item_specified', 'too_many_emoji'].includes(error?.providerCode))
+          throw slackRefusal('reaction-provider-rejected');
+        throw slackRefusal('reaction-result-unknown');
+      }
+    }
+    if (reaction === 'answered') {
+      try {
+        assertCurrent();
+        await api.removeReaction({ ...target, emojiName: 'eyes' });
+      }
+      catch (error) {
+        if (error?.providerCode !== 'no_reaction') throw slackRefusal('reaction-result-unknown');
+      }
+    }
+    return { accepted: true };
   }
 
   async replyChecked(route, text, { signal, receipt = false, beforeSend, mentionUserIds } = {}) {

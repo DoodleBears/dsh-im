@@ -242,7 +242,7 @@ export class SlackController {
         connected: this.#runtimes.get(botId)?.status?.ready === true,
         capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked',
           'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'reply-mention-checked',
-          'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
+          'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'reaction-write-checked'] };
     });
   }
 
@@ -299,6 +299,12 @@ export class SlackController {
       if (this.#closed) throw slackRefusal('provider-unavailable');
       return result;
     });
+  }
+
+  async reactionChecked(botId, route, reaction, options = {}) {
+    const checked = await this.#withBotTransition(botId, () =>
+      this.#checkedRuntime(botId, options.expectedFingerprint, options.signal));
+    return checked.runtime.reactionChecked(route, reaction, { ...options, signal: checked.signal });
   }
 
   async replyChecked(botId, route, text, options = {}) {
