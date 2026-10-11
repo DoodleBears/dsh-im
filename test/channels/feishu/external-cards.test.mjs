@@ -42,6 +42,28 @@ function clientFixture() {
   return { client, counts: () => ({ creates, patches }) };
 }
 
+test('checked approval creation and final update are shared cards visible to the receiver', async () => {
+  const f = clientFixture();
+  const writes = [];
+  f.client.im.v1.message.create = async ({ data }) => {
+    writes.push(JSON.parse(data.content));
+    return { code: 0, data: { message_id: 'om_card', chat_id: 'oc_private' } };
+  };
+  f.client.im.v1.message.patch = async ({ data }) => {
+    writes.push(JSON.parse(data.content));
+    return { code: 0 };
+  };
+  const sent = await replyExternalApprovalCard(f.client, route, card, { beforeSend: () => true });
+  await updateExternalApprovalCard(f.client, identity, sent.receipt,
+    { ...card, detail: 'Native execution result recorded', status: 'executed' },
+    { beforeSend: () => true });
+  assert.equal(writes.length, 2);
+  for (const rendered of writes) assert.equal(rendered.config.update_multi, true,
+    'Lark requires shared-card mode on both initial send and patch for receiver-visible updates');
+  assert.equal(writes[0].elements[1].actions.length, 2);
+  assert.equal(writes[1].elements.some(element => element.tag === 'action'), false);
+});
+
 test('send verifies original sender/private conversation and fences immediately before writing', async () => {
   const f = clientFixture();
   await assert.rejects(replyExternalApprovalCard(f.client, { ...route, actorId: 'ou_other' }, card, { beforeSend: () => true }), { code: 'stale-route' });

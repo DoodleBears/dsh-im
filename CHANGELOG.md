@@ -27,6 +27,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- Feishu/Lark 的 checked 工具审批卡片在创建和后续更新时启用共享更新模式，避免服务端已结算但接收者仍看到等待文字与旧按钮；审核权限与原生决定不变（[BotHarness #1406](https://github.com/BotHarness/DeepSeekBot/issues/1406)）。
+  Feishu/Lark checked tool-approval cards enable shared updates on both creation and later patches so receivers see settled status without stale approval buttons. Authorization and native decisions are unchanged ([BotHarness #1406](https://github.com/BotHarness/DeepSeekBot/issues/1406)).
+
 - Feishu/Lark 独占外部文本接收在原消息、发送人和话题路由核验后补充原生发送人名称；可选名称读取最多等待 1.5 秒，权限缺失、名称缺失或查询失败保留 ID 回退和原收件行为，取消或连接替换仍拒绝过期交付。此候选修复未发布，真实 BotHarness 验收单独记录于 BotHarness/BotHarness#1070。
   Feishu/Lark exclusive external text intake enriches the native sender name after checking the exact message, sender and topic route. Optional reads wait at most 1.5 seconds; unavailable permissions, names or lookups preserve ID fallback and intake, while cancellation or connection replacement still refuses stale delivery. This candidate fix is unreleased; real BotHarness qualification is tracked separately in BotHarness/BotHarness#1070.
 
