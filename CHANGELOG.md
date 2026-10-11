@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- Slack 增加可选 `reaction-write-checked`：以当前账户、独占 consumer、原始 Human 消息和调用方授权 fence 校验后添加收到／已回答反应，不自动重试不确定写入。隔离候选已有真实 BotHarness 频道／DM 截图与同源 DM 录屏，Human QA 和发布资格仍待完成（[BotHarness #1161](https://github.com/BotHarness/DeepSeekBot/issues/1161)）。
+  Slack adds optional checked original-source received/answered reactions with account, exclusive-consumer, source and caller authorization fences. Uncertain writes are not retried. The isolated candidate has native BotHarness channel/DM screenshots and a same-source DM recording; Human QA and published qualification remain pending.
+
 - Slack 的 checked external consumer 接收发给 App 的 Human 私聊（`conversation.kind: 'dm'`），私聊回复不再开 thread；Slack 与 Discord 的 checked 回复新增 `mentionUserIds`，只能 @ 原消息作者或原消息里 @ 过的人，并声明 `reply-mention-checked`；Slack 收件时用 `users.info` 补全被 @ 的人名（[BotHarness #1125](https://github.com/BotHarness/BotHarness/issues/1125)、[#1126](https://github.com/BotHarness/BotHarness/issues/1126)）。
   Slack checked external consumers accept Human DMs to the App (`conversation.kind: 'dm'`) and answer them without a thread. Slack and Discord checked replies accept `mentionUserIds`, limited to the source author and people the source mentions; matching inline `<@ID>` tags stay in place and missing ones are prefixed, and advertise `reply-mention-checked`. Slack intake names mentioned people through `users.info` ([BotHarness #1125](https://github.com/BotHarness/BotHarness/issues/1125), [#1126](https://github.com/BotHarness/BotHarness/issues/1126)).
 

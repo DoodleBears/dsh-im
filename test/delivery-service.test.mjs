@@ -344,6 +344,45 @@ function checkedFixture() {
   return {service, adapter, fingerprint};
 }
 
+test('checked Slack reactions require a fence and retain Registration cancellation', async () => {
+  const fx = checkedFixture();
+  fx.adapter.channel = 'slack';
+  let calls = 0;
+  let check;
+  fx.adapter.reactionChecked = async (_id, route, reaction, options) => {
+    assert.deepEqual(route, { messageId: 'source' });
+    assert.equal(reaction, 'received');
+    assert.equal(options.expectedFingerprint, fx.fingerprint);
+    assert.equal(options.beforeSend(), true);
+    check = options;
+    calls++;
+    return { accepted: true };
+  };
+  const dispose = fx.service.registerAdapter(fx.adapter);
+  await assert.rejects(fx.service.reactionChecked('bot_one', {}, 'received', {
+    expectedFingerprint: fx.fingerprint,
+  }), { code: 'bad-request' });
+  assert.deepEqual(await fx.service.reactionChecked('bot_one', { messageId: 'source' }, 'received', {
+    expectedFingerprint: fx.fingerprint, beforeSend: () => true,
+  }), { accepted: true });
+  assert.equal(calls, 1);
+  dispose();
+  assert.equal(check.signal.aborted, true);
+  assert.throws(() => check.beforeSend(), { code: 'capability-unavailable' });
+});
+
+test('delivery adapter only forwards explicitly supported checked Slack reactions', async () => {
+  const calls = [];
+  const make = channel => createDeliveryAdapter({
+    channel, workspaces: {}, stateFor: () => ({}),
+    coreController: { reactionChecked: async (...args) => { calls.push(args); return { accepted: true }; } },
+  });
+  const options = { expectedFingerprint: 'a'.repeat(64), beforeSend: () => true };
+  assert.deepEqual(await make('slack').reactionChecked('bot_one', { messageId: 'source' }, 'received', options), { accepted: true });
+  assert.equal(calls.length, 1);
+  assert.throws(() => make('discord').reactionChecked('bot_one', {}, 'received', options), { code: 'capability-unavailable' });
+});
+
 test('Weixin checked post requires a current final fence and keeps client acknowledgement separate', async () => {
   const fx = checkedFixture(); fx.adapter.channel = 'weixin';
   fx.adapter.describeAccount = async () => ({version: 1, capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'proactive-fence-checked'], account: {fingerprint: fx.fingerprint}});

@@ -148,6 +148,123 @@ test('native reply verifies exact source and fence, emits one thread send with r
   } finally { await f.runtime.stop(); }
 });
 
+test('checked Slack feedback writes on the original source, then removes only the bot receipt', async () => {
+  const writes = [];
+  const feedback = await fixture(async () => ({ accepted: true }), {
+    addReaction: async input => { writes.push(['add', input.messageTs, input.emojiName]); },
+    removeReaction: async input => { writes.push(['remove', input.messageTs, input.emojiName]); },
+  });
+  try {
+    const route = normalizeSlackExternalText(payload(), { botId, account }).reply;
+    await assert.rejects(feedback.runtime.reactionChecked(route, 'received', { beforeSend: () => false }), { code: 'stale-route' });
+    assert.deepEqual(writes, []);
+    assert.deepEqual(await feedback.runtime.reactionChecked(route, 'received', { beforeSend: () => true }), { accepted: true });
+    assert.deepEqual(await feedback.runtime.reactionChecked(route, 'answered', { beforeSend: () => true }), { accepted: true });
+    assert.deepEqual(writes, [
+      ['add', route.messageId, 'eyes'],
+      ['add', route.messageId, 'white_check_mark'],
+      ['remove', route.messageId, 'eyes'],
+    ]);
+    feedback.source.user = 'U11111111';
+    await assert.rejects(feedback.runtime.reactionChecked(route, 'received', { beforeSend: () => true }), { code: 'stale-route' });
+    assert.equal(writes.length, 3);
+  } finally { await feedback.runtime.stop(); }
+});
+
+test('checked Slack DM reactions target the Human message rather than a channel thread root', async () => {
+  const writes = [];
+  const dmPayload = payload({ type: 'message', channel: 'D12345678', channel_type: 'im' });
+  const source = dmPayload.event;
+  const feedback = await fixture(async () => ({ accepted: true }), {
+    conversationInfo: async () => ({ id: source.channel, is_im: true, user: source.user }),
+    getMessage: async () => source,
+    addReaction: async input => { writes.push(input); },
+  });
+  try {
+    const route = normalizeSlackExternalText(dmPayload, { botId, account }).reply;
+    assert.deepEqual(await feedback.runtime.reactionChecked(route, 'received', { beforeSend: () => true }), { accepted: true });
+    assert.equal(writes[0].channelId, source.channel);
+    assert.equal(writes[0].messageTs, source.ts);
+    assert.equal(writes[0].emojiName, 'eyes');
+  } finally { await feedback.runtime.stop(); }
+});
+
+test('Slack feedback serializes one source without blocking its accepted reply', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const writes = [];
+  const feedback = await fixture(async () => ({ accepted: true }), {
+    addReaction: async input => {
+      writes.push(input.emojiName);
+      if (input.emojiName === 'eyes') await gate;
+    },
+    removeReaction: async () => { writes.push('remove-eyes'); },
+  });
+  try {
+    const route = normalizeSlackExternalText(payload(), { botId, account }).reply;
+    const received = feedback.runtime.reactionChecked(route, 'received', { beforeSend: () => true });
+    await flush();
+    const answered = feedback.runtime.reactionChecked(route, 'answered', { beforeSend: () => true });
+    assert.deepEqual(await feedback.runtime.replyChecked(route, 'Answer', { beforeSend: () => true }), { sent: true });
+    assert.deepEqual(writes, ['eyes']);
+    release();
+    await Promise.all([received, answered]);
+    assert.deepEqual(writes, ['eyes', 'white_check_mark', 'remove-eyes']);
+  } finally { release(); await feedback.runtime.stop(); }
+});
+
+for (const [providerCode, expectedCode] of [
+  ['missing_scope', 'reaction-permission-denied'],
+  ['invalid_name', 'reaction-provider-rejected'],
+  ['ratelimited', 'reaction-result-unknown'],
+  [undefined, 'reaction-result-unknown'],
+]) {
+  test(`Slack reaction ${providerCode ?? 'transport failure'} is classified without retry`, async () => {
+    let writes = 0;
+    const feedback = await fixture(async () => ({ accepted: true }), {
+      addReaction: async () => { writes++; throw Object.assign(new Error('rejected'), { providerCode }); },
+    });
+    try {
+      const route = normalizeSlackExternalText(payload(), { botId, account }).reply;
+      await assert.rejects(feedback.runtime.reactionChecked(route, 'received', { beforeSend: () => true }), { code: expectedCode });
+      assert.equal(writes, 1);
+      assert.deepEqual(await feedback.runtime.replyChecked(route, 'Answer', { beforeSend: () => true }), { sent: true });
+    } finally { await feedback.runtime.stop(); }
+  });
+}
+
+test('Slack known existing reactions are accepted, but uncertain cleanup is never retried', async () => {
+  let removals = 0;
+  const feedback = await fixture(async () => ({ accepted: true }), {
+    addReaction: async () => { throw Object.assign(new Error('existing'), { providerCode: 'already_reacted' }); },
+    removeReaction: async () => {
+      removals++;
+      if (removals === 1) throw Object.assign(new Error('absent'), { providerCode: 'no_reaction' });
+      throw new Error('unknown cleanup');
+    },
+  });
+  try {
+    const route = normalizeSlackExternalText(payload(), { botId, account }).reply;
+    assert.deepEqual(await feedback.runtime.reactionChecked(route, 'answered', { beforeSend: () => true }), { accepted: true });
+    await assert.rejects(feedback.runtime.reactionChecked(route, 'answered', { beforeSend: () => true }), { code: 'reaction-result-unknown' });
+    assert.equal(removals, 2);
+  } finally { await feedback.runtime.stop(); }
+});
+
+test('Slack answered cleanup rechecks authority and never reports an uncertain cleanup as accepted', async () => {
+  let allowed = true;
+  let removals = 0;
+  const feedback = await fixture(async () => ({ accepted: true }), {
+    addReaction: async () => { allowed = false; },
+    removeReaction: async () => { removals++; },
+  });
+  try {
+    const route = normalizeSlackExternalText(payload(), { botId, account }).reply;
+    await assert.rejects(feedback.runtime.reactionChecked(route, 'answered', { beforeSend: () => allowed }), { code: 'reaction-result-unknown' });
+    assert.equal(removals, 0);
+  } finally { await feedback.runtime.stop(); }
+});
+
 test('ambiguous Slack send failure is never treated as safely retryable', async () => {
   const f = await fixture(async () => ({ accepted: true }), { postMessage: async () => { throw new Error('transport lost after send'); } });
   try {
