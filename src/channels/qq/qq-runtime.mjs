@@ -12,6 +12,7 @@ import { createQqBridgeStatus, QqHarnessBridge } from './qq-bridge.mjs';
 import { QqExternalConsumer, qqRefusal, verifiedQqAccount } from './external-consumer.mjs';
 import { postQqText } from './external-post.mjs';
 import { QqNativeGatewayDiagnostics } from './native-gateway-diagnostics.mjs';
+import { QqNativeTransportDiagnostics } from './native-transport-diagnostics.mjs';
 
 function timeoutError() {
   const error = new Error('QQ WebSocket did not become ready in time');
@@ -280,14 +281,21 @@ export class QqRuntime {
       return true;
     };
     let gatewayDiagnostics;
+    let transportDiagnostics;
     const sdkLogger = {
-      error: (...args) => { if (!observeTransport(args[0])) this.#logger.error?.(...args); },
+      error: (...args) => {
+        // Node's JSON error text can quote the payload. The maintained hook reports
+        // only the coded parse/processing disposition; never forward that raw text.
+        if (transportDiagnostics && typeof args[0] === 'string'
+          && args[0].startsWith(`[${this.#config.botId}] Message parse error:`)) return;
+        if (!observeTransport(args[0])) this.#logger.error?.(...args);
+      },
       warn: (...args) => this.#logger.warn?.(...args),
       info: (...args) => { if (!observeTransport(args[0])) this.#logger.info?.(...args); },
       debug: message => {
         try {
           if (!controller.signal.aborted && this.#abortController === controller)
-            gatewayDiagnostics?.observe(message, controller.signal);
+            gatewayDiagnostics?.observe(message, controller.signal, transportDiagnostics?.context);
         } catch {}
       },
     };
@@ -298,6 +306,11 @@ export class QqRuntime {
       logger: sdkLogger,
       transport: 'websocket',
       tokenPrefetch: 'sync',
+      // Public option proposed by the maintained, hash-checked SDK build patch.
+      onGatewayObservation: value => {
+        if (!controller.signal.aborted && this.#abortController === controller)
+          transportDiagnostics?.observe(value, controller.signal);
+      },
       // sendText is reserved for literal notices/connection tests. Markdown
       // replies use the explicit msg_type=2 path in sendMarkdownReply().
       markdownSupport: false,
@@ -313,6 +326,8 @@ export class QqRuntime {
         controller.signal.throwIfAborted();
         gatewayDiagnostics = new QqNativeGatewayDiagnostics({ botId: this.#config.botId, account,
           report: record => this.#logger.info?.('[dsh-im:qq] native gateway diagnostic', record) });
+        transportDiagnostics = new QqNativeTransportDiagnostics({ account,
+          report: record => this.#logger.info?.('[dsh-im:qq] native transport diagnostic', record) });
         this.#externalBridge = new QqExternalConsumer({ bot, account, nativeUser, botId: this.#config.botId,
           accept: this.#externalConsumer,
           sourceImages: this.#sourceImages,
