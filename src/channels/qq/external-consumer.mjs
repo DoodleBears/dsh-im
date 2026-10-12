@@ -175,7 +175,7 @@ export class QqExternalConsumer {
           msg_seq: getNextMsgSeq(qualified.messageId) });
     } catch (error) { throw nativeReplyFailure(error); }
     if (signal?.aborted || !identifier(response?.id)) throw qqRefusal('reply-result-unknown');
-    this.#observations.sent(qualified.conversationId, response.id, signal);
+    this.#observations.sent(qualified.conversationId, response.id, signal, response);
     return { sent: true, receipt: { version: 1, messageId: response.id, conversationId: qualified.conversationId } };
   }
   async reply(route, text, { signal, receipt = false, beforeSend, mentionUserIds } = {}) {
@@ -199,7 +199,7 @@ export class QqExternalConsumer {
     } catch (error) { throw nativeReplyFailure(error); }
     // Once dispatch begins, cancellation or a missing response cannot prove non-delivery.
     if (signal?.aborted || !identifier(response?.id)) throw qqRefusal('reply-result-unknown');
-    this.#observations.sent(qualified.conversationId, response.id, signal);
+    this.#observations.sent(qualified.conversationId, response.id, signal, response);
     return { sent: true, ...(receipt ? { receipt: { version: 1, messageId: response.id,
       conversationId: qualified.conversationId } } : { messageId: response.id }) };
   }

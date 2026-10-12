@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { QqNativeReplyObservations } from '../../../src/channels/qq/native-reply-observations.mjs';
 
@@ -176,4 +177,49 @@ test('frame duplicate memory evicts old entries and separates independent authen
   assert.equal(b.length, 1);
   assert.notEqual(a.at(-1).accountFingerprint, b[0].accountFingerprint);
   assert.equal(a.at(-1).messageHash, b[0].messageHash);
+});
+
+test('identifier evidence distinguishes native author fields and message aliases without changing Echo authority', () => {
+  const frames = [], candidates = [];
+  const hash = value => createHash('sha256').update(value).digest('hex');
+  const observer = new QqNativeReplyObservations({ account: { userId: 'authenticated-user', fingerprint: 'a'.repeat(64) },
+    report: record => candidates.push(record), reportFrame: record => frames.push(record) });
+  observer.receive({ kind: 'group', rawEventType: 'GROUP_MESSAGE_CREATE', messageId: 'callback-id',
+    groupOpenid: 'group', senderId: 'group-member', senderIsBot: true, msgIdx: 'parsed-index',
+    raw: { id: 'callback-id', message_id: 'alternate-id', content: 'private body',
+      author: { member_openid: 'group-member', id: 'authenticated-user', username: 'private name',
+        authorization: 'private credential' }, private_future_id: 'not-whitelisted' } });
+  observer.sent('group', 'receipt-id', undefined, { id: 'receipt-id', message_id: 'alternate-id',
+    content: 'private reply', token: 'private token', timestamp: 1 });
+  assert.equal(frames[0].authenticatedUser.hash, hash('authenticated-user'));
+  assert.equal(frames[0].senderIdentifier.hash, hash('group-member'));
+  assert.equal(frames[0].authorIdentifiers.id.hash, frames[0].authenticatedUser.hash);
+  assert.deepEqual(Object.keys(frames[0].authorIdentifiers), ['member_openid', 'id']);
+  assert.equal(frames[0].messageIndexIdentifier.hash, hash('parsed-index'));
+  assert.equal(frames[0].messageIdentifiers.message_id.hash, frames[1].messageIdentifiers.message_id.hash);
+  assert.notEqual(frames[0].messageHash, frames[1].messageHash);
+  assert.equal(frames[1].messageIdentifiers.id.length, 'receipt-id'.length);
+  assert.deepEqual(Object.keys(frames[1].messageIdentifiers), ['id', 'message_id']);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].receiptMatched, false);
+  assert.equal(candidates[0].senderMatchesAuthenticatedBot, false);
+  for (const value of ['authenticated-user', 'group-member', 'callback-id', 'receipt-id', 'alternate-id',
+    'parsed-index', 'private body', 'private name', 'private credential', 'not-whitelisted', 'private reply', 'private token'])
+    assert.ok(!JSON.stringify(frames).includes(value));
+});
+
+test('malformed diagnostic fields cannot break native candidate correlation or execute identifier getters', () => {
+  const candidates = [];
+  const observer = new QqNativeReplyObservations({ account: { userId: 'bot', fingerprint: 'a'.repeat(64) },
+    report: record => candidates.push(record), reportFrame: () => {} });
+  const response = new Proxy({}, { getOwnPropertyDescriptor() { throw Error('diagnostic metadata'); } });
+  assert.doesNotThrow(() => observer.sent('group', 'reply', undefined, response));
+  const raw = { get author() { throw Error('diagnostic metadata'); } };
+  assert.doesNotThrow(() => observer.receive({ kind: 'group', rawEventType: 'GROUP_MESSAGE_CREATE',
+    messageId: 'reply', groupOpenid: 'group', senderId: 'bot', senderIsBot: true, raw }));
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].receiptMatched, true);
+  let accessed = 0;
+  observer.sent('group', 'other', undefined, { get id() { accessed++; throw Error('getter'); } });
+  assert.equal(accessed, 0);
 });

@@ -13,8 +13,8 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
-- QQ 的独占外部 Consumer 新增有界原生回调／发送回执诊断，记录事件类型、作者资格判断和 App 范围的标识哈希，便于区分回调缺失与作者筛选；不记录正文、原始标识或凭据，不改变收件及回复资格，也不声明 Echo 能力（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
-  QQ exclusive external Consumers add bounded native callback/receipt diagnostics with event types, author qualification checks and app-scoped identifier hashes to distinguish missing callbacks from author filtering; no bodies, raw identifiers or credentials are logged, intake/reply qualification remains unchanged, and Echo capability is not advertised ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
+- QQ 的独占外部 Consumer 新增有界原生回调／发送回执诊断，记录事件类型、作者资格判断及白名单标识字段的哈希与长度，便于区分回调缺失、作者筛选和标识命名空间差异；不记录正文、原始标识或凭据，不改变收件及回复资格，也不声明 Echo 能力（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
+  QQ exclusive external Consumers add bounded native callback/receipt diagnostics with event types, author qualification checks and hashes/lengths of fixed identifier fields to distinguish missing callbacks, author filtering and identifier namespace differences; no bodies, raw identifiers or credentials are logged, intake/reply qualification remains unchanged, and Echo capability is not advertised ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
 
 - Lark checked 外部卡片新增独立的配对审核 namespace、角色选择与批准／拒绝，支持经原消息校验的群卡片与私聊卡片，共享更新会移除结束后的控件；沿用独占 Consumer，原生执行审批仍保持私聊限制。BotHarness Host 负责实时审核与委派权限，本候选真实 Lark 验收待完成（[BotHarness #1414](https://github.com/BotHarness/DeepSeekBot/issues/1414)）。
   Lark checked external cards add a separate pairing-review namespace, Role selection and approve/reject controls for source-checked group and private cards, with final shared updates removing controls. The exclusive Consumer is retained and native execution approvals remain private. BotHarness Host owns current review/delegation checks; this candidate still awaits real Lark qualification ([BotHarness #1414](https://github.com/BotHarness/DeepSeekBot/issues/1414)).

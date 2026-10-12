@@ -7,6 +7,21 @@ export function qqNativeIdentifier(value) {
 
 function hash(value) { return createHash('sha256').update(value).digest('hex'); }
 
+function identifierEvidence(value) {
+  return qqNativeIdentifier(value) ? { hash: hash(value), length: value.length } : undefined;
+}
+
+function identifierFields(value, fields) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(fields.flatMap(field => {
+    const evidence = identifierEvidence(Object.getOwnPropertyDescriptor(value, field)?.value);
+    return evidence ? [[field, evidence]] : [];
+  }));
+}
+
+const AUTHOR_IDENTIFIERS = ['member_openid', 'id', 'user_openid', 'union_openid', 'openid'];
+const MESSAGE_IDENTIFIERS = ['id', 'message_id', 'msg_id', 'msg_idx'];
+
 export class QqNativeReplyObservations {
   #account;
   #report;
@@ -25,7 +40,7 @@ export class QqNativeReplyObservations {
     this.#reportFrame = reportFrame;
   }
   // Process evidence only. Unknown authors never enter the candidate/receipt cache.
-  #frame(phase, conversationId, messageId, metadata = {}) {
+  #frame(phase, conversationId, messageId, metadata = () => ({})) {
     if (typeof this.#reportFrame !== 'function') return;
     const now = Date.now();
     for (const [key, at] of this.#frameSeen)
@@ -40,12 +55,15 @@ export class QqNativeReplyObservations {
     }
     if (this.#framesReported >= 64) { this.#framesSuppressed++; return; }
     this.#framesReported++;
-    const record = Object.freeze({ event: 'qq.native-reply.frame', phase,
-      accountFingerprint: this.#account.fingerprint,
-      conversationHash: hash(conversationId), messageHash: hash(messageId),
-      ...metadata, suppressed: this.#framesSuppressed });
-    this.#framesSuppressed = 0;
-    try { this.#reportFrame(record); } catch {}
+    try {
+      const record = Object.freeze({ event: 'qq.native-reply.frame', phase,
+        accountFingerprint: this.#account.fingerprint,
+        authenticatedUser: identifierEvidence(this.#account.userId),
+        conversationHash: hash(conversationId), messageHash: hash(messageId),
+        ...metadata(), suppressed: this.#framesSuppressed });
+      this.#framesSuppressed = 0;
+      this.#reportFrame(record);
+    } catch {}
   }
   #entry(conversationId, messageId) {
     const now = Date.now();
@@ -81,12 +99,16 @@ export class QqNativeReplyObservations {
     if (signal?.aborted || message?.kind !== 'group'
       || !['GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE'].includes(message.rawEventType)
       || !qqNativeIdentifier(message.messageId) || !qqNativeIdentifier(message.groupOpenid)) return;
-    this.#frame('callback', message.groupOpenid, message.messageId, {
+    this.#frame('callback', message.groupOpenid, message.messageId, () => ({
       eventType: message.rawEventType,
       senderBotFlag: message.senderIsBot === true ? 'true' : message.senderIsBot === false ? 'false'
         : message.senderIsBot === undefined ? 'absent' : 'other',
       senderMatchesAuthenticatedBot: message.senderId === this.#account.userId,
-    });
+      senderIdentifier: identifierEvidence(message.senderId),
+      authorIdentifiers: identifierFields(message.raw?.author, AUTHOR_IDENTIFIERS),
+      messageIdentifiers: identifierFields(message.raw, MESSAGE_IDENTIFIERS),
+      messageIndexIdentifier: identifierEvidence(message.msgIdx),
+    }));
     if (!(message.senderIsBot === true || message.senderId === this.#account.userId)) return;
     const entry = this.#entry(message.groupOpenid, message.messageId);
     if (entry.native) return;
@@ -94,9 +116,11 @@ export class QqNativeReplyObservations {
       senderMatchesAuthenticatedBot: message.senderId === this.#account.userId };
     this.#emit(entry);
   }
-  sent(conversationId, messageId, signal) {
+  sent(conversationId, messageId, signal, nativeResponse) {
     if (signal?.aborted || !qqNativeIdentifier(conversationId) || !qqNativeIdentifier(messageId)) return;
-    this.#frame('receipt', conversationId, messageId);
+    this.#frame('receipt', conversationId, messageId, () => ({
+      messageIdentifiers: identifierFields(nativeResponse ?? { id: messageId }, MESSAGE_IDENTIFIERS),
+    }));
     const entry = this.#entry(conversationId, messageId);
     if (entry.receipt) return;
     entry.receipt = true;
