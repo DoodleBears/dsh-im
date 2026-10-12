@@ -54,7 +54,11 @@ test('the production build patch observes real WS messages before decode and pre
   const runtime = new QqRuntime({ config: { appId: 'test-app', botId: 'test-bot', consumerMode: 'external-consumer' },
     appSecret: 'private-secret', state: {}, harness: {},
     externalConsumer: async event => { admitted.push(event); return { accepted: true }; },
-    logger: { info: (...args) => { logs.push(args); records.push(...args.filter(value => value?.event)); },
+    logger: { info: (...args) => {
+      logs.push(args); records.push(...args.filter(value => value?.event));
+      if (args.some(value => ['qq.native-transport.frame', 'qq.native-gateway.frame', 'qq.native-gateway.lifecycle'].includes(value?.event)))
+        return Promise.reject(Error('private-diagnostic-sink-failure'));
+    },
       error: (...args) => logs.push(args), warn() {} },
   });
   t.after(async () => {

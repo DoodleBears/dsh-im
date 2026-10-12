@@ -1,6 +1,6 @@
+import { observeFrame, qqObservedOpcodes, qqObservedEventTypes } from './sdk-frame-observation.mjs';
+
 const phases = ['received', 'decoded', 'parse-refused', 'processing-refused'];
-const eventTypes = ['READY', 'RESUMED', 'GROUP_MESSAGE_CREATE', 'GROUP_AT_MESSAGE_CREATE',
-  'C2C_MESSAGE_CREATE', 'AT_MESSAGE_CREATE', 'DIRECT_MESSAGE_CREATE', 'INTERACTION_CREATE', 'other'];
 
 /** Bounded process evidence for the maintained SDK option; never delivery authority. */
 export class QqNativeTransportDiagnostics {
@@ -26,10 +26,10 @@ export class QqNativeTransportDiagnostics {
     const record = { event: 'qq.native-transport.frame', accountFingerprint: this.#fingerprint,
       ...context, phase: value.phase, bytes: value.bytes, suppressed: this.#suppressed };
     if (value.phase === 'decoded') {
-      record.opcode = [0, 1, 2, 6, 7, 9, 10, 11].includes(value.opcode) ? value.opcode : 'other';
-      record.eventType = eventTypes.includes(value.eventType) ? value.eventType : 'other';
+      record.opcode = qqObservedOpcodes.includes(value.opcode) ? value.opcode : 'other';
+      record.eventType = qqObservedEventTypes.includes(value.eventType) ? value.eventType : 'other';
       record.sequence = Number.isSafeInteger(value.sequence) && value.sequence >= 0 ? value.sequence : null;
     }
-    try { this.#report?.(Object.freeze(record)); this.#suppressed = 0; } catch {}
+    if (observeFrame(this.#report, record)) this.#suppressed = 0;
   }
 }
