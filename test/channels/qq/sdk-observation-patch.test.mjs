@@ -88,6 +88,9 @@ test('the production build patch observes real WS messages before decode and pre
     pairs.set(key, [...(pairs.get(key) ?? []), value.phase]);
   }
   assert.ok([...pairs.values()].every(phases => phases[0] === 'received' && ['decoded', 'parse-refused'].includes(phases[1])));
+  assert.equal(runtime.status.transportObservation.received, pairs.size);
+  assert.equal(runtime.status.transportObservation.parseRefused, 1);
+  assert.equal(runtime.status.transportObservation.suppressed, 0);
   const reply = await runtime.replyChecked(admitted[0].reply, 'answer', { receipt: true, beforeSend: () => true });
   assert.equal(reply.receipt.messageId, 'private-receipt');
   assert.equal(nativePosts.length, 1);

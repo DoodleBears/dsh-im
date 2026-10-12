@@ -36,6 +36,8 @@ test('transport quota reports later suppression, keeps one current frame and ign
   const frame = { connection: 1, frame: 1, phase: 'received', bytes: 10 };
   for (let index = 0; index < 130; index++) observer.observe({ ...frame, frame: index + 1 });
   assert.equal(records.length, 128);
+  assert.equal(observer.snapshot.received, 130);
+  assert.equal(observer.snapshot.suppressed, 2); // Tail suppression is visible without a later log.
   now = 60_000;
   observer.observe(frame);
   assert.equal(records[128].suppressed, 2);
@@ -43,6 +45,7 @@ test('transport quota reports later suppression, keeps one current frame and ign
   observer.observe({ ...frame, frame: -1 });
   observer.observe({ ...frame, bytes: Infinity });
   assert.equal(records.length, 129);
+  assert.equal(observer.snapshot.received, 131);
   const broken = new QqNativeTransportDiagnostics({ account: { fingerprint: 'a'.repeat(64) }, report() { throw Error('private'); } });
   assert.doesNotThrow(() => broken.observe(frame));
 });

@@ -258,6 +258,7 @@ export class QqRuntime {
     this.#status.startedAt = new Date().toISOString();
     this.#status.qqConnectionState = 'connecting';
     this.#status.lastError = null; this.#status.error = null; this.#diagnostics.clear();
+    delete this.#status.transportObservation;
     if (this.#config.consumerMode !== 'external-consumer')
       await atConnectionStage('harness.check', () => this.#harness.ensureRunning());
     this.#status.harnessReachable = true;
@@ -308,8 +309,10 @@ export class QqRuntime {
       tokenPrefetch: 'sync',
       // Public option proposed by the maintained, hash-checked SDK build patch.
       onGatewayObservation: value => {
-        if (!controller.signal.aborted && this.#abortController === controller)
+        if (!controller.signal.aborted && this.#abortController === controller) {
           transportDiagnostics?.observe(value, controller.signal);
+          if (transportDiagnostics) this.#status.transportObservation = transportDiagnostics.snapshot;
+        }
       },
       // sendText is reserved for literal notices/connection tests. Markdown
       // replies use the explicit msg_type=2 path in sendMarkdownReply().
