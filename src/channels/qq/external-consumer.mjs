@@ -5,6 +5,7 @@ import { QqNativeReplyObservations, qqNativeIdentifier as identifier } from './n
 import { qqSourceAttachments, readQqSourceAttachment, checkedQqImageFile, uploadQqCheckedMedia } from './external-images.mjs';
 import { checkedQqGenericFile, qqQuotedFileMessage } from './external-files.mjs';
 import { qqVoiceMessage } from './external-voice.mjs';
+import { qqExternalMentions } from './external-mentions.mjs';
 
 export function qqRefusal(code) { return Object.assign(new Error(code), { code }); }
 
@@ -60,7 +61,7 @@ export function normalizeQqExternalText(message, { botId, account }) {
       ...(typeof message.senderName === 'string' && message.senderName.trim()
         ? { name: message.senderName.slice(0, 512) } : {}) },
     conversation: { kind: 'group', id: message.groupOpenid },
-    mentions: [], mentionedAccount: true, at: at.toISOString(), text: message.content,
+    mentions: qqExternalMentions(message, account), mentionedAccount: true, at: at.toISOString(), text: message.content,
     reply: { messageId: message.messageId, conversationId: message.groupOpenid, actorId: message.senderId },
     replay: { kind: 'provider-redelivery', resumeCursor: false, gapPossible: true },
   });
