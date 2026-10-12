@@ -11,6 +11,7 @@ import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
 import { createQqBridgeStatus, QqHarnessBridge } from './qq-bridge.mjs';
 import { QqExternalConsumer, qqRefusal, verifiedQqAccount } from './external-consumer.mjs';
 import { postQqText } from './external-post.mjs';
+import { QqNativeGatewayDiagnostics } from './native-gateway-diagnostics.mjs';
 
 function timeoutError() {
   const error = new Error('QQ WebSocket did not become ready in time');
@@ -278,11 +279,17 @@ export class QqRuntime {
         botId: this.#config.botId, phase: this.#status.qqConnectionState })}`);
       return true;
     };
+    let gatewayDiagnostics;
     const sdkLogger = {
       error: (...args) => { if (!observeTransport(args[0])) this.#logger.error?.(...args); },
       warn: (...args) => this.#logger.warn?.(...args),
       info: (...args) => { if (!observeTransport(args[0])) this.#logger.info?.(...args); },
-      debug: () => {},
+      debug: message => {
+        try {
+          if (!controller.signal.aborted && this.#abortController === controller)
+            gatewayDiagnostics?.observe(message, controller.signal);
+        } catch {}
+      },
     };
     const bot = this.#createBot({
       appId: this.#config.appId,
@@ -304,6 +311,8 @@ export class QqRuntime {
         const nativeUser = await bot.api.get('/users/@me');
         const account = verifiedQqAccount(this.#config.appId, nativeUser);
         controller.signal.throwIfAborted();
+        gatewayDiagnostics = new QqNativeGatewayDiagnostics({ botId: this.#config.botId, account,
+          report: record => this.#logger.info?.('[dsh-im:qq] native gateway diagnostic', record) });
         this.#externalBridge = new QqExternalConsumer({ bot, account, nativeUser, botId: this.#config.botId,
           accept: this.#externalConsumer,
           sourceImages: this.#sourceImages,

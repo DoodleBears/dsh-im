@@ -5,6 +5,7 @@ import { WebSocketServer } from 'ws';
 import { QQBot } from '@tencent-connect/qqbot-nodejs';
 import { QqExternalConsumer, verifiedQqAccount } from '../../../src/channels/qq/external-consumer.mjs';
 import { QqRuntime } from '../../../src/channels/qq/qq-runtime.mjs';
+import { createHash } from 'node:crypto';
 
 function deferred() {
   let resolve;
@@ -12,6 +13,57 @@ function deferred() {
   return { promise, resolve };
 }
 const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
+
+test('pinned SDK pre-dispatch Logger exposes metadata even when native normalization refuses the frame', async t => {
+  const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await once(server, 'listening');
+  let socket;
+  let sdkLogger;
+  const records = [];
+  const admitted = [];
+  server.on('connection', client => {
+    socket = client;
+    client.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } }));
+    client.on('message', bytes => {
+      const value = JSON.parse(bytes.toString());
+      if (value.op === 2) client.send(JSON.stringify({ op: 0, t: 'READY', s: 1, d: { session_id: 'fake-session' } }));
+    });
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const path = new URL(String(url)).pathname;
+    return json(path.includes('getAppAccessToken') ? { access_token: 'fake-token', expires_in: 7200 }
+      : path === '/gateway' ? { url: `ws://127.0.0.1:${server.address().port}` }
+        : { id: 'native-bot', bot: true });
+  };
+  const runtime = new QqRuntime({
+    config: { botId: 'qa', appId: '12345678', consumerMode: 'external-consumer' },
+    appSecret: 'fake-secret', state: {}, harness: {}, externalConsumer: async value => { admitted.push(value); return { accepted: true }; },
+    logger: { info: (_label, value) => { if (value?.event === 'qq.native-gateway.frame') records.push(value); }, error() {}, warn() {} },
+    createBot: options => { sdkLogger = options.logger; return new QQBot(options); }, connectTimeoutMs: 5000,
+  });
+  t.after(async () => {
+    await runtime.stop();
+    for (const client of server.clients) client.terminate();
+    await new Promise(resolve => server.close(resolve));
+    globalThis.fetch = originalFetch;
+  });
+  await runtime.start();
+  socket.send(JSON.stringify({ op: 0, t: 'GROUP_MESSAGE_CREATE', s: 2,
+    d: { id: 'private-wire-id', group_openid: 'private-group', author: null, content: 'private-body', authorization: 'private-credential' } }));
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(records.length, 1);
+  assert.equal(records[0].eventType, 'GROUP_MESSAGE_CREATE');
+  assert.equal(records[0].messageHash, createHash('sha256').update('private-wire-id').digest('hex'));
+  assert.equal(records[0].conversationHash, createHash('sha256').update('private-group').digest('hex'));
+  assert.equal(records[0].senderBotFlag, 'absent');
+  assert.equal(admitted.length, 0);
+  for (const secret of ['private-wire-id', 'private-group', 'private-body', 'private-credential', 'fake-token', 'fake-secret'])
+    assert.equal(JSON.stringify(records).includes(secret), false);
+  await runtime.stop();
+  sdkLogger.debug('[qa] Dispatch event: t=GROUP_MESSAGE_CREATE payload=' + JSON.stringify({ id: 'late-id', group_openid: 'private-group' }));
+  assert.equal(records.length, 1);
+});
 
 test('actual QQ SDK never posts a message when the consumer is revoked during token acquisition', async t => {
   const tokenStarted = deferred();
