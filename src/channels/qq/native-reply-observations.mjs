@@ -30,14 +30,19 @@ export class QqNativeReplyObservations {
   #reported = 0;
   #suppressed = 0;
   #reportFrame;
+  #nativeUserIdentifiers = {};
   #frameSeen = new Map();
   #frameWindowAt = 0;
   #framesReported = 0;
   #framesSuppressed = 0;
-  constructor({ account, report, reportFrame }) {
+  constructor({ account, report, reportFrame, nativeUser }) {
     this.#account = account;
     this.#report = report;
     this.#reportFrame = reportFrame;
+    if (typeof reportFrame === 'function') {
+      try { this.#nativeUserIdentifiers = identifierFields(nativeUser ?? { id: account.userId }, AUTHOR_IDENTIFIERS); }
+      catch {}
+    }
   }
   // Process evidence only. Unknown authors never enter the candidate/receipt cache.
   #frame(phase, conversationId, messageId, metadata = () => ({})) {
@@ -59,6 +64,7 @@ export class QqNativeReplyObservations {
       const record = Object.freeze({ event: 'qq.native-reply.frame', phase,
         accountFingerprint: this.#account.fingerprint,
         authenticatedUser: identifierEvidence(this.#account.userId),
+        authenticatedUserIdentifiers: this.#nativeUserIdentifiers,
         conversationHash: hash(conversationId), messageHash: hash(messageId),
         ...metadata(), suppressed: this.#framesSuppressed });
       this.#framesSuppressed = 0;
@@ -108,6 +114,13 @@ export class QqNativeReplyObservations {
       authorIdentifiers: identifierFields(message.raw?.author, AUTHOR_IDENTIFIERS),
       messageIdentifiers: identifierFields(message.raw, MESSAGE_IDENTIFIERS),
       messageIndexIdentifier: identifierEvidence(message.msgIdx),
+      mentionIdentifiers: Array.isArray(message.mentions) ? message.mentions.slice(0, 8).map(mention => ({
+        self: mention?.is_you === true,
+        selfFlag: mention?.is_you === true ? 'true' : mention?.is_you === false ? 'false'
+          : mention?.is_you === undefined ? 'absent' : 'other',
+        identifiers: identifierFields(mention, ['id', 'user_openid', 'member_openid']),
+      })) : [],
+      mentionsTruncated: Array.isArray(message.mentions) && message.mentions.length > 8,
     }));
     if (!(message.senderIsBot === true || message.senderId === this.#account.userId)) return;
     const entry = this.#entry(message.groupOpenid, message.messageId);
@@ -120,6 +133,7 @@ export class QqNativeReplyObservations {
     if (signal?.aborted || !qqNativeIdentifier(conversationId) || !qqNativeIdentifier(messageId)) return;
     this.#frame('receipt', conversationId, messageId, () => ({
       messageIdentifiers: identifierFields(nativeResponse ?? { id: messageId }, MESSAGE_IDENTIFIERS),
+      messageIndexIdentifier: identifierEvidence(nativeResponse?.ext_info?.ref_idx),
     }));
     const entry = this.#entry(conversationId, messageId);
     if (entry.receipt) return;

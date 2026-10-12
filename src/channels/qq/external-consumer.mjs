@@ -78,10 +78,10 @@ export class QqExternalConsumer {
   #sourceVoiceTranscripts;
   #sourceVoiceAudio;
   #sources = new Map();
-  constructor({ bot, account, botId, accept, sourceImages = () => false, sourceFiles = () => false, sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false, reportNativeObservation = () => {}, reportNativeFrame }) {
+  constructor({ bot, account, botId, accept, sourceImages = () => false, sourceFiles = () => false, sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false, reportNativeObservation = () => {}, reportNativeFrame, nativeUser }) {
     this.#bot = bot; this.#account = account; this.#botId = botId; this.#accept = accept;
     this.#observations = new QqNativeReplyObservations({ account, report: reportNativeObservation,
-      reportFrame: reportNativeFrame });
+      reportFrame: reportNativeFrame, nativeUser });
     this.#sourceImages = sourceImages;
     this.#sourceFiles = sourceFiles;
     this.#sourceVoiceTranscripts = sourceVoiceTranscripts;

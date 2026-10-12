@@ -301,9 +301,10 @@ export class QqRuntime {
     this.#bot = bot;
     if (this.#config.consumerMode === 'external-consumer' && this.#externalConsumer) {
       try {
-        const account = verifiedQqAccount(this.#config.appId, await bot.api.get('/users/@me'));
+        const nativeUser = await bot.api.get('/users/@me');
+        const account = verifiedQqAccount(this.#config.appId, nativeUser);
         controller.signal.throwIfAborted();
-        this.#externalBridge = new QqExternalConsumer({ bot, account, botId: this.#config.botId,
+        this.#externalBridge = new QqExternalConsumer({ bot, account, nativeUser, botId: this.#config.botId,
           accept: this.#externalConsumer,
           sourceImages: this.#sourceImages,
           sourceFiles: this.#sourceFiles,

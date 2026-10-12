@@ -223,3 +223,27 @@ test('malformed diagnostic fields cannot break native candidate correlation or e
   observer.sent('group', 'other', undefined, { get id() { accessed++; throw Error('getter'); } });
   assert.equal(accessed, 0);
 });
+
+test('native reference and mention evidence stays diagnostic, bounded and separate from receipt authority', () => {
+  const frames = [], candidates = [];
+  const observer = new QqNativeReplyObservations({ account: { userId: 'global-user', fingerprint: 'a'.repeat(64) },
+    nativeUser: { id: 'global-user', union_openid: 'alternate-user', username: 'private name' },
+    report: record => candidates.push(record), reportFrame: record => frames.push(record) });
+  observer.sent('group', 'receipt-id', undefined, { id: 'receipt-id', ext_info: {
+    ref_idx: 'native-reference', private_info: 'private credential' } });
+  observer.receive({ kind: 'group', rawEventType: 'GROUP_MESSAGE_CREATE', groupOpenid: 'group',
+    messageId: 'callback-id', senderId: 'group-member', senderIsBot: true, msgIdx: 'native-reference',
+    mentions: Array.from({ length: 40 }, (_, index) => ({ is_you: index === 0, id: 'group-member',
+      nickname: 'private name', content: 'private body' })) });
+  assert.equal(frames[0].messageIndexIdentifier.hash, frames[1].messageIndexIdentifier.hash);
+  assert.equal(frames[1].mentionIdentifiers.length, 8);
+  assert.equal(frames[1].mentionIdentifiers[0].self, true);
+  assert.equal(frames[1].mentionIdentifiers[1].self, false);
+  assert.equal(frames[1].mentionIdentifiers[0].identifiers.id.hash, frames[1].senderIdentifier.hash);
+  assert.deepEqual(Object.keys(frames[1].authenticatedUserIdentifiers), ['id', 'union_openid']);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].receiptMatched, false);
+  for (const value of ['native-reference', 'global-user', 'alternate-user', 'group-member', 'private name',
+    'private body', 'private credential', 'private_info', 'nickname', 'content'])
+    assert.ok(!JSON.stringify(frames).includes(value));
+});
