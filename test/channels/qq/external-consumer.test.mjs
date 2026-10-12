@@ -273,19 +273,25 @@ test('runtime observes native reply candidates independently without enabling Ec
   const bot = new PlatformBot();
   const admitted = [];
   const observations = [];
+  const frames = [];
   const runtime = new QqRuntime({
     config: { botId: 'qq_test', appId: '12345678', consumerMode: 'external-consumer' },
     appSecret: 'test-secret', state: {}, harness: {}, connectTimeoutMs: 100,
     createBot: () => bot, externalConsumer: async event => {
       admitted.push(event); return { accepted: true };
     },
-    logger: { info: (_label, record) => observations.push(record) },
+    logger: { info: (_label, record) => {
+      if (record?.event === 'qq.native-reply.frame') frames.push(record);
+      else observations.push(record);
+    } },
   });
   t.after(() => runtime.stop());
   await runtime.start();
   await bot.deliver(mention());
   await runtime.replyChecked(admitted[0].reply, 'answer', { receipt: true });
   assert.deepEqual(observations, []);
+  assert.deepEqual(frames.map(record => record.phase), ['callback', 'receipt']);
+  assert.notEqual(frames[0].messageHash, frames[1].messageHash);
   const native = mention({ rawEventType: 'GROUP_MESSAGE_CREATE', messageId: 'native-reply-id',
     senderIsBot: true, senderId: 'native-bot-id' });
   await bot.deliver(native);
@@ -294,6 +300,7 @@ test('runtime observes native reply candidates independently without enabling Ec
   assert.equal(admitted.length, 1);
   assert.equal(observations.length, 1);
   assert.equal(observations[0].receiptMatched, true);
+  assert.equal(frames.filter(record => record.phase === 'callback').length, 3);
   observations.length = 0;
   bot.apiClient.request = async () => ({ id: 'native-post-id' });
   await runtime.sendProactiveText({ kind: 'group', route: { groupOpenId: 'app-scoped-group' } }, 'post', {

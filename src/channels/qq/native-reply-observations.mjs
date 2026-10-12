@@ -14,9 +14,38 @@ export class QqNativeReplyObservations {
   #windowAt = 0;
   #reported = 0;
   #suppressed = 0;
-  constructor({ account, report }) {
+  #reportFrame;
+  #frameSeen = new Map();
+  #frameWindowAt = 0;
+  #framesReported = 0;
+  #framesSuppressed = 0;
+  constructor({ account, report, reportFrame }) {
     this.#account = account;
     this.#report = report;
+    this.#reportFrame = reportFrame;
+  }
+  // Process evidence only. Unknown authors never enter the candidate/receipt cache.
+  #frame(phase, conversationId, messageId, metadata = {}) {
+    if (typeof this.#reportFrame !== 'function') return;
+    const now = Date.now();
+    for (const [key, at] of this.#frameSeen)
+      if (now - at > 300_000) this.#frameSeen.delete(key);
+    const key = JSON.stringify([phase, conversationId, messageId]);
+    if (this.#frameSeen.has(key)) return;
+    this.#frameSeen.set(key, now);
+    while (this.#frameSeen.size > 128) this.#frameSeen.delete(this.#frameSeen.keys().next().value);
+    if (now - this.#frameWindowAt >= 60_000) {
+      this.#frameWindowAt = now;
+      this.#framesReported = 0;
+    }
+    if (this.#framesReported >= 64) { this.#framesSuppressed++; return; }
+    this.#framesReported++;
+    const record = Object.freeze({ event: 'qq.native-reply.frame', phase,
+      accountFingerprint: this.#account.fingerprint,
+      conversationHash: hash(conversationId), messageHash: hash(messageId),
+      ...metadata, suppressed: this.#framesSuppressed });
+    this.#framesSuppressed = 0;
+    try { this.#reportFrame(record); } catch {}
   }
   #entry(conversationId, messageId) {
     const now = Date.now();
@@ -51,8 +80,14 @@ export class QqNativeReplyObservations {
   receive(message, signal) {
     if (signal?.aborted || message?.kind !== 'group'
       || !['GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE'].includes(message.rawEventType)
-      || !qqNativeIdentifier(message.messageId) || !qqNativeIdentifier(message.groupOpenid)
-      || !(message.senderIsBot === true || message.senderId === this.#account.userId)) return;
+      || !qqNativeIdentifier(message.messageId) || !qqNativeIdentifier(message.groupOpenid)) return;
+    this.#frame('callback', message.groupOpenid, message.messageId, {
+      eventType: message.rawEventType,
+      senderBotFlag: message.senderIsBot === true ? 'true' : message.senderIsBot === false ? 'false'
+        : message.senderIsBot === undefined ? 'absent' : 'other',
+      senderMatchesAuthenticatedBot: message.senderId === this.#account.userId,
+    });
+    if (!(message.senderIsBot === true || message.senderId === this.#account.userId)) return;
     const entry = this.#entry(message.groupOpenid, message.messageId);
     if (entry.native) return;
     entry.native = { eventType: message.rawEventType, senderIsBot: message.senderIsBot === true,
@@ -61,6 +96,7 @@ export class QqNativeReplyObservations {
   }
   sent(conversationId, messageId, signal) {
     if (signal?.aborted || !qqNativeIdentifier(conversationId) || !qqNativeIdentifier(messageId)) return;
+    this.#frame('receipt', conversationId, messageId);
     const entry = this.#entry(conversationId, messageId);
     if (entry.receipt) return;
     entry.receipt = true;
