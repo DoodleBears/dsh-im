@@ -100,7 +100,7 @@ export function createImHostPlugin(internals = {}) {
           inboundVersion: 1,
           fileVersion: 1,
           approvalCardVersion: 1,
-          approvalRuleCardVersion: 1,
+          approvalRuleCardVersion: 2,
           pairingCardVersion: 1,
           approvalCardChecked: (botId, route, card, options) => deliveryService.approvalCardChecked(botId, route, card, options),
           receiptVersion: 1,

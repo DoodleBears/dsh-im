@@ -54,6 +54,26 @@ test('exact rule preview and nonce-bound confirmation remain separate from ordin
 });
 
 const pairingCard = { ...card, kind: 'pairing', roles: [{ id: requestId, name: 'Member', revision: 2 }], page: 0, pages: 1 };
+test('all-opaque has a distinct high-risk confirmation and strict callbacks, with no final controls', () => {
+  const confirmationId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const offered = JSON.parse(externalApprovalCard({...card,rules:['exact','all-opaque']}));
+  assert.deepEqual(offered.elements[1].actions.map(a=>a.value.action),['allowed-once','rejected','preview-exact','preview-all-opaque']);
+  const confirm = JSON.parse(externalApprovalCard({...card,ruleConfirmation:{id:confirmationId,kind:'all-opaque'}}));
+  assert.deepEqual(confirm.elements[1].actions.map(a=>a.value.action),['confirm-all-opaque','cancel-rule']);
+  assert.equal(confirm.elements[1].actions[0].type,'danger');
+  const callback = event();
+  callback.action.value = {namespace:'botharness/approval-rule-v1',requestId,action:'preview-all-opaque'};
+  assert.equal(normalizeExternalCardAction(callback,identity).action,'preview-all-opaque');
+  callback.action.value = {...callback.action.value,confirmationId};
+  assert.throws(()=>normalizeExternalCardAction(callback,identity),{code:'invalid-inbound'});
+  callback.action.value.action='confirm-all-opaque';
+  assert.equal(normalizeExternalCardAction(callback,identity).confirmationId,confirmationId);
+  delete callback.action.value.confirmationId;
+  assert.throws(()=>normalizeExternalCardAction(callback,identity),{code:'invalid-inbound'});
+  assert.throws(()=>externalApprovalCard({...card,rules:['all-opaque']}),{code:'bad-request'});
+  const final = JSON.parse(externalApprovalCard({...card,ruleConfirmation:{id:confirmationId,kind:'all-opaque'},status:'executed'}));
+  assert.equal(final.elements.some(e=>e.tag==='action'),false);
+});
 test('pairing cards require explicit Role selection, retain a separate namespace and remove final controls', () => {
   const first = JSON.parse(externalApprovalCard(pairingCard));
   assert.equal(first.config.update_multi, true);
