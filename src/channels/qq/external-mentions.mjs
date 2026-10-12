@@ -18,6 +18,7 @@ export function qqExternalMentions(message, account) {
     const name = displayName(mention.username) ?? displayName(mention.nickname)
       ?? (mention.is_you === true ? displayName(account.name) : undefined);
     for (const key of [`<@${id}>`, `<@!${id}>`]) {
+      if (key.length > 512) continue;
       if (!message.content.includes(key) || ambiguous.has(key)) continue;
       const prior = entries.get(key);
       if (prior && (prior.id !== id || prior.name !== name)) {

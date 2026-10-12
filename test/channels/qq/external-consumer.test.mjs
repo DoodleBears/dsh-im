@@ -455,6 +455,15 @@ test('public QQ Consumer preserves scoped native mention names and IDs without g
   ]);
   assert.equal(account.capabilities.includes('own-text-echo'), false);
   assert.equal(fx.bot().sent.length, 0);
+  const longId = 'a'.repeat(512);
+  const longContent = `<@${longId}> question`;
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', messageId: 'long-token-source',
+    content: longContent, mentions: [{ id: longId, is_you: true }],
+    replyTarget: { scope: 'group', targetId: 'app-scoped-group', msgId: 'long-token-source' },
+  }));
+  assert.equal(admitted.length, 2);
+  assert.equal(admitted[1].text, longContent);
+  assert.deepEqual(admitted[1].mentions, []);
 });
 
 test('QQ fences source routes, pending canonical admission, native send uncertainty, and revoked leases', async t => {

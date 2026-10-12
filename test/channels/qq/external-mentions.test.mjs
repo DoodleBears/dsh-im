@@ -37,3 +37,13 @@ test('QQ mention display does not guess conflicting aliases, conflicting names o
  const mentions=Array.from({length:100},(_,i)=>({id:`id-${i}`,username:'Native name'}));
  assert.deepEqual(qqExternalMentions({mentions,content:mentions.map(x=>`<@${x.id}> <@!${x.id}>`).join(' ')},{}),[]);
 });
+
+test('QQ optional display tokens respect the Core key limit without refusing longer native IDs', () => {
+ for(const length of [508,509,510,512]) {
+  const id='a'.repeat(length);
+  const mention={id,username:'Native name'};
+  const message={mentions:[mention],content:`<@${id}> <@!${id}>`};
+  const result=qqExternalMentions(message,{});
+  assert.deepEqual(result.map(x=>x.key),[`<@${id}>`,`<@!${id}>`].filter(key=>key.length<=512));
+ }
+});
