@@ -10,9 +10,23 @@ export function externalApprovalCard(value) {
   if (!value || !uuid.test(value.requestId ?? '') || !text(value.title, 120) || !text(value.detail, 16000)
     || !['pending', 'web-required', 'allowed-once', 'rejected', 'expired', 'executed', 'execution-failed', 'execution-unknown', 'test'].includes(value.status)) refuse('bad-request');
   const elements = [{ tag: 'div', text: { tag: 'plain_text', content: value.detail } }];
-  if (value.status === 'pending') elements.push({ tag: 'action', actions: [
+  if (value.rules !== undefined && (!Array.isArray(value.rules) || ![1, 2].includes(value.rules.length)
+    || value.rules[0] !== 'exact' || (value.rules.length === 2 && value.rules[1] !== 'all-opaque'))) refuse('bad-request');
+  if (value.ruleConfirmation !== undefined && (!uuid.test(value.ruleConfirmation.id ?? '') || !['exact', 'all-opaque'].includes(value.ruleConfirmation.kind))) refuse('bad-request');
+  const ruleAction = (action, label, type = 'default') => ({ tag: 'button', type,
+    text: { tag: 'plain_text', content: label }, value: { namespace: 'botharness/approval-rule-v1', requestId: value.requestId, action,
+      ...(value.ruleConfirmation ? { confirmationId: value.ruleConfirmation.id } : {}) } });
+  if (value.status === 'pending' && value.ruleConfirmation) elements.push({ tag: 'action', actions: [
+    ...(value.ruleConfirmation.kind === 'all-opaque'
+      ? [ruleAction('confirm-all-opaque', 'Confirm ALL opaque tools / 确认全部不透明工具', 'danger')]
+      : [ruleAction('confirm-exact', 'Confirm matching rule / 确认保存匹配规则', 'primary')]),
+    ruleAction('cancel-rule', 'Back / 返回'),
+  ] });
+  else if (value.status === 'pending') elements.push({ tag: 'action', actions: [
     { tag: 'button', type: 'primary', text: { tag: 'plain_text', content: 'Allow once / 允许一次' }, value: { namespace: 'botharness/approval-v1', requestId: value.requestId, action: 'allowed-once' } },
     { tag: 'button', type: 'danger', text: { tag: 'plain_text', content: 'Reject / 拒绝' }, value: { namespace: 'botharness/approval-v1', requestId: value.requestId, action: 'rejected' } },
+    ...(value.rules ? [ruleAction('preview-exact', 'Allow matching operations… / 批准匹配操作…')] : []),
+    ...(value.rules?.includes('all-opaque') ? [ruleAction('preview-all-opaque', 'All opaque tools in this scope… / 此范围内全部不透明工具…', 'danger')] : []),
   ] });
   // Both the initial card and later PATCH need shared mode for receiver-visible updates.
   return JSON.stringify({ config: { wide_screen_mode: true, update_multi: true }, header: { title: { tag: 'plain_text', content: value.title }, template: 'blue' }, elements });
@@ -48,13 +62,20 @@ export function normalizeExternalCardAction(event, identity) {
   const appId = event?.header?.app_id ?? event?.app_id;
   if (appId !== undefined && appId !== identity.appId) refuse('account-changed');
   const value = event?.action?.value;
-  if (value?.namespace !== 'botharness/approval-v1' && value?.namespace !== 'botharness/pairing-v1') return null;
+  if (!['botharness/approval-v1', 'botharness/pairing-v1', 'botharness/approval-rule-v1'].includes(value?.namespace)) return null;
   const actorId = event?.operator?.open_id;
   const messageId = event?.context?.open_message_id;
   const conversationId = event?.context?.open_chat_id;
   if (!identifier(actorId, 'ou') || !identifier(messageId, 'om') || !identifier(conversationId, 'oc')
     || !uuid.test(value.requestId ?? '')
     || !/^[a-f0-9]{64}$/.test(identity.fingerprint ?? '')) refuse('invalid-inbound');
+  if (value.namespace === 'botharness/approval-rule-v1') {
+    if (event.action.tag !== 'button' || !['preview-exact', 'confirm-exact', 'preview-all-opaque', 'confirm-all-opaque', 'cancel-rule'].includes(value.action)
+      || (['preview-exact', 'preview-all-opaque'].includes(value.action) ? value.confirmationId !== undefined : !uuid.test(value.confirmationId ?? ''))) refuse('invalid-inbound');
+    return Object.freeze({ kind: 'approval-rule', version: 1, channel: 'feishu', botId: identity.botId, fingerprint: identity.fingerprint,
+      actorId, messageId, conversationId, requestId: value.requestId, action: value.action,
+      ...(value.confirmationId ? { confirmationId: value.confirmationId } : {}) });
+  }
   if (value.namespace === 'botharness/pairing-v1') {
     const roleId = value.action === 'select-role' ? event.action.option : value.roleId;
     if (!['select-role', 'approve-pairing', 'reject-pairing', 'next-roles', 'previous-roles'].includes(value.action)

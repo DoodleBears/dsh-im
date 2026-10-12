@@ -30,7 +30,50 @@ test('cards render bounded plain text and only once/reject controls', () => {
   assert.throws(() => externalApprovalCard({ ...card, detail: 'a'.repeat(16001) }), { code: 'bad-request' });
 });
 
+test('exact rule preview and nonce-bound confirmation remain separate from ordinary approval and questions', () => {
+  const offered = JSON.parse(externalApprovalCard({ ...card, rules: ['exact'] }));
+  assert.deepEqual(offered.elements[1].actions.map(a => a.value.action), ['allowed-once', 'rejected', 'preview-exact']);
+  assert.equal(offered.elements[1].actions[2].value.namespace, 'botharness/approval-rule-v1');
+  const confirmationId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+  const confirm = JSON.parse(externalApprovalCard({ ...card, ruleConfirmation: { id: confirmationId, kind: 'exact' } }));
+  assert.deepEqual(confirm.elements[1].actions.map(a => a.value.action), ['confirm-exact', 'cancel-rule']);
+  assert.ok(confirm.elements[1].actions.every(a => a.value.confirmationId === confirmationId));
+  const confirmed = event();
+  confirmed.action.value = { namespace: 'botharness/approval-rule-v1', requestId, action: 'confirm-exact', confirmationId };
+  assert.equal(normalizeExternalCardAction(confirmed, identity).kind, 'approval-rule');
+  assert.equal(normalizeExternalCardAction(confirmed, identity).confirmationId, confirmationId);
+  delete confirmed.action.value.confirmationId;
+  assert.throws(() => normalizeExternalCardAction(confirmed, identity), { code: 'invalid-inbound' });
+  confirmed.action.value = { namespace: 'botharness/approval-v1', requestId, action: 'confirm-exact', confirmationId };
+  assert.throws(() => normalizeExternalCardAction(confirmed, identity), { code: 'invalid-inbound' });
+  confirmed.action.value.namespace = 'botharness/question-v1';
+  assert.equal(normalizeExternalCardAction(confirmed, identity), null);
+  assert.throws(() => externalApprovalCard({ ...card, rules: ['all-opaque'] }), { code: 'bad-request' });
+  assert.throws(() => externalApprovalCard({ ...card, ruleConfirmation: { id: 'forged', kind: 'exact' } }), { code: 'bad-request' });
+  assert.equal(JSON.parse(externalApprovalCard({ ...card, ruleConfirmation: { id: confirmationId, kind: 'exact' }, status: 'executed' })).elements.length, 1);
+});
+
 const pairingCard = { ...card, kind: 'pairing', roles: [{ id: requestId, name: 'Member', revision: 2 }], page: 0, pages: 1 };
+test('all-opaque has a distinct high-risk confirmation and strict callbacks, with no final controls', () => {
+  const confirmationId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const offered = JSON.parse(externalApprovalCard({...card,rules:['exact','all-opaque']}));
+  assert.deepEqual(offered.elements[1].actions.map(a=>a.value.action),['allowed-once','rejected','preview-exact','preview-all-opaque']);
+  const confirm = JSON.parse(externalApprovalCard({...card,ruleConfirmation:{id:confirmationId,kind:'all-opaque'}}));
+  assert.deepEqual(confirm.elements[1].actions.map(a=>a.value.action),['confirm-all-opaque','cancel-rule']);
+  assert.equal(confirm.elements[1].actions[0].type,'danger');
+  const callback = event();
+  callback.action.value = {namespace:'botharness/approval-rule-v1',requestId,action:'preview-all-opaque'};
+  assert.equal(normalizeExternalCardAction(callback,identity).action,'preview-all-opaque');
+  callback.action.value = {...callback.action.value,confirmationId};
+  assert.throws(()=>normalizeExternalCardAction(callback,identity),{code:'invalid-inbound'});
+  callback.action.value.action='confirm-all-opaque';
+  assert.equal(normalizeExternalCardAction(callback,identity).confirmationId,confirmationId);
+  delete callback.action.value.confirmationId;
+  assert.throws(()=>normalizeExternalCardAction(callback,identity),{code:'invalid-inbound'});
+  assert.throws(()=>externalApprovalCard({...card,rules:['all-opaque']}),{code:'bad-request'});
+  const final = JSON.parse(externalApprovalCard({...card,ruleConfirmation:{id:confirmationId,kind:'all-opaque'},status:'executed'}));
+  assert.equal(final.elements.some(e=>e.tag==='action'),false);
+});
 test('pairing cards require explicit Role selection, retain a separate namespace and remove final controls', () => {
   const first = JSON.parse(externalApprovalCard(pairingCard));
   assert.equal(first.config.update_multi, true);
