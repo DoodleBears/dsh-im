@@ -594,7 +594,7 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'feishu', account,
         connected: isConnected(connectionStatus(this.#runtimes.get(botId))),
-        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer', 'reaction-write-checked'] };
+        capabilities: ['reachable-conversations-checked', 'proactive-fence-checked', 'proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer', 'reaction-write-checked'] };
     });
   }
 
@@ -736,6 +736,42 @@ export class MultiBotDshFeishuController {
     });
   }
 
+  async #withReachableRuntime(botId, options, operation) {
+    this.#assertOpen();
+    return this.#withBotTransition(botId, async () => {
+      this.#assertOpen();
+      options.signal?.throwIfAborted();
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      if (account.fingerprint !== options.expectedFingerprint)
+        throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      const runtime = this.#runtimes.get(botId);
+      if (!isConnected(connectionStatus(runtime)))
+        throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+      options.signal?.throwIfAborted();
+      const result = await operation(runtime);
+      return result;
+    });
+  }
+
+  async listReachableConversations(botId, options = {}) {
+    const result = await this.#withReachableRuntime(botId, options, runtime => runtime.listReachableConversations(options));
+    this.#assertOpen('capability-unavailable');
+    return result;
+  }
+
+  async postConversationChecked(botId, conversationId, text, options = {}) {
+    return this.#withReachableRuntime(botId, options,
+      runtime => runtime.postConversationChecked(conversationId, text, { ...options, beforeSend: () => {
+        this.#assertOpen('provider-unavailable');
+        options.signal?.throwIfAborted();
+        const allowed = options.beforeSend?.() === true;
+        this.#assertOpen('provider-unavailable');
+        options.signal?.throwIfAborted();
+        return allowed;
+      } }));
+  }
+
   async sendProactiveText(botId, target, text, options = {}) {
     this.#assertOpen();
     return this.#withBotTransition(botId, async () => {
@@ -757,7 +793,16 @@ export class MultiBotDshFeishuController {
         error.code = 'bot-not-connected';
         throw error;
       }
-      return runtime.sendProactiveText(target, text, options);
+      return runtime.sendProactiveText(target, text, { ...options,
+        ...(options.beforeSend === undefined ? {} : { beforeSend: () => {
+          this.#assertOpen('provider-unavailable');
+          options.signal?.throwIfAborted();
+          const allowed = options.beforeSend() === true;
+          this.#assertOpen('provider-unavailable');
+          options.signal?.throwIfAborted();
+          return allowed;
+        } }),
+      });
     });
   }
 

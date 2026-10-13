@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- Feishu/Lark 增加可选可达群查询与受校验的首次发帖能力：重新检查群成员和发言权限、发送前授权以及原生回执；当前为未发布主线候选，新的运行时验收仍待完成（[BotHarness #1115](https://github.com/BotHarness/DeepSeekBot/issues/1115), [contract](docs/checked-reachable-conversations.md)）。
+  Feishu/Lark adds optional reachable-group discovery and checked first posting with fresh membership/speaking permission, final authorization and exact native receipts. This main-line candidate is unreleased and awaits fresh runtime qualification ([BotHarness #1115](https://github.com/BotHarness/DeepSeekBot/issues/1115), [contract](docs/checked-reachable-conversations.md)).
+
 - 可选 `reactionVersion: 1` checked Service 在原消息上写入 `GLANCE`／`DONE`，重查账户、来源和授权，失败不自动重试；真实平台权限与样式待新 Human QA 窗口确认，不改变已发布 pin（[BotHarness #1040](https://github.com/BotHarness/BotHarness/issues/1040), [contract](docs/checked-lark-reactions.md)）。
   An optional checked reaction Service writes native `GLANCE` / `DONE` on the original message after account, source and authorization checks, without automatic retry; live permission and rendering qualification remain pending a fresh Human QA window ([BotHarness #1040](https://github.com/BotHarness/BotHarness/issues/1040), [contract](docs/checked-lark-reactions.md)).
 
