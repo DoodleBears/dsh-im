@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- QQ 独占 Consumer 保留原生提及的名称、ID 和精确正文 token，供现有外部提及块展示；仅接收应用的严格 `is_you` 提及可使用已认证应用名称补全，歧义标识不猜测，不改变正文、收件或 Echo 资格（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
+  QQ exclusive Consumers retain native mention names, IDs and exact body tokens for the existing external mention chips. Only a strict receiving-App `is_you` mention can use its authenticated application name as fallback; ambiguous identifiers are not guessed, and source text, intake and Echo qualification remain unchanged ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
+
 - QQ 的独占外部 Consumer 在全量事件中继续接收顶层 `is_you === true` 的 Human @，文字、引用文件与引用语音沿用相同提及校验，拒绝普通消息、其他 App 的提及、引用中的提及及机器人发送者；不启用普通采集或宣称自身 Echo 已验收（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
   QQ exclusive external Consumers retain Human self mentions with top-level `is_you === true` in full-mode events, including checked quoted files and voice, while refusing ordinary messages, foreign/quoted mentions and Bot authors; this does not enable ordinary collection or qualify own Echo ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
 

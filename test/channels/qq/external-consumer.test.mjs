@@ -435,6 +435,37 @@ test('public QQ retains only strict top-level self mentions in full reception an
   assert.equal(fx.bot().sent.length, 1);
 });
 
+test('public QQ Consumer preserves scoped native mention names and IDs without granting identity or Echo', async t => {
+  const fx = await fixture(t);
+  const account = await fx.controller.describeDeliveryAccount(fx.botId);
+  const admitted = [];
+  await fx.controller.consumeInbound(fx.botId, { expectedFingerprint: account.account.fingerprint,
+    onEvent: async event => { admitted.push(event); return { accepted: true }; },
+  });
+  const content = '<@scoped-self> question for <@scoped-peer>';
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', content,
+    mentions: [{ id: 'scoped-self', is_you: true },
+      { id: 'scoped-peer', username: 'Native peer name', is_you: false }],
+  }));
+  assert.equal(admitted.length, 1);
+  assert.equal(admitted[0].text, content);
+  assert.deepEqual(admitted[0].mentions, [
+    { id: 'scoped-self', key: '<@scoped-self>', name: 'QA Bot' },
+    { id: 'scoped-peer', key: '<@scoped-peer>', name: 'Native peer name' },
+  ]);
+  assert.equal(account.capabilities.includes('own-text-echo'), false);
+  assert.equal(fx.bot().sent.length, 0);
+  const longId = 'a'.repeat(512);
+  const longContent = `<@${longId}> question`;
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', messageId: 'long-token-source',
+    content: longContent, mentions: [{ id: longId, is_you: true }],
+    replyTarget: { scope: 'group', targetId: 'app-scoped-group', msgId: 'long-token-source' },
+  }));
+  assert.equal(admitted.length, 2);
+  assert.equal(admitted[1].text, longContent);
+  assert.deepEqual(admitted[1].mentions, []);
+});
+
 test('QQ fences source routes, pending canonical admission, native send uncertainty, and revoked leases', async t => {
   const fx = await fixture(t);
   const fingerprint = (await fx.controller.describeDeliveryAccount(fx.botId)).account.fingerprint;

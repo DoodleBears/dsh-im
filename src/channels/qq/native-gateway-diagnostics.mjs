@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { qqNativeIdentifier } from './native-reply-observations.mjs';
+import { observeFrame } from './sdk-frame-observation.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const evidence = value => qqNativeIdentifier(value) ? { hash: hash(value), length: value.length } : undefined;
@@ -23,7 +24,7 @@ export class QqNativeGatewayDiagnostics {
     this.#fingerprint = account.fingerprint;
     this.#report = report;
   }
-  observe(message, signal) {
+  observe(message, signal, transport) {
     if (signal?.aborted || typeof this.#report !== 'function' || typeof message !== 'string'
       || !message.startsWith(this.#prefix)) return;
     const now = Date.now();
@@ -32,8 +33,11 @@ export class QqNativeGatewayDiagnostics {
     this.#reported++;
     const emit = record => {
       try {
-        this.#report(Object.freeze({ ...record, accountFingerprint: this.#fingerprint, suppressed: this.#suppressed }));
-        this.#suppressed = 0;
+        const context = Number.isSafeInteger(transport?.connection) && transport.connection > 0
+          && Number.isSafeInteger(transport?.frame) && transport.frame > 0
+          ? { transport: { connection: transport.connection, frame: transport.frame } } : {};
+        if (observeFrame(this.#report, { ...record, ...context, accountFingerprint: this.#fingerprint, suppressed: this.#suppressed }))
+          this.#suppressed = 0;
       } catch {}
     };
     const refuse = reason => emit({ event: 'qq.native-gateway.refusal', reason });
