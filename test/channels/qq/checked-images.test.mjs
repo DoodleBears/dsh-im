@@ -240,10 +240,11 @@ test('an actual native image reply callback correlates its checked receipt witho
   await fx.bot().deliver(mention());
   await fx.service.externalFileChecked(fx.botId, fx.admitted[0].reply,
     { id: 'result', name: 'result.png', bytes: png, mediaType: 'image/png' }, { ...fx.options, reply: true });
-  assert.deepEqual(fx.observations, []);
+  assert.deepEqual(fx.observations.filter(record => record?.event === 'qq.native-reply.observation'), []);
   await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', messageId: 'native-image-reply',
     senderIsBot: true, senderId: 'native-bot' }));
-  assert.equal(fx.observations.length, 1);
-  assert.equal(fx.observations[0].receiptMatched, true);
+  const candidates = fx.observations.filter(record => record?.event === 'qq.native-reply.observation');
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].receiptMatched, true);
   assert.equal(fx.admitted.length, 1);
 });

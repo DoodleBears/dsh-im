@@ -5,6 +5,7 @@ import { QqNativeReplyObservations, qqNativeIdentifier as identifier } from './n
 import { qqSourceAttachments, readQqSourceAttachment, checkedQqImageFile, uploadQqCheckedMedia } from './external-images.mjs';
 import { checkedQqGenericFile, qqQuotedFileMessage } from './external-files.mjs';
 import { qqVoiceMessage } from './external-voice.mjs';
+import { qqExternalMentions } from './external-mentions.mjs';
 
 export function qqRefusal(code) { return Object.assign(new Error(code), { code }); }
 
@@ -60,7 +61,7 @@ export function normalizeQqExternalText(message, { botId, account }) {
       ...(typeof message.senderName === 'string' && message.senderName.trim()
         ? { name: message.senderName.slice(0, 512) } : {}) },
     conversation: { kind: 'group', id: message.groupOpenid },
-    mentions: [], mentionedAccount: true, at: at.toISOString(), text: message.content,
+    mentions: qqExternalMentions(message, account), mentionedAccount: true, at: at.toISOString(), text: message.content,
     reply: { messageId: message.messageId, conversationId: message.groupOpenid, actorId: message.senderId },
     replay: { kind: 'provider-redelivery', resumeCursor: false, gapPossible: true },
   });
@@ -78,9 +79,10 @@ export class QqExternalConsumer {
   #sourceVoiceTranscripts;
   #sourceVoiceAudio;
   #sources = new Map();
-  constructor({ bot, account, botId, accept, sourceImages = () => false, sourceFiles = () => false, sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false, reportNativeObservation = () => {} }) {
+  constructor({ bot, account, botId, accept, sourceImages = () => false, sourceFiles = () => false, sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false, reportNativeObservation = () => {}, reportNativeFrame, nativeUser }) {
     this.#bot = bot; this.#account = account; this.#botId = botId; this.#accept = accept;
-    this.#observations = new QqNativeReplyObservations({ account, report: reportNativeObservation });
+    this.#observations = new QqNativeReplyObservations({ account, report: reportNativeObservation,
+      reportFrame: reportNativeFrame, nativeUser });
     this.#sourceImages = sourceImages;
     this.#sourceFiles = sourceFiles;
     this.#sourceVoiceTranscripts = sourceVoiceTranscripts;
@@ -174,7 +176,7 @@ export class QqExternalConsumer {
           msg_seq: getNextMsgSeq(qualified.messageId) });
     } catch (error) { throw nativeReplyFailure(error); }
     if (signal?.aborted || !identifier(response?.id)) throw qqRefusal('reply-result-unknown');
-    this.#observations.sent(qualified.conversationId, response.id, signal);
+    this.#observations.sent(qualified.conversationId, response.id, signal, response);
     return { sent: true, receipt: { version: 1, messageId: response.id, conversationId: qualified.conversationId } };
   }
   async reply(route, text, { signal, receipt = false, beforeSend, mentionUserIds } = {}) {
@@ -198,7 +200,7 @@ export class QqExternalConsumer {
     } catch (error) { throw nativeReplyFailure(error); }
     // Once dispatch begins, cancellation or a missing response cannot prove non-delivery.
     if (signal?.aborted || !identifier(response?.id)) throw qqRefusal('reply-result-unknown');
-    this.#observations.sent(qualified.conversationId, response.id, signal);
+    this.#observations.sent(qualified.conversationId, response.id, signal, response);
     return { sent: true, ...(receipt ? { receipt: { version: 1, messageId: response.id,
       conversationId: qualified.conversationId } } : { messageId: response.id }) };
   }

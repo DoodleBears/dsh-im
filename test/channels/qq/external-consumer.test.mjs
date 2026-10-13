@@ -273,19 +273,25 @@ test('runtime observes native reply candidates independently without enabling Ec
   const bot = new PlatformBot();
   const admitted = [];
   const observations = [];
+  const frames = [];
   const runtime = new QqRuntime({
     config: { botId: 'qq_test', appId: '12345678', consumerMode: 'external-consumer' },
     appSecret: 'test-secret', state: {}, harness: {}, connectTimeoutMs: 100,
     createBot: () => bot, externalConsumer: async event => {
       admitted.push(event); return { accepted: true };
     },
-    logger: { info: (_label, record) => observations.push(record) },
+    logger: { info: (_label, record) => {
+      if (record?.event === 'qq.native-reply.frame') frames.push(record);
+      else observations.push(record);
+    } },
   });
   t.after(() => runtime.stop());
   await runtime.start();
   await bot.deliver(mention());
   await runtime.replyChecked(admitted[0].reply, 'answer', { receipt: true });
   assert.deepEqual(observations, []);
+  assert.deepEqual(frames.map(record => record.phase), ['callback', 'receipt']);
+  assert.notEqual(frames[0].messageHash, frames[1].messageHash);
   const native = mention({ rawEventType: 'GROUP_MESSAGE_CREATE', messageId: 'native-reply-id',
     senderIsBot: true, senderId: 'native-bot-id' });
   await bot.deliver(native);
@@ -294,6 +300,7 @@ test('runtime observes native reply candidates independently without enabling Ec
   assert.equal(admitted.length, 1);
   assert.equal(observations.length, 1);
   assert.equal(observations[0].receiptMatched, true);
+  assert.equal(frames.filter(record => record.phase === 'callback').length, 3);
   observations.length = 0;
   bot.apiClient.request = async () => ({ id: 'native-post-id' });
   await runtime.sendProactiveText({ kind: 'group', route: { groupOpenId: 'app-scoped-group' } }, 'post', {
@@ -426,6 +433,37 @@ test('public QQ retains only strict top-level self mentions in full reception an
   });
   assert.deepEqual(result.receipt, { version: 1, conversationId: 'app-scoped-group', messageId: 'native-reply-id' });
   assert.equal(fx.bot().sent.length, 1);
+});
+
+test('public QQ Consumer preserves scoped native mention names and IDs without granting identity or Echo', async t => {
+  const fx = await fixture(t);
+  const account = await fx.controller.describeDeliveryAccount(fx.botId);
+  const admitted = [];
+  await fx.controller.consumeInbound(fx.botId, { expectedFingerprint: account.account.fingerprint,
+    onEvent: async event => { admitted.push(event); return { accepted: true }; },
+  });
+  const content = '<@scoped-self> question for <@scoped-peer>';
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', content,
+    mentions: [{ id: 'scoped-self', is_you: true },
+      { id: 'scoped-peer', username: 'Native peer name', is_you: false }],
+  }));
+  assert.equal(admitted.length, 1);
+  assert.equal(admitted[0].text, content);
+  assert.deepEqual(admitted[0].mentions, [
+    { id: 'scoped-self', key: '<@scoped-self>', name: 'QA Bot' },
+    { id: 'scoped-peer', key: '<@scoped-peer>', name: 'Native peer name' },
+  ]);
+  assert.equal(account.capabilities.includes('own-text-echo'), false);
+  assert.equal(fx.bot().sent.length, 0);
+  const longId = 'a'.repeat(512);
+  const longContent = `<@${longId}> question`;
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', messageId: 'long-token-source',
+    content: longContent, mentions: [{ id: longId, is_you: true }],
+    replyTarget: { scope: 'group', targetId: 'app-scoped-group', msgId: 'long-token-source' },
+  }));
+  assert.equal(admitted.length, 2);
+  assert.equal(admitted[1].text, longContent);
+  assert.deepEqual(admitted[1].mentions, []);
 });
 
 test('QQ fences source routes, pending canonical admission, native send uncertainty, and revoked leases', async t => {

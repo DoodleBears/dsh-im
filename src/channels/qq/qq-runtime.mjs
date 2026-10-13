@@ -11,6 +11,8 @@ import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
 import { createQqBridgeStatus, QqHarnessBridge } from './qq-bridge.mjs';
 import { QqExternalConsumer, qqRefusal, verifiedQqAccount } from './external-consumer.mjs';
 import { postQqText } from './external-post.mjs';
+import { QqNativeGatewayDiagnostics } from './native-gateway-diagnostics.mjs';
+import { QqNativeTransportDiagnostics } from './native-transport-diagnostics.mjs';
 
 function timeoutError() {
   const error = new Error('QQ WebSocket did not become ready in time');
@@ -256,6 +258,7 @@ export class QqRuntime {
     this.#status.startedAt = new Date().toISOString();
     this.#status.qqConnectionState = 'connecting';
     this.#status.lastError = null; this.#status.error = null; this.#diagnostics.clear();
+    delete this.#status.transportObservation;
     if (this.#config.consumerMode !== 'external-consumer')
       await atConnectionStage('harness.check', () => this.#harness.ensureRunning());
     this.#status.harnessReachable = true;
@@ -278,11 +281,24 @@ export class QqRuntime {
         botId: this.#config.botId, phase: this.#status.qqConnectionState })}`);
       return true;
     };
+    let gatewayDiagnostics;
+    let transportDiagnostics;
     const sdkLogger = {
-      error: (...args) => { if (!observeTransport(args[0])) this.#logger.error?.(...args); },
+      error: (...args) => {
+        // Node's JSON error text can quote the payload. The maintained hook reports
+        // only the coded parse/processing disposition; never forward that raw text.
+        if (transportDiagnostics && typeof args[0] === 'string'
+          && args[0].startsWith(`[${this.#config.botId}] Message parse error:`)) return;
+        if (!observeTransport(args[0])) this.#logger.error?.(...args);
+      },
       warn: (...args) => this.#logger.warn?.(...args),
       info: (...args) => { if (!observeTransport(args[0])) this.#logger.info?.(...args); },
-      debug: () => {},
+      debug: message => {
+        try {
+          if (!controller.signal.aborted && this.#abortController === controller)
+            gatewayDiagnostics?.observe(message, controller.signal, transportDiagnostics?.context);
+        } catch {}
+      },
     };
     const bot = this.#createBot({
       appId: this.#config.appId,
@@ -291,6 +307,13 @@ export class QqRuntime {
       logger: sdkLogger,
       transport: 'websocket',
       tokenPrefetch: 'sync',
+      // Public option proposed by the maintained, hash-checked SDK build patch.
+      onGatewayObservation: value => {
+        if (!controller.signal.aborted && this.#abortController === controller) {
+          transportDiagnostics?.observe(value, controller.signal);
+          if (transportDiagnostics) this.#status.transportObservation = transportDiagnostics.snapshot;
+        }
+      },
       // sendText is reserved for literal notices/connection tests. Markdown
       // replies use the explicit msg_type=2 path in sendMarkdownReply().
       markdownSupport: false,
@@ -301,15 +324,21 @@ export class QqRuntime {
     this.#bot = bot;
     if (this.#config.consumerMode === 'external-consumer' && this.#externalConsumer) {
       try {
-        const account = verifiedQqAccount(this.#config.appId, await bot.api.get('/users/@me'));
+        const nativeUser = await bot.api.get('/users/@me');
+        const account = verifiedQqAccount(this.#config.appId, nativeUser);
         controller.signal.throwIfAborted();
-        this.#externalBridge = new QqExternalConsumer({ bot, account, botId: this.#config.botId,
+        gatewayDiagnostics = new QqNativeGatewayDiagnostics({ botId: this.#config.botId, account,
+          report: record => this.#logger.info?.('[dsh-im:qq] native gateway diagnostic', record) });
+        transportDiagnostics = new QqNativeTransportDiagnostics({ account,
+          report: record => this.#logger.info?.('[dsh-im:qq] native transport diagnostic', record) });
+        this.#externalBridge = new QqExternalConsumer({ bot, account, nativeUser, botId: this.#config.botId,
           accept: this.#externalConsumer,
           sourceImages: this.#sourceImages,
           sourceFiles: this.#sourceFiles,
           sourceVoiceTranscripts: this.#sourceVoiceTranscripts,
           sourceVoiceAudio: this.#sourceVoiceAudio,
           reportNativeObservation: record => this.#logger.info?.('[dsh-im:qq] native reply observation', record),
+          reportNativeFrame: record => this.#logger.info?.('[dsh-im:qq] native reply frame', record),
         });
       } catch (error) {
         await this.stop();

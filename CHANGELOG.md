@@ -8,10 +8,16 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- QQ 独占 Consumer 保留原生提及的名称、ID 和精确正文 token，供现有外部提及块展示；仅接收应用的严格 `is_you` 提及可使用已认证应用名称补全，歧义标识不猜测，不改变正文、收件或 Echo 资格（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
+  QQ exclusive Consumers retain native mention names, IDs and exact body tokens for the existing external mention chips. Only a strict receiving-App `is_you` mention can use its authenticated application name as fallback; ambiguous identifiers are not guessed, and source text, intake and Echo qualification remain unchanged ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
+
 - QQ 的独占外部 Consumer 在全量事件中继续接收顶层 `is_you === true` 的 Human @，文字、引用文件与引用语音沿用相同提及校验，拒绝普通消息、其他 App 的提及、引用中的提及及机器人发送者；不启用普通采集或宣称自身 Echo 已验收（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
   QQ exclusive external Consumers retain Human self mentions with top-level `is_you === true` in full-mode events, including checked quoted files and voice, while refusing ordinary messages, foreign/quoted mentions and Bot authors; this does not enable ordinary collection or qualify own Echo ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
 
 ### Added / 新增
+
+- QQ 的独占外部 Consumer 新增有界原生回调／发送回执诊断，记录事件类型、作者资格判断及白名单标识字段的哈希与长度，便于区分回调缺失、作者筛选和标识命名空间差异；不记录正文、原始标识或凭据，不改变收件及回复资格，也不声明 Echo 能力（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
+  QQ exclusive external Consumers add bounded native callback/receipt diagnostics with event types, author qualification checks and hashes/lengths of fixed identifier fields to distinguish missing callbacks, author filtering and identifier namespace differences; no bodies, raw identifiers or credentials are logged, intake/reply qualification remains unchanged, and Echo capability is not advertised ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
 
 - Lark checked 外部卡片新增独立的配对审核 namespace、角色选择与批准／拒绝，支持经原消息校验的群卡片与私聊卡片，共享更新会移除结束后的控件；沿用独占 Consumer，原生执行审批仍保持私聊限制。BotHarness Host 负责实时审核与委派权限，本候选真实 Lark 验收待完成（[BotHarness #1414](https://github.com/BotHarness/DeepSeekBot/issues/1414)）。
   Lark checked external cards add a separate pairing-review namespace, Role selection and approve/reject controls for source-checked group and private cards, with final shared updates removing controls. The exclusive Consumer is retained and native execution approvals remain private. BotHarness Host owns current review/delegation checks; this candidate still awaits real Lark qualification ([BotHarness #1414](https://github.com/BotHarness/DeepSeekBot/issues/1414)).

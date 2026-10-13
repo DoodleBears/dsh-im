@@ -441,6 +441,7 @@ export class QqController {
           lastCheckedAt: runtimeStatus?.lastCheckedAt ?? null,
           lastConnectedAt: runtimeStatus?.lastConnectedAt ?? null,
           ...(runtimeStatus?.lastInbound ? { lastInbound: structuredClone(runtimeStatus.lastInbound) } : {}),
+          ...(runtimeStatus?.transportObservation ? { transportObservation: structuredClone(runtimeStatus.transportObservation) } : {}),
         },
         stats: {
           messagesReceived: runtimeStatus?.messagesReceived ?? 0,
