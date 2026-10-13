@@ -100,6 +100,34 @@ test('channel mention is native direct addressing, preserves IDs and creates no 
   f.message.author.bot = false; f.message.webhook_id = ids.actor; assert.equal(await event(f), null);
 });
 
+test("a mention of the app's own managed role addresses the app; other roles and @everyone do not", async () => {
+  const f = fixture(); const other = '888888888888888889';
+  f.guild.roles.push({ id: ids.role, permissions: '0', managed: true, tags: { bot_id: ids.bot } },
+    { id: other, permissions: '0', managed: true, tags: { bot_id: ids.actor } });
+  f.member.roles = [ids.role];
+  f.message.mentions = []; f.message.content = `<@&${ids.role}> QA`; f.message.mention_roles = [ids.role];
+  const e = await event(f);
+  assert.equal(e.mentionedAccount, true);
+  assert.deepEqual(e.mentions, [{ id: ids.bot, key: `<@&${ids.role}>`, name: account.name }]);
+  f.message.mention_roles = [other]; assert.equal(await event(f), null);
+  f.message.mention_roles = []; f.message.mention_everyone = true; assert.equal(await event(f), null);
+  f.message.mention_roles = [ids.role]; f.member.roles = []; assert.equal(await event(f), null);
+});
+
+test('Gateway admits an own-role mention without ordinary opt-in and ignores other role mentions', async () => {
+  const f = ordinaryRuntimeFixture({ enabled: false, optedIn: false, thread: false });
+  f.guild.roles.push({ id: ids.role, permissions: '0', managed: true, tags: { bot_id: ids.bot } });
+  f.member.roles = [ids.role];
+  try {
+    await f.runtime.start();
+    await f.dispatch({ ...f.message, mentions: [], mention_roles: ['888888888888888889'], content: 'role ping' });
+    assert.equal(f.received.length, 0);
+    await f.dispatch({ ...f.message, mentions: [], mention_roles: [ids.role], content: `<@&${ids.role}> QA` });
+    assert.equal(f.received.length, 1);
+    assert.equal(f.received[0].mentionedAccount, true);
+  } finally { await f.runtime.stop(); }
+});
+
 test('existing public thread retains native child and parent channel without fabricating message ancestry', async () => {
   const f = fixture(true); const e = await event(f);
   assert.equal(e.conversation.id, ids.channel); assert.equal(e.reply.threadId, ids.thread);

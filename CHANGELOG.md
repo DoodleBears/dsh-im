@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- Discord 独占 Consumer 把对本应用托管身份组（`tags.bot_id` 等于本应用用户 ID，且本应用持有该身份组）的提及视为提及本应用，不需要开启普通采集；其他身份组、`@everyone` 仍不唤醒（[BotHarness #1615](https://github.com/BotHarness/DeepSeekBot/issues/1615)）。
+  Discord exclusive Consumers treat a mention of the app's own managed role (`tags.bot_id` equals the app's user ID and the app holds the role) as a mention of the app, without ordinary collection; other roles and `@everyone` still do not address it ([BotHarness #1615](https://github.com/BotHarness/DeepSeekBot/issues/1615)).
+
 - QQ 独占 Consumer 保留原生提及的名称、ID 和精确正文 token，供现有外部提及块展示；仅接收应用的严格 `is_you` 提及可使用已认证应用名称补全，歧义标识不猜测，不改变正文、收件或 Echo 资格（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
   QQ exclusive Consumers retain native mention names, IDs and exact body tokens for the existing external mention chips. Only a strict receiving-App `is_you` mention can use its authenticated application name as fallback; ambiguous identifiers are not guessed, and source text, intake and Echo qualification remain unchanged ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
 

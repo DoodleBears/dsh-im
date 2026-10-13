@@ -89,8 +89,12 @@ export async function inspectDiscordSourceChannel(api, channelId, account, signa
     signal?.throwIfAborted();
     const name = [guild.name, parent.name].every(value => typeof value === 'string' && value.trim())
       ? `${guild.name.trim()} #${parent.name.trim()}`.slice(0, 512) : undefined;
+    const ownRoleIds = (Array.isArray(guild.roles) ? guild.roles : [])
+      .filter(role => discordSnowflake(role?.id) && role.managed === true && role.tags?.bot_id === account.userId
+        && Array.isArray(member?.roles) && member.roles.includes(role.id))
+      .map(role => role.id);
     return { guildId: guild.id, conversationId: parent.id, channelId: channel.id, ...(name ? { name } : {}),
-      ...(isThread ? { threadId: channel.id } : {}) };
+      ...(isThread ? { threadId: channel.id } : {}), ...(ownRoleIds.length ? { ownRoleIds } : {}) };
   } catch (error) { throw nativeFailure(error, 'source-not-found'); }
 }
 
@@ -104,6 +108,11 @@ export function discordMessageContentAllowed(application) {
     flags = BigInt(application.flags);
   }
   return (flags & ((1n << 18n) | (1n << 19n))) !== 0n;
+}
+
+export function discordOwnRoleMention(message, channel) {
+  if (!Array.isArray(message?.mention_roles) || !Array.isArray(channel?.ownRoleIds)) return undefined;
+  return message.mention_roles.find(id => discordSnowflake(id) && channel.ownRoleIds.includes(id));
 }
 
 export function normalizeDiscordExternalText(message, { botId, account, channel, eventId, ordinaryText = false }) {
@@ -122,7 +131,8 @@ function normalizeDiscordHumanText(message, { botId, account, channel, eventId }
     || message.content.length > 16000 || !Array.isArray(message.mentions)) return null;
   if (message.guild_id !== channel.guildId || message.channel_id !== channel.channelId)
     throw discordRefusal('stale-route');
-  const mentionedAccount = message.mentions.some(user => user.id === account.userId);
+  const ownRole = discordOwnRoleMention(message, channel);
+  const mentionedAccount = message.mentions.some(user => user.id === account.userId) || ownRole !== undefined;
   if (requireMention && !mentionedAccount) return null;
   const timestamp = Date.parse(message.timestamp);
   if (!Number.isFinite(timestamp) || typeof eventId !== 'string' || !eventId || eventId.length > 512)
@@ -132,6 +142,8 @@ function normalizeDiscordHumanText(message, { botId, account, channel, eventId }
   const mentions = message.mentions.filter(user => discordSnowflake(user.id)).slice(0, 100)
     .map(user => ({ id: user.id, key: `<@${user.id}>`,
       ...(user.id === account.userId ? { name: account.name } : {}) }));
+  if (ownRole !== undefined && !mentions.some(mention => mention.id === account.userId) && mentions.length < 100)
+    mentions.push({ id: account.userId, key: `<@&${ownRole}>`, ...(account.name ? { name: account.name } : {}) });
   return { version: 1, channel: 'discord', botId, fingerprint: account.fingerprint,
     eventId, messageId: message.id, actor: { kind: 'user', id: message.author.id, ...(name ? { name: name.slice(0, 512) } : {}) },
     conversation: { kind: 'group', id: channel.conversationId, ...(channel.name ? { name: channel.name } : {}) }, mentions, mentionedAccount,
