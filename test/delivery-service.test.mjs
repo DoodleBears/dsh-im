@@ -607,3 +607,22 @@ test('public reachable posting checks native group membership and speech permiss
   } finally {await runtime.stop();}
 });
 
+test('saved-target posting forwards the caller fence through preparation and refuses its final revocation', async () => {
+  const fx = checkedFixture();
+  fx.service.registerAdapter(fx.adapter);
+  const expectedTargetDigest = await checkedTarget(fx);
+  let allowed = true;
+  let effects = 0;
+  fx.adapter.sendText = async (_id, _target, _text, options) => {
+    await Promise.resolve();
+    allowed = false;
+    if (options.beforeSend() !== true)
+      throw Object.assign(new Error('Final caller refused'), { code: 'send-permission-denied' });
+    effects++;
+    return { sent: true };
+  };
+  await assert.rejects(fx.service.sendChecked('bot_one', 'self', 'Retained report', {
+    expectedFingerprint: fx.fingerprint, expectedTargetDigest, beforeSend: () => allowed,
+  }), { code: 'send-permission-denied' });
+  assert.equal(effects, 0);
+});
