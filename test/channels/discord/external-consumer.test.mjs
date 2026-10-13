@@ -108,6 +108,14 @@ test('existing public thread retains native child and parent channel without fab
   await assert.rejects(event(f), { code: 'stale-route' });
 });
 
+test('the conversation carries the server and parent channel names next to the ID', async () => {
+  const f = fixture(true);
+  f.guild.name = ' BH QA '; f.parent.name = 'general';
+  assert.deepEqual((await event(f)).conversation, { kind: 'group', id: ids.channel, name: 'BH QA #general' });
+  delete f.parent.name;
+  assert.deepEqual((await event(f)).conversation, { kind: 'group', id: ids.channel });
+});
+
 test('permission overwrite order and high thread bit use exact integers', () => {
   const f = fixture(); f.guild.roles.push({ id: ids.role, permissions: '0' }); f.member.roles.push(ids.role);
   f.parent.permission_overwrites.push({ type: 0, id: ids.guild, deny: String(1n << 38n), allow: '0' },
@@ -436,4 +444,34 @@ test('ordinary native preflight cancelled by runtime disposal never reaches the 
     await f.runtime.stop(); unblock({ id: ids.app, bot: { id: ids.bot }, flags: 1 << 19 }); await flush();
     assert.equal(f.received.length, 0);
   } finally { await f.runtime.stop(); }
+});
+
+test('reply mentions ping only the source author or users the source mentions', async () => {
+  const other = '123412341234123412';
+  const f = fixture(); const route = (await event(f)).reply;
+  f.message.mentions.push({ id: other });
+  await sendDiscordReply(f.api, account, route, 'QA reply', { mentionUserIds: [ids.actor, other] });
+  assert.deepEqual(f.sends[0].mentionUserIds, [ids.actor, other]);
+  await assert.rejects(sendDiscordReply(f.api, account, route, 'QA', { mentionUserIds: ['999999999999999998'] }), { code: 'bad-request' });
+  await assert.rejects(sendDiscordReply(f.api, account, route, 'QA', { mentionUserIds: ['everyone'] }), { code: 'bad-request' });
+  await sendDiscordReply(f.api, account, route, 'QA plain');
+  assert.equal(f.sends.length, 2);
+  assert.equal(f.sends[1].mentionUserIds, undefined);
+  let body;
+  const api = new DiscordApi({ token: `${'A'.repeat(24)}.${'B'.repeat(6)}.${'C'.repeat(30)}`,
+    fetchImpl: async (_url, request) => { body = JSON.parse(request.body);
+      return Response.json({ id: ids.sent, channel_id: ids.channel, author: { id: ids.bot, bot: true } }); } });
+  await api.createMessage({ channelId: ids.channel, content: 'hi', mentionUserIds: [ids.actor], retry: false });
+  assert.equal(body.content, `<@${ids.actor}> hi`);
+  assert.deepEqual(body.allowed_mentions, { parse: [], replied_user: false, users: [ids.actor] });
+});
+
+test('Discord keeps checked mentions inline and prefixes only missing ones', async () => {
+  let body;
+  const api = new DiscordApi({ token: `${'A'.repeat(24)}.${'B'.repeat(6)}.${'C'.repeat(30)}`,
+    fetchImpl: async (_url, request) => { body = JSON.parse(request.body);
+      return Response.json({ id: ids.sent, channel_id: ids.channel, author: { id: ids.bot, bot: true } }); } });
+  await api.createMessage({ channelId: ids.channel, content: `ok <@${ids.actor}> done`, mentionUserIds: [ids.actor, ids.message], retry: false });
+  assert.equal(body.content, `<@${ids.message}> ok <@${ids.actor}> done`);
+  assert.deepEqual(body.allowed_mentions.users, [ids.actor, ids.message]);
 });

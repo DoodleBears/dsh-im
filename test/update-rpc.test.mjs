@@ -58,15 +58,19 @@ test('Host update initialization failure leaves all channel activations availabl
   const internals = Object.fromEntries(channels.map((channel) => [`apply${channel}`, async () => calls.push(channel)]));
   internals.installUpdateRpc = () => { throw new Error('updater unavailable'); };
   internals.installDeliveryRpc = () => {};
-  internals.installAppSetupRpc = () => {};
   internals.installInboundTtlRpc = () => {};
   internals.installHostLanguage = () => undefined;
   internals.installHostLanguageRpc = () => {};
   const errors = [];
+  let setupRpc;
   await createImHostPlugin(internals).apply({
-    connection: { fetch: {} }, logger: { error: (...args) => errors.push(args) },
+    connection: { fetch: managementFetch((channel, handler) => {
+      assert.equal(channel, '/app-setup');
+      setupRpc = handler;
+    }) }, logger: { error: (...args) => errors.push(args) },
   });
   assert.deepEqual(calls, channels);
   assert.equal(errors.length, 1);
   assert.match(errors[0][0], /update management/);
+  assert.equal((await setupRpc('setup.poll', { attemptId: 'missing' })).error.code, 'setup-expired');
 });

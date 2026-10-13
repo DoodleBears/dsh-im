@@ -13,8 +13,7 @@ export class DiscordController extends TokenBotController {
       deriveIdentity: deriveDiscordBotIdentity,
       maskPlatformId: maskDiscordBotId,
       checkedDelivery: {
-        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'proactive-fence-checked', 'reachable-conversations-checked', 'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked',
-          'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked',
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'proactive-fence-checked', 'reachable-conversations-checked', 'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'reply-mention-checked',
           'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'],
         inspectAccount: async (token, config, { signal }) => {
           const api = (options.createApi ?? (args => new DiscordApi(args)))({ token });

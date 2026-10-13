@@ -1,6 +1,6 @@
 import { consumeExternalCardAction } from './external-cards.mjs';
 import { reactExternalMessage } from './external-reactions.mjs';
-import { externalSenderName } from './external-names.mjs';
+import { createExternalNameCache, externalNames } from './external-names.mjs';
 import { qualifyExternalReply } from './reply-context.mjs';
 import { readExternalHistory } from './history-reader.mjs';
 import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
@@ -140,6 +140,7 @@ export class FeishuRuntime {
   #diagnostics;
   #repair;
   #client = null;
+  #externalNames = createExternalNameCache();
   #bridge = null;
   #consumerMode;
   #acceptExternal;
@@ -869,7 +870,7 @@ export class FeishuRuntime {
   async enrichExternalNames(evidence, { signal } = {}) {
     const client = this.#client;
     if (!client || this.#consumerMode !== 'external-consumer') throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
-    const result = await externalSenderName(client, evidence, { signal });
+    const result = await externalNames(client, evidence, { signal, cache: this.#externalNames });
     signal?.throwIfAborted();
     if (this.#client !== client) throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
     return result;

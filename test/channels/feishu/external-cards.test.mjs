@@ -30,6 +30,70 @@ test('cards render bounded plain text and only once/reject controls', () => {
   assert.throws(() => externalApprovalCard({ ...card, detail: 'a'.repeat(16001) }), { code: 'bad-request' });
 });
 
+test('exact rule preview and nonce-bound confirmation remain separate from ordinary approval and questions', () => {
+  const offered = JSON.parse(externalApprovalCard({ ...card, rules: ['exact'] }));
+  assert.deepEqual(offered.elements[1].actions.map(a => a.value.action), ['allowed-once', 'rejected', 'preview-exact']);
+  assert.equal(offered.elements[1].actions[2].value.namespace, 'botharness/approval-rule-v1');
+  const confirmationId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+  const confirm = JSON.parse(externalApprovalCard({ ...card, ruleConfirmation: { id: confirmationId, kind: 'exact' } }));
+  assert.deepEqual(confirm.elements[1].actions.map(a => a.value.action), ['confirm-exact', 'cancel-rule']);
+  assert.ok(confirm.elements[1].actions.every(a => a.value.confirmationId === confirmationId));
+  const confirmed = event();
+  confirmed.action.value = { namespace: 'botharness/approval-rule-v1', requestId, action: 'confirm-exact', confirmationId };
+  assert.equal(normalizeExternalCardAction(confirmed, identity).kind, 'approval-rule');
+  assert.equal(normalizeExternalCardAction(confirmed, identity).confirmationId, confirmationId);
+  delete confirmed.action.value.confirmationId;
+  assert.throws(() => normalizeExternalCardAction(confirmed, identity), { code: 'invalid-inbound' });
+  confirmed.action.value = { namespace: 'botharness/approval-v1', requestId, action: 'confirm-exact', confirmationId };
+  assert.throws(() => normalizeExternalCardAction(confirmed, identity), { code: 'invalid-inbound' });
+  confirmed.action.value.namespace = 'botharness/question-v1';
+  assert.equal(normalizeExternalCardAction(confirmed, identity), null);
+  assert.throws(() => externalApprovalCard({ ...card, rules: ['all-opaque'] }), { code: 'bad-request' });
+  assert.throws(() => externalApprovalCard({ ...card, ruleConfirmation: { id: 'forged', kind: 'exact' } }), { code: 'bad-request' });
+  assert.equal(JSON.parse(externalApprovalCard({ ...card, ruleConfirmation: { id: confirmationId, kind: 'exact' }, status: 'executed' })).elements.length, 1);
+});
+
+const pairingCard = { ...card, kind: 'pairing', roles: [{ id: requestId, name: 'Member', revision: 2 }], page: 0, pages: 1 };
+test('all-opaque has a distinct high-risk confirmation and strict callbacks, with no final controls', () => {
+  const confirmationId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const offered = JSON.parse(externalApprovalCard({...card,rules:['exact','all-opaque']}));
+  assert.deepEqual(offered.elements[1].actions.map(a=>a.value.action),['allowed-once','rejected','preview-exact','preview-all-opaque']);
+  const confirm = JSON.parse(externalApprovalCard({...card,ruleConfirmation:{id:confirmationId,kind:'all-opaque'}}));
+  assert.deepEqual(confirm.elements[1].actions.map(a=>a.value.action),['confirm-all-opaque','cancel-rule']);
+  assert.equal(confirm.elements[1].actions[0].type,'danger');
+  const callback = event();
+  callback.action.value = {namespace:'botharness/approval-rule-v1',requestId,action:'preview-all-opaque'};
+  assert.equal(normalizeExternalCardAction(callback,identity).action,'preview-all-opaque');
+  callback.action.value = {...callback.action.value,confirmationId};
+  assert.throws(()=>normalizeExternalCardAction(callback,identity),{code:'invalid-inbound'});
+  callback.action.value.action='confirm-all-opaque';
+  assert.equal(normalizeExternalCardAction(callback,identity).confirmationId,confirmationId);
+  delete callback.action.value.confirmationId;
+  assert.throws(()=>normalizeExternalCardAction(callback,identity),{code:'invalid-inbound'});
+  assert.throws(()=>externalApprovalCard({...card,rules:['all-opaque']}),{code:'bad-request'});
+  const final = JSON.parse(externalApprovalCard({...card,ruleConfirmation:{id:confirmationId,kind:'all-opaque'},status:'executed'}));
+  assert.equal(final.elements.some(e=>e.tag==='action'),false);
+});
+test('pairing cards require explicit Role selection, retain a separate namespace and remove final controls', () => {
+  const first = JSON.parse(externalApprovalCard(pairingCard));
+  assert.equal(first.config.update_multi, true);
+  assert.equal(first.elements[1].actions[0].tag, 'select_static');
+  assert.deepEqual(first.elements.at(-1).actions.map(value => value.value.action), ['reject-pairing']);
+  const chosen = JSON.parse(externalApprovalCard({ ...pairingCard, selectedRoleId: requestId }));
+  assert.equal(chosen.elements.at(-1).actions[0].value.namespace, 'botharness/pairing-v1');
+  assert.equal(chosen.elements.at(-1).actions[0].value.roleId, requestId);
+  assert.equal(JSON.parse(externalApprovalCard({ ...pairingCard, status: 'approved' })).elements.length, 1);
+  assert.throws(() => externalApprovalCard({ ...pairingCard, roles: Array(21).fill(pairingCard.roles[0]) }), { code: 'bad-request' });
+});
+test('pairing select/button evidence uses the actual operator and context and cannot become execution approval', () => {
+  const selected = { ...event(), action: { tag: 'select_static', option: requestId,
+    value: { namespace: 'botharness/pairing-v1', requestId, action: 'select-role' } } };
+  assert.deepEqual(normalizeExternalCardAction(selected, identity), { kind: 'pairing', version: 1, channel: 'feishu', botId: 'qa', fingerprint: identity.fingerprint,
+    actorId: 'ou_alice', messageId: 'om_card', conversationId: 'oc_private', requestId, action: 'select-role', roleId: requestId });
+  assert.throws(() => normalizeExternalCardAction({ ...selected, action: { ...selected.action, option: 'not-a-role' } }, identity), { code: 'invalid-inbound' });
+  assert.throws(() => normalizeExternalCardAction({ ...selected, action: { ...selected.action, value: { ...selected.action.value, action: 'allowed-once' } } }, identity), { code: 'invalid-inbound' });
+});
+
 function clientFixture() {
   let creates = 0, patches = 0;
   const client = { im: { v1: { message: {
@@ -41,6 +105,37 @@ function clientFixture() {
   }, chat: { get: async () => ({ code: 0, data: { chat_mode: 'p2p' } }) } } } };
   return { client, counts: () => ({ creates, patches }) };
 }
+
+test('group-only pairing review is checked against the original source while native approvals remain private', async () => {
+  const f = clientFixture();
+  f.client.im.v1.chat.get = async () => ({ code: 0, data: { chat_mode: 'group' } });
+  assert.equal((await replyExternalApprovalCard(f.client, route, pairingCard, { beforeSend: () => true })).sent, true);
+  await assert.rejects(replyExternalApprovalCard(f.client, route, card, { beforeSend: () => true }), { code: 'stale-route' });
+  await assert.rejects(replyExternalApprovalCard(f.client, { ...route, actorId: 'ou_wrong' }, pairingCard, { beforeSend: () => true }), { code: 'stale-route' });
+  assert.deepEqual(f.counts(), { creates: 1, patches: 0 });
+});
+
+test('checked approval creation and final update are shared cards visible to the receiver', async () => {
+  const f = clientFixture();
+  const writes = [];
+  f.client.im.v1.message.create = async ({ data }) => {
+    writes.push(JSON.parse(data.content));
+    return { code: 0, data: { message_id: 'om_card', chat_id: 'oc_private' } };
+  };
+  f.client.im.v1.message.patch = async ({ data }) => {
+    writes.push(JSON.parse(data.content));
+    return { code: 0 };
+  };
+  const sent = await replyExternalApprovalCard(f.client, route, card, { beforeSend: () => true });
+  await updateExternalApprovalCard(f.client, identity, sent.receipt,
+    { ...card, detail: 'Native execution result recorded', status: 'executed' },
+    { beforeSend: () => true });
+  assert.equal(writes.length, 2);
+  for (const rendered of writes) assert.equal(rendered.config.update_multi, true,
+    'Lark requires shared-card mode on both initial send and patch for receiver-visible updates');
+  assert.equal(writes[0].elements[1].actions.length, 2);
+  assert.equal(writes[1].elements.some(element => element.tag === 'action'), false);
+});
 
 test('send verifies original sender/private conversation and fences immediately before writing', async () => {
   const f = clientFixture();

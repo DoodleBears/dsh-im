@@ -1016,3 +1016,9 @@ test('invalid numeric message ID formats are refused before source routing', asy
       error => error.code === 'invalid-response');
   }
 });
+
+test('quoted svr_id is decoded from its original uint64 JSON lexeme', async () => {
+  const api = createWeixinApi({ fetchImpl: async () => new Response('{"ret":0,"get_updates_buf":"next","msgs":[{"message_id":9007199254740993,"item_list":[{"type":1,"ref_msg":{"svr_id":18446744073709551615}}]}]}', { status: 200 }) });
+  const result = await api.getUpdates({ baseUrl: 'https://ilinkai.weixin.qq.com/', token: 'test', getUpdatesBuf: '' });
+  assert.equal(result.msgs[0].item_list[0].ref_msg.svr_id, '18446744073709551615');
+});
