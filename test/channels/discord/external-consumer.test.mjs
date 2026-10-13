@@ -21,6 +21,42 @@ const identityApi = {
   getCurrentUser: async () => ({ id: ids.bot, bot: true, username: 'QA Bot' }),
   getCurrentApplication: async () => ({ id: ids.app, bot: { id: ids.bot, bot: true } }),
 };
+
+test('reachable Discord API reads current guilds and channels using exact native GET routes', async () => {
+  const paths = [];
+  const api = new DiscordApi({ token: `${'A'.repeat(24)}.${'B'.repeat(6)}.${'C'.repeat(30)}`, fetchImpl: async (url, request) => {
+    assert.equal(request.method, 'GET'); paths.push(new URL(url).pathname + new URL(url).search);
+    return Response.json([]);
+  } });
+  await api.listCurrentGuilds({ after: ids.guild });
+  await api.getGuildChannels({ guildId: ids.guild });
+  assert.deepEqual(paths, [`/api/v10/users/@me/guilds?limit=100&after=${ids.guild}`, `/api/v10/guilds/${ids.guild}/channels`]);
+});
+
+test('reachable Discord Runtime creates no source/thread and both new and saved paths honor the final fence', async () => {
+  const f = fixture(); let socket;
+  const runtime = new DiscordRuntime({ config: { botId: 'discord-qa', platformId: ids.bot, consumerMode: 'external-consumer' },
+    token: 'test-private-token', harness: { ensureRunning: async () => true, createSession: async () => assert.fail('standalone') }, state: {},
+    externalConsumer: async () => assert.fail('no inbound event'),
+    createApi: () => ({ ...f.api, ...identityApi, getGatewayBot: async () => ({ url: 'wss://gateway.discord.gg' }),
+      listCurrentGuilds: async () => [{ id: ids.guild, name: 'QA' }], getGuildChannels: async () => [f.parent] }),
+    createWebSocket: () => { socket = new Socket(); queueMicrotask(() => socket.packet({ op: 10, d: { heartbeat_interval: 45000 } })); return socket; },
+    logger: { warn() {}, error() {} }, connectTimeoutMs: 200 });
+  try {
+    await runtime.start();
+    assert.equal((await runtime.listReachableConversations()).conversations[0].id, ids.channel);
+    await assert.rejects(runtime.postConversationChecked(ids.channel, 'never', { beforeSend: () => false }), { code: 'send-permission-denied' });
+    await assert.rejects(runtime.sendProactiveText({ kind: 'channel', route: { channelId: ids.channel } }, 'never', {
+      expectedFingerprint: account.fingerprint, beforeSend: () => false,
+    }), { code: 'send-permission-denied' });
+    assert.equal(f.sends.length, 0);
+    assert.equal((await runtime.postConversationChecked(ids.channel, 'first', { beforeSend: () => true })).receipt.messageId, ids.sent);
+    assert.equal(f.sends[0].replyToMessageId, undefined);
+    assert.equal(f.sends[0].retry, false);
+    await assert.rejects(runtime.postConversationChecked(ids.channel, 'late', { beforeSend: () => { void runtime.stop(); return true; } }));
+    assert.equal(f.sends.length, 1);
+  } finally { await runtime.stop(); }
+});
 const permissions = (1n << 10n) | (1n << 11n) | (1n << 16n) | (1n << 38n);
 function fixture(thread = false) {
   const parent = { id: ids.channel, guild_id: ids.guild, type: 0, permission_overwrites: [] };

@@ -48,6 +48,7 @@ export default {
   '微信连接当前离线': 'The WeChat connection is currently offline',
   '配对码多次错误，请重新生成二维码。': 'The pairing code was entered incorrectly too many times. Please generate a new QR code.',
   '该微信账号已绑定，但本机没有可恢复的凭据。': 'This WeChat account is already bound, but no recoverable credential exists on this machine.',
+  '该微信账号已绑定，请选择已有应用。': 'This WeChat account is already bound. Select the existing app.',
   '微信授权成功，但返回的账号凭据不完整。': 'WeChat authorization succeeded, but the returned account credential is incomplete.',
 
   // weixin-runtime.mjs

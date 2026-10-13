@@ -240,7 +240,7 @@ export class SlackController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'slack', account,
         connected: this.#runtimes.get(botId)?.status?.ready === true,
-        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked',
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'proactive-fence-checked', 'reachable-conversations-checked', 'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked',
           'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked',
           'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked'] };
     });
@@ -280,6 +280,30 @@ export class SlackController {
     return this.#withBotTransition(botId, async () => {
       const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
       return checked.runtime.qualifyReplyChecked(route, { signal: checked.signal });
+    });
+  }
+
+  async listReachableConversations(botId, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked=await this.#checkedRuntime(botId,options.expectedFingerprint,options.signal);
+      const page=await checked.runtime.listReachableConversations({...options,signal:checked.signal});
+      checked.signal.throwIfAborted();
+      if(this.#closed) throw slackRefusal('provider-unavailable');
+      return page;
+    });
+  }
+
+  async postConversationChecked(botId,id,text,options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked=await this.#checkedRuntime(botId,options.expectedFingerprint,options.signal);
+      return checked.runtime.postConversationChecked(id,text,{...options,signal:checked.signal,beforeSend:()=>{
+        if(this.#closed) throw slackRefusal('provider-unavailable');
+        checked.signal.throwIfAborted();
+        const allowed=options.beforeSend?.()===true;
+        checked.signal.throwIfAborted();
+        if(this.#closed) throw slackRefusal('provider-unavailable');
+        return allowed;
+      }});
     });
   }
 

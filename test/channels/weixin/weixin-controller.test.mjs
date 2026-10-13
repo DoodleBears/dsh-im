@@ -1,9 +1,68 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { BotWorkspaceStore, createWorkspaceAwareController } from '../../../src/channels/shared/bot-workspace-store.mjs';
 
 import { WeixinController } from '../../../src/channels/weixin/weixin-controller.mjs';
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test('inline WeChat setup pairs through the production workspace controller and starts only an external consumer', async () => {
+  const { AppSetupService, installAppSetupRpc } = await import('../../../plugin-src/host/app-setup.mjs');
+  const { managementFetch } = await import('../../fixtures/management-rpc.mjs');
+  const credentials = credentialsFixture();
+  const configs = configFixture();
+  const runtimes = runtimeFactory();
+  let confirm;
+  const scanned = new Promise(resolve => { confirm = resolve; });
+  const controller = new WeixinController({
+    api: {
+      beginLogin: async () => ({ qrcode: 'private-qr-token', qrcodeUrl: 'https://liteapp.weixin.qq.com/q/inline' }),
+      pollLogin: async ({ signal }) => new Promise(resolve => {
+        scanned.then(resolve);
+        if (signal.aborted) resolve({ status: 'expired' });
+        else signal.addEventListener('abort', () => resolve({ status: 'expired' }), { once: true });
+      }),
+    }, credentials: credentials.provider, configStore: configs.store, createRuntime: runtimes.createRuntime,
+  });
+  const workspaceHome = await mkdtemp(join(tmpdir(), 'inline-wechat-workspace-'));
+  const workspaceController = createWorkspaceAwareController(controller, {
+    workspaces: new BotWorkspaceStore(join(workspaceHome, 'workspaces.json')),
+    stateFor: () => undefined,
+    agentPresetCatalog: async () => ({ items: [] }),
+    modelCatalog: async () => ({ items: [] }),
+  });
+  const logs = [];
+  const setup = new AppSetupService({ describeBot: id => workspaceController.describeDeliveryAccount(id),
+    logger: { info: entry => logs.push(entry) } });
+  setup.register('weixin', workspaceController);
+  let rpc;
+  installAppSetupRpc({ connection: { fetch: managementFetch((_channel, handler) => { rpc = handler; }) } }, setup);
+  try {
+    assert.deepEqual(setup.describe('weixin'), { version: 1, channel: 'weixin', endpoint: 'dsh-im/app-setup', kind: 'qr' });
+    const started = await rpc('setup.start', { channel: 'weixin' });
+    assert.equal(started.ok, true);
+    assert.equal(started.value.state, 'pending');
+    assert.match(started.value.qrDataUrl, /^data:image\/png;base64,/);
+    assert.equal(started.value.accountRef, undefined);
+    confirm({ status: 'confirmed', bot_token: 'private-paired-token', ilink_bot_id: 'inline@im.bot',
+      ilink_user_id: 'paired-owner', baseurl: 'https://ilinkai.weixin.qq.com' });
+    const ready = await waitFor(() => controller.status(), value => value.totals.connected === 1);
+    const result = await rpc('setup.poll', { attemptId: started.value.attemptId });
+    assert.equal(result.value.state, 'ready');
+    assert.equal(result.value.accountRef, ready.bots[0].botId);
+    assert.match(result.value.description.account.fingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(runtimes.runtimes.length, 1);
+    assert.equal(runtimes.runtimes[0].config.consumerMode, 'external-consumer');
+    assert.equal([...configs.accounts.values()][0].consumerMode, 'external-consumer');
+    assert.doesNotMatch(JSON.stringify({ result, logs }), /private-paired-token|private-qr-token|verificationUrl|tokenRef/);
+    assert.equal(result.value.qrDataUrl, undefined);
+    assert.equal((await rpc('setup.cancel', { attemptId: started.value.attemptId })).value.state, 'ready');
+    assert.equal(controller.status().totals.connected, 1);
+  } finally { confirm({ status: 'expired' }); await controller.close(); await rm(workspaceHome, { recursive: true, force: true }); }
+});
 
 async function waitFor(read, predicate, attempts = 100) {
   for (let index = 0; index < attempts; index += 1) {
@@ -13,6 +72,31 @@ async function waitFor(read, predicate, attempts = 100) {
   }
   throw new Error('condition was not reached');
 }
+
+test('cancelling a completed QR before the next poll retains its authenticated account', async () => {
+  const { AppSetupService } = await import('../../../plugin-src/host/app-setup.mjs');
+  const configs = configFixture();
+  let confirm;
+  const scan = new Promise(resolve => { confirm = resolve; });
+  const controller = new WeixinController({
+    api: {
+      beginLogin: async () => ({ qrcode: 'secret-qr', qrcodeUrl: 'https://liteapp.weixin.qq.com/q/retain' }),
+      pollLogin: async () => scan,
+    }, credentials: credentialsFixture().provider, configStore: configs.store, createRuntime: runtimeFactory().createRuntime,
+  });
+  const setup = new AppSetupService({ describeBot: id => controller.describeDeliveryAccount(id) });
+  setup.register('weixin', controller);
+  try {
+    const begun = await setup.call('setup.start', { channel: 'weixin' });
+    assert.equal(begun.state, 'pending');
+    confirm({ status: 'confirmed', bot_token: 'retained-token', ilink_bot_id: 'retained@im.bot', ilink_user_id: 'owner' });
+    await waitFor(() => controller.status(), value => value.totals.connected === 1);
+    const cancelled = await setup.call('setup.cancel', { attemptId: begun.attemptId });
+    assert.equal(cancelled.state, 'ready');
+    assert.equal(cancelled.accountRef, controller.status().bots[0].botId);
+    assert.equal(cancelled.qrDataUrl, undefined);
+  } finally { confirm({ status: 'expired' }); await controller.close(); }
+});
 
 function credentialsFixture() {
   const values = new Map();
@@ -30,6 +114,31 @@ function credentialsFixture() {
   };
 }
 
+test('an abandoned inline QR expires while waiting for a pairing code and stops the Provider attempt', async (t) => {
+  const { AppSetupService } = await import('../../../plugin-src/host/app-setup.mjs');
+  const credentials = credentialsFixture();
+  const configs = configFixture();
+  const controller = new WeixinController({
+    api: {
+      beginLogin: async () => ({ qrcode: 'private-expiry-qr', qrcodeUrl: 'https://liteapp.weixin.qq.com/q/expiry' }),
+      pollLogin: async () => ({ status: 'need_verifycode' }),
+    }, credentials: credentials.provider, configStore: configs.store, createRuntime: runtimeFactory().createRuntime,
+  });
+  const setup = new AppSetupService({ describeBot: id => controller.describeDeliveryAccount(id) });
+  setup.register('weixin', controller);
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  try {
+    const begun = await setup.call('setup.start', { channel: 'weixin' });
+    assert.equal(begun.state, 'needs_verification');
+    t.mock.timers.tick(5 * 60_000 + 1);
+    await flush();
+    assert.equal(controller.status().state, 'disconnected');
+    await assert.rejects(setup.call('setup.poll', { attemptId: begun.attemptId }), { code: 'setup-expired' });
+    assert.equal(credentials.values.size, 0);
+    assert.equal(configs.accounts.size, 0);
+  } finally { t.mock.timers.reset(); await controller.close(); }
+});
+
 function configFixture() {
   const accounts = new Map();
   return {
@@ -46,6 +155,74 @@ function configFixture() {
     },
   };
 }
+
+for (const phase of ['verification', 'activation']) test(`cancelling inline WeChat during ${phase} leaves no account or token`, async () => {
+  const { AppSetupService } = await import('../../../plugin-src/host/app-setup.mjs');
+  const credentials = credentialsFixture();
+  const configs = configFixture();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let saveEntered = false;
+  if (phase === 'activation') {
+    const save = configs.store.save;
+    configs.store.save = async account => { await save(account); saveEntered = true; await gate; return account; };
+  }
+  let confirm;
+  const scan = new Promise(resolve => { confirm = resolve; });
+  const controller = new WeixinController({
+    api: {
+      beginLogin: async () => ({ qrcode: 'private-cancel-qr', qrcodeUrl: 'https://liteapp.weixin.qq.com/q/cancel' }),
+      pollLogin: async () => phase === 'verification' ? { status: 'need_verifycode' } : scan,
+    }, credentials: credentials.provider, configStore: configs.store, createRuntime: runtimeFactory().createRuntime,
+    logger: { error() {}, info() {}, warn() {} },
+  });
+  const setup = new AppSetupService({ describeBot: id => controller.describeDeliveryAccount(id) });
+  setup.register('weixin', controller);
+  try {
+    const begun = await setup.call('setup.start', { channel: 'weixin' });
+    if (phase === 'activation') {
+      confirm({ status: 'confirmed', bot_token: 'cancelled-token', ilink_bot_id: 'cancelled@im.bot', ilink_user_id: 'owner' });
+      await waitFor(() => saveEntered, Boolean);
+    }
+    const cancelling = setup.call('setup.cancel', { attemptId: begun.attemptId });
+    await flush();
+    release();
+    assert.equal((await cancelling).state, 'cancelled');
+    assert.equal((await setup.call('setup.poll', { attemptId: begun.attemptId })).state, 'cancelled');
+    assert.equal(credentials.values.size, 0);
+    assert.equal(configs.accounts.size, 0);
+    assert.equal(controller.status().totals.connected, 0);
+  } finally { release(); confirm({ status: 'expired' }); await controller.close(); }
+});
+
+test('inline QR verification stays on the Provider transport and a second start cannot cancel it', async () => {
+  const { AppSetupService } = await import('../../../plugin-src/host/app-setup.mjs');
+  const credentials = credentialsFixture();
+  const configs = configFixture();
+  let polls = 0;
+  const controller = new WeixinController({
+    api: {
+      beginLogin: async () => ({ qrcode: 'private-verified-qr', qrcodeUrl: 'https://liteapp.weixin.qq.com/q/verify' }),
+      pollLogin: async ({ verifyCode }) => {
+        if (++polls === 1) return { status: 'need_verifycode' };
+        assert.equal(verifyCode, '123456');
+        return { status: 'confirmed', bot_token: 'private-verified-token', ilink_bot_id: 'verified@im.bot', ilink_user_id: 'owner' };
+      },
+    }, credentials: credentials.provider, configStore: configs.store, createRuntime: runtimeFactory().createRuntime,
+  });
+  const setup = new AppSetupService({ describeBot: id => controller.describeDeliveryAccount(id) });
+  setup.register('weixin', controller);
+  try {
+    const begun = await setup.call('setup.start', { channel: 'weixin' });
+    assert.equal(begun.state, 'needs_verification');
+    await assert.rejects(setup.call('setup.start', { channel: 'weixin' }), { code: 'setup-failed' });
+    assert.equal((await setup.call('setup.poll', { attemptId: begun.attemptId })).state, 'needs_verification');
+    await assert.rejects(setup.call('setup.verify', { attemptId: begun.attemptId, verifyCode: 'bad' }), { code: 'bad-request' });
+    await setup.call('setup.verify', { attemptId: begun.attemptId, verifyCode: '123456' });
+    await waitFor(() => controller.status(), value => value.totals.connected === 1);
+    assert.equal((await setup.call('setup.poll', { attemptId: begun.attemptId })).state, 'ready');
+  } finally { await controller.close(); }
+});
 
 function runtimeFactory({ failStart = false, startError, lastMessageError = null } = {}) {
   const runtimes = [];
@@ -82,6 +259,68 @@ function runtimeFactory({ failStart = false, startError, lastMessageError = null
   };
   return { runtimes, connectionTests, proactiveSends, createRuntime };
 }
+
+test('inline setup refuses a confirmed existing WeChat account without replacing its token or runtime', async () => {
+  const { AppSetupService } = await import('../../../plugin-src/host/app-setup.mjs');
+  const credentials = credentialsFixture();
+  const configs = configFixture();
+  const runtimes = runtimeFactory();
+  let scans = 0;
+  const controller = new WeixinController({
+    api: {
+      beginLogin: async () => ({ qrcode: 'private-existing-qr', qrcodeUrl: 'https://liteapp.weixin.qq.com/q/existing' }),
+      pollLogin: async () => ({ status: 'confirmed', bot_token: ++scans === 1 ? 'original-token' : 'replacement-token',
+        ilink_bot_id: 'existing@im.bot', ilink_user_id: 'owner' }),
+    }, credentials: credentials.provider, configStore: configs.store, createRuntime: runtimes.createRuntime,
+    logger: { error() {}, info() {}, warn() {} },
+  });
+  const setup = new AppSetupService({ describeBot: id => controller.describeDeliveryAccount(id) });
+  setup.register('weixin', controller);
+  try {
+    const original = await controller.startProvisioning();
+    await waitFor(() => controller.registrationStatus(original.attemptId), value => value.status === 'connected');
+    const before = configs.store.list();
+    const writes = credentials.calls.length;
+    const begun = await setup.call('setup.start', { channel: 'weixin' });
+    const result = await setup.call('setup.poll', { attemptId: begun.attemptId });
+    assert.equal(result.state, 'failed');
+    assert.equal(result.accountRef, undefined);
+    assert.deepEqual(configs.store.list(), before);
+    assert.equal(credentials.calls.length, writes);
+    assert.deepEqual([...credentials.values.values()], ['original-token']);
+    assert.equal(runtimes.runtimes.length, 1);
+    assert.equal(runtimes.runtimes[0].status.ready, true);
+  } finally { await controller.close(); }
+});
+
+test('replacing setup registration cancels its old QR even when the native poll completes late', async () => {
+  const { AppSetupService } = await import('../../../plugin-src/host/app-setup.mjs');
+  const credentials = credentialsFixture();
+  const configs = configFixture();
+  let confirm;
+  const scan = new Promise(resolve => { confirm = resolve; });
+  const controller = new WeixinController({
+    api: {
+      beginLogin: async () => ({ qrcode: 'private-replaced-qr', qrcodeUrl: 'https://liteapp.weixin.qq.com/q/replaced' }),
+      pollLogin: async () => scan,
+    }, credentials: credentials.provider, configStore: configs.store, createRuntime: runtimeFactory().createRuntime,
+  });
+  const setup = new AppSetupService({ describeBot: id => controller.describeDeliveryAccount(id) });
+  const dispose = setup.register('weixin', controller);
+  try {
+    const begun = await setup.call('setup.start', { channel: 'weixin' });
+    const nextDispose = setup.register('weixin', controller);
+    dispose();
+    assert.equal(setup.describe('weixin').kind, 'qr');
+    confirm({ status: 'confirmed', bot_token: 'late-token', ilink_bot_id: 'late@im.bot', ilink_user_id: 'owner' });
+    await waitFor(() => controller.status(), value => value.state === 'disconnected');
+    await assert.rejects(setup.call('setup.poll', { attemptId: begun.attemptId }), { code: 'capability-unavailable' });
+    assert.equal(credentials.values.size, 0);
+    assert.equal(configs.accounts.size, 0);
+    nextDispose();
+    assert.equal(setup.describe('weixin'), undefined);
+  } finally { confirm({ status: 'expired' }); await controller.close(); }
+});
 
 test('confirmed QR login stores bot_token only in credentials and starts a redacted account', async () => {
   const credentials = credentialsFixture();

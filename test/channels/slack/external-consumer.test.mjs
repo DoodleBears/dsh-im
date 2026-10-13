@@ -15,6 +15,49 @@ const bot = { id: identity.bot_id, user_id: identity.user_id, app_id: 'A12345678
 const account = verifiedSlackAccount(identity, bot);
 const botId = 'slack_0123456789abcdef01234567';
 
+test('reachable Slack API uses joined-channel form pagination and authenticated posting scopes', async () => {
+  const api = new SlackApi({ botToken: 'xoxb-test-1234567890123456', fetchImpl: async (url, request) => {
+    assert.equal(new URL(url).pathname, '/api/users.conversations');
+    assert.match(request.headers['content-type'], /^application\/x-www-form-urlencoded/);
+    const form = new URLSearchParams(request.body);
+    assert.equal(form.get('cursor'), 'native-next');
+    assert.equal(form.get('types'), 'public_channel,private_channel');
+    assert.equal(form.get('exclude_archived'), 'true');
+    assert.equal(form.get('limit'), '100');
+    return Response.json({ ok: true, channels: [] }, { headers: { 'x-oauth-scopes': 'chat:write,channels:read,groups:read' } });
+  } });
+  assert.equal(api.postingScopes(), null);
+  await api.userConversations({ cursor: 'native-next' });
+  assert.deepEqual([...api.postingScopes()].sort(), ['channels:read', 'chat:write', 'groups:read']);
+  api.postingScopes().clear();
+  assert.equal(api.postingScopes().has('chat:write'), true);
+});
+
+test('reachable Slack Runtime posts without a source and both new and saved paths honor their final fence', async () => {
+  const f = await fixture(async () => assert.fail('no inbound event'), {
+    userConversations: async () => ({ channels: [{ id: 'C12345678' }] }),
+    postingScopes: () => new Set(['chat:write']),
+    conversationInfo: async () => ({ id: 'C12345678', is_channel: true, is_member: true, name: 'unmentioned' }),
+  });
+  try {
+    assert.equal((await f.runtime.listReachableConversations()).conversations[0].name, 'unmentioned');
+    await assert.rejects(f.runtime.postConversationChecked('C12345678', 'never', { beforeSend: () => false }), { code: 'send-permission-denied' });
+    await assert.rejects(f.runtime.sendProactiveText({ kind: 'conversation', route: { channelId: 'C12345678' } }, 'never', {
+      expectedFingerprint: account.fingerprint, beforeSend: () => false,
+    }), { code: 'send-permission-denied' });
+    assert.equal(f.sends.length, 0);
+    const sent = await f.runtime.postConversationChecked('C12345678', 'first', { beforeSend: () => true });
+    assert.equal(sent.receipt.conversationId, 'C12345678');
+    assert.equal(f.sends[0].threadTs, undefined);
+    assert.equal(f.sends[0].retry, false);
+    assert.equal(f.sessionWrites(), 0);
+    await assert.rejects(f.runtime.postConversationChecked('C12345678', 'late', { beforeSend: () => {
+      void f.runtime.stop(); return true;
+    } }));
+    assert.equal(f.sends.length, 1);
+  } finally { await f.runtime.stop(); }
+});
+
 test('read API queries reach Slack as form parameters for identity and exact thread source checks', async () => {
   const childTs = '1791127736.123456';
   const rootTs = '1791127600.000001';

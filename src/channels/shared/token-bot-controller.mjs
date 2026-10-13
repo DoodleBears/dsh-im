@@ -316,6 +316,32 @@ export class TokenBotController {
     return { runtime, signal: signal ? AbortSignal.any([signal, lease]) : lease };
   }
 
+  async listReachableConversations(botId,options = {}) {
+    if(!this.#checkedDelivery?.capabilities?.includes('reachable-conversations-checked'))throw Object.assign(new Error('capability-unavailable'),{code:'capability-unavailable'});
+    return this.#withBotTransition(botId,async()=>{
+      const checked=await this.#checkedRuntime(botId,options.expectedFingerprint,options.signal);
+      const page=await checked.runtime.listReachableConversations({...options,signal:checked.signal});
+      checked.signal.throwIfAborted();
+      if(this.#closed)throw Object.assign(new Error('provider-unavailable'),{code:'provider-unavailable'});
+      return page;
+    });
+  }
+
+  async postConversationChecked(botId,id,text,options = {}) {
+    if(!this.#checkedDelivery?.capabilities?.includes('reachable-conversations-checked'))throw Object.assign(new Error('capability-unavailable'),{code:'capability-unavailable'});
+    return this.#withBotTransition(botId,async()=>{
+      const checked=await this.#checkedRuntime(botId,options.expectedFingerprint,options.signal);
+      return checked.runtime.postConversationChecked(id,text,{...options,signal:checked.signal,beforeSend:()=>{
+        if(this.#closed)throw Object.assign(new Error('provider-unavailable'),{code:'provider-unavailable'});
+        checked.signal.throwIfAborted();
+        const allowed=options.beforeSend?.()===true;
+        checked.signal.throwIfAborted();
+        if(this.#closed)throw Object.assign(new Error('provider-unavailable'),{code:'provider-unavailable'});
+        return allowed;
+      }});
+    });
+  }
+
   async qualifyReplyChecked(botId, route, options = {}) {
     return this.#withBotTransition(botId, async () => {
       const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);

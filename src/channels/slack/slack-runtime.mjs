@@ -4,6 +4,7 @@ import { t } from '../shared/i18n.mjs';
 import { createSlackHistoryReader } from './history-reader.mjs';
 import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
 import { SlackApi } from './slack-api.mjs';
+import { listSlackReachable, postSlackConversation } from './reachable-conversations.mjs';
 import { createSlackBridgeStatus, SlackHarnessBridge } from './slack-bridge.mjs';
 import { normalizeSlackExternalText, verifiedSlackAccount, slackRefusal, slackTimestamp } from './external-consumer.mjs';
 
@@ -486,6 +487,25 @@ export class SlackRuntime {
     return this.#bridge.sendConnectionTest(text);
   }
 
+  #checkedReachable(signal) {
+    if (!this.#status.ready || !this.#account || !this.#api || !this.#abortController
+      || this.#config.consumerMode !== 'external-consumer') throw slackRefusal('capability-unavailable');
+    const generation = this.#generation;
+    const combined = signal ? AbortSignal.any([signal, this.#abortController.signal]) : this.#abortController.signal;
+    return {api:this.#api,account:this.#account,signal:combined,assertCurrent:()=>{
+      combined.throwIfAborted();
+      if(generation!==this.#generation||this.#stopped||!this.#status.ready) throw slackRefusal('capability-unavailable');
+    }};
+  }
+
+  listReachableConversations(options = {}) {
+    return listSlackReachable(this.#checkedReachable(options.signal), options);
+  }
+
+  postConversationChecked(id,text,options = {}) {
+    return postSlackConversation(this.#checkedReachable(options.signal), id, text, options);
+  }
+
   async sendProactiveText(target, text, options = {}) {
     if (this.#config.consumerMode === 'external-consumer') {
       const generation = this.#generation;
@@ -500,6 +520,9 @@ export class SlackRuntime {
       options.signal?.throwIfAborted();
       if (generation !== this.#generation || this.#stopped || !this.#status.ready)
         throw slackRefusal('capability-unavailable');
+      if(options.beforeSend!==undefined&&options.beforeSend()!==true)throw slackRefusal('send-permission-denied');
+      options.signal?.throwIfAborted();
+      if(generation!==this.#generation||this.#stopped||!this.#status.ready)throw slackRefusal('capability-unavailable');
       const sent = await this.#postChecked({ channelId, text, signal: options.signal });
       return { sent: true, ...(options.receipt
         ? { receipt: { version: 1, messageId: sent.ts, conversationId: sent.channel } } : {}) };

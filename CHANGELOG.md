@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- 本次 #1115 候选补齐 Discord/Slack 可达群查询与首次发帖，保留旧目标的发送前授权检查，并恢复同一 Provider 中的 Lark/微信设置流程；尚未发布，不替代原生验收或已发布 pin。
+  This #1115 candidate adds Discord/Slack reachable-group discovery and first posting, preserves final authorization for saved targets, and restores Lark/WeChat setup in the same Provider. It is unreleased and does not substitute for native qualification or the published pin.
+
 - Feishu/Lark 增加可选可达群查询与受校验的首次发帖能力：重新检查群成员和发言权限、发送前授权以及原生回执；当前为未发布主线候选，新的运行时验收仍待完成（[BotHarness #1115](https://github.com/BotHarness/DeepSeekBot/issues/1115), [contract](docs/checked-reachable-conversations.md)）。
   Feishu/Lark adds optional reachable-group discovery and checked first posting with fresh membership/speaking permission, final authorization and exact native receipts. This main-line candidate is unreleased and awaits fresh runtime qualification ([BotHarness #1115](https://github.com/BotHarness/DeepSeekBot/issues/1115), [contract](docs/checked-reachable-conversations.md)).
 

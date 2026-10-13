@@ -18,6 +18,7 @@ import { installHostLanguageRpc } from './host-language-rpc.mjs';
 import { installDeliveryRpc } from './delivery-rpc.mjs';
 import { installDeliveryHttp } from './delivery-http.mjs';
 import { createDeliveryService } from './delivery-service.mjs';
+import { installAppSetupRpc } from './app-setup.mjs';
 import { installInboundTtlRpc } from './inbound-ttl-rpc.mjs';
 import { installInjectedContext } from './injected-context.mjs';
 import { installSessionSyncCoordinator } from './session-sync-coordinator.mjs';
@@ -46,6 +47,7 @@ export function createImHostPlugin(internals = {}) {
   const startInboundTtl = internals.installInboundTtlRpc ?? installInboundTtlRpc;
   const startInjectedContext = internals.installInjectedContext ?? installInjectedContext;
   const startDelivery = internals.installDeliveryRpc ?? installDeliveryRpc;
+  const startAppSetup = internals.installAppSetupRpc ?? installAppSetupRpc;
   const startDeliveryHttp = internals.installDeliveryHttp ?? installDeliveryHttp;
   const startSessionSync = internals.installSessionSyncCoordinator
     ?? installSessionSyncCoordinator;
@@ -88,10 +90,14 @@ export function createImHostPlugin(internals = {}) {
         .map(([channel]) => channel)
         .filter((channel) => channel !== 'office'
           && config[channel]?.harnessBaseUrl !== undefined);
-      const deliveryService = makeDeliveryService({ unavailableSessionSyncChannels });
+      const setupLogger = typeof ctx?.logger === 'function'
+        ? ctx.logger('dsh-im:app-setup') : (ctx?.logger ?? console);
+      const deliveryService = makeDeliveryService({ unavailableSessionSyncChannels, logger: setupLogger });
       if (typeof ctx?.provide === 'function') {
         ctx.provide('dshIm', Object.freeze({
           contractVersion: 1,
+          setupVersion: 1,
+          describeSetup: (channel) => deliveryService.appSetup.describe(channel),
           reactionVersion: 1,
           reactionChecked: (botId, route, reaction, options) => deliveryService.reactionChecked(botId, route, reaction, options),
           inboundVersion: 1,
@@ -195,6 +201,7 @@ export function createImHostPlugin(internals = {}) {
       }
       try {
         startDelivery(ctx, deliveryService, { authority: config.rpcAuthority });
+        if (deliveryService.appSetup) startAppSetup(ctx, deliveryService.appSetup, config.rpcAuthority);
       } catch (error) {
         logger.error?.('[dsh-im] failed to activate delivery management; continuing with channels', error);
       }

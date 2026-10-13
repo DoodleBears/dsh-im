@@ -244,6 +244,14 @@ export class SlackApi {
     return value.channel;
   }
 
+  userConversations({ cursor, signal } = {}) {
+    return this.#request('users.conversations', { tokenKind: 'bot', signal,
+      body: { types: 'public_channel,private_channel', exclude_archived: true, limit: 100,
+        ...(cursor ? { cursor } : {}) } });
+  }
+
+  postingScopes() { return this.#botScopes ? new Set(this.#botScopes) : null; }
+
   async threadMessage({ channelId, threadTs, messageTs, signal } = {}) {
     const value = await this.#request('conversations.replies', { tokenKind: 'bot', signal,
       body: { channel: slackId(channelId, 'channel id'), ts: requiredString(threadTs, 'thread timestamp'),
@@ -551,7 +559,7 @@ export class SlackApi {
     const token = tokenKind === 'app' ? this.#appToken : this.#botToken;
     if (!token) throw new TypeError(`Slack ${tokenKind} token is required for ${method}`);
     const formEncoded = ['files.getUploadURLExternal', 'files.info', 'bots.info', 'users.info',
-      'conversations.info', 'conversations.history', 'conversations.replies'].includes(method);
+      'conversations.info', 'conversations.history', 'conversations.replies', 'users.conversations'].includes(method);
     let response;
     try {
       response = await this.#fetch(new URL(method, this.#baseUrl), {
