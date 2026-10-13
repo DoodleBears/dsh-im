@@ -1,5 +1,5 @@
 import { normalizeExternalCardAction } from './external-cards.mjs';
-import { ExclusiveInboundConsumers, normalizeExternalText, normalizeOwnTextEcho } from './external-consumer.mjs';
+import { ExclusiveInboundConsumers, normalizeExternalMedia, normalizeOwnTextEcho } from './external-consumer.mjs';
 import { atConnectionStage, createConnectionDiagnostics } from '../shared/connection-error.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { connectionTestMessage } from '../shared/connection-test.mjs';
@@ -434,7 +434,7 @@ export class MultiBotDshFeishuController {
     });
   }
 
-  async bindCredentials({ appId, appSecret, domain = 'feishu' } = {}) {
+  async bindCredentials({ appId, appSecret, domain = 'feishu', consumerMode, signal } = {}) {
     this.#assertOpen();
     const normalizedAppId = typeof appId === 'string' ? appId.trim() : '';
     const normalizedSecret = typeof appSecret === 'string' ? appSecret.trim() : '';
@@ -445,15 +445,20 @@ export class MultiBotDshFeishuController {
 
     return this.#serializeConfig(async () => {
       this.#assertOpen();
+      signal?.throwIfAborted();
       const bot = await this.#verifyApp({
         appId: normalizedAppId,
         appSecret: normalizedSecret,
         domain: normalizedDomain,
       });
+      signal?.throwIfAborted();
       this.#assertOpen();
       const existing = this.#configStore.list().find(
         (candidate) => candidate.appId === normalizedAppId,
       );
+      if (consumerMode === 'external-consumer' && existing) {
+        throw Object.assign(new Error('setup-account-exists'), { code: 'setup-account-exists' });
+      }
       const botId = existing?.id ?? this.#createBotId();
       if (typeof botId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(botId)
         || (!existing && this.#configStore.getBot(botId))) {
@@ -461,8 +466,10 @@ export class MultiBotDshFeishuController {
       }
       const secretRef = existing?.secretRef ?? secretRefFor(botId);
       const previousSecret = await atConnectionStage('credential.read', () => this.#credentials.resolve(secretRef), 'credential-store').catch(() => undefined);
+      signal?.throwIfAborted();
       const config = {
         ...existing,
+        ...(consumerMode === 'external-consumer' ? { consumerMode } : {}),
         id: botId,
         appId: normalizedAppId,
         secretRef,
@@ -483,6 +490,7 @@ export class MultiBotDshFeishuController {
       await atConnectionStage('credential.save', () => this.#credentials.set(secretRef, normalizedSecret), 'credential-store');
       let saved;
       try {
+        signal?.throwIfAborted();
         saved = await this.#configStore.saveBot(config);
       } catch (error) {
         await this.#restoreCredential(secretRef, previousSecret);
@@ -501,7 +509,7 @@ export class MultiBotDshFeishuController {
         }
       });
       this.#touch();
-      return this.status(botId);
+      return consumerMode === 'external-consumer' ? { accountRef: botId } : this.status(botId);
     });
   }
 
@@ -594,11 +602,11 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'feishu', account,
         connected: isConnected(connectionStatus(this.#runtimes.get(botId))),
-        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer', 'reaction-write-checked'] };
+        capabilities: ['reachable-conversations-checked', 'proactive-fence-checked', 'proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer', 'reaction-write-checked', 'source-image-checked', 'approval-rule-card-checked', 'approval-rule-all-opaque-card-checked', 'pairing-card-checked'] };
     });
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, onEcho, onAction } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, sourceImages = false, onEcho, onAction } = {}) {
     this.#assertOpen();
     return this.#withBotTransition(botId, async () => {
       this.#assertOpen();
@@ -607,7 +615,7 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       if (account.fingerprint !== expectedFingerprint)
         throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, onEcho, onAction });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, sourceImages, onEcho, onAction });
       try {
         const saved = await this.#configStore.saveBot({ ...config, consumerMode: 'external-consumer' });
         const resolved = await this.#credentials.resolve(saved.secretRef);
@@ -736,6 +744,42 @@ export class MultiBotDshFeishuController {
     });
   }
 
+  async #withReachableRuntime(botId, options, operation) {
+    this.#assertOpen();
+    return this.#withBotTransition(botId, async () => {
+      this.#assertOpen();
+      options.signal?.throwIfAborted();
+      const config = this.#requireBot(botId);
+      const account = await this.#deliveryAccount(config);
+      if (account.fingerprint !== options.expectedFingerprint)
+        throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
+      const runtime = this.#runtimes.get(botId);
+      if (!isConnected(connectionStatus(runtime)))
+        throw Object.assign(new Error('bot-not-connected'), { code: 'bot-not-connected' });
+      options.signal?.throwIfAborted();
+      const result = await operation(runtime);
+      return result;
+    });
+  }
+
+  async listReachableConversations(botId, options = {}) {
+    const result = await this.#withReachableRuntime(botId, options, runtime => runtime.listReachableConversations(options));
+    this.#assertOpen('capability-unavailable');
+    return result;
+  }
+
+  async postConversationChecked(botId, conversationId, text, options = {}) {
+    return this.#withReachableRuntime(botId, options,
+      runtime => runtime.postConversationChecked(conversationId, text, { ...options, beforeSend: () => {
+        this.#assertOpen('provider-unavailable');
+        options.signal?.throwIfAborted();
+        const allowed = options.beforeSend?.() === true;
+        this.#assertOpen('provider-unavailable');
+        options.signal?.throwIfAborted();
+        return allowed;
+      } }));
+  }
+
   async sendProactiveText(botId, target, text, options = {}) {
     this.#assertOpen();
     return this.#withBotTransition(botId, async () => {
@@ -757,7 +801,16 @@ export class MultiBotDshFeishuController {
         error.code = 'bot-not-connected';
         throw error;
       }
-      return runtime.sendProactiveText(target, text, options);
+      return runtime.sendProactiveText(target, text, { ...options,
+        ...(options.beforeSend === undefined ? {} : { beforeSend: () => {
+          this.#assertOpen('provider-unavailable');
+          options.signal?.throwIfAborted();
+          const allowed = options.beforeSend() === true;
+          this.#assertOpen('provider-unavailable');
+          options.signal?.throwIfAborted();
+          return allowed;
+        } }),
+      });
     });
   }
 
@@ -1514,8 +1567,9 @@ export class MultiBotDshFeishuController {
         signal?.throwIfAborted();
         const echo = normalizeOwnTextEcho(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
         if (echo) return this.#inboundConsumers.accept(config.id, echo, signal, true);
-        const evidence = normalizeExternalText(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
+        const evidence = normalizeExternalMedia(event, { botId: current.id, appId: current.appId, botOpenId: current.botOpenId, fingerprint: account.fingerprint });
         if (evidence === null) return { accepted: true, ignored: true };
+        if (evidence.attachments?.length && !this.#inboundConsumers.acceptsImages(config.id)) return { accepted: true, ignored: true };
         const named = typeof runtime.enrichExternalNames === 'function' ? await runtime.enrichExternalNames(evidence, { signal }) : evidence;
         const enriched = this.#inboundConsumers.acceptsFiles(config.id) && typeof runtime.enrichExternal === 'function' ? await runtime.enrichExternal(named, { signal }) : named;
         return this.#inboundConsumers.accept(config.id, enriched, signal);

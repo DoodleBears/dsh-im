@@ -155,12 +155,17 @@ function requiredString(value, name) {
   return result;
 }
 
-function safeOutgoingText(value, { trim = true } = {}) {
+function slackUserMention(id) {
+  if (typeof id !== 'string' || !/^[UW][A-Z0-9]{4,30}$/.test(id)) throw new TypeError('A Slack user id is required');
+  return `<@${id}>`;
+}
+
+function safeOutgoingText(value, { trim = true, allowedMentions = [] } = {}) {
   const raw = typeof value === 'string' ? value : '';
   const text = trim ? raw.trim() : raw;
   if (!text) throw new TypeError('Slack message text is required');
   return text
-    .replace(/<@([A-Z0-9]+)>/gi, '@$1')
+    .replace(/<@([A-Z0-9]+)>/gi, (tag, id) => allowedMentions.includes(id) ? tag : `@${id}`)
     .replace(/<!(channel|here|everyone)(?:\^[^>]*)?>/gi, '@$1');
 }
 
@@ -244,6 +249,14 @@ export class SlackApi {
     return value.channel;
   }
 
+  userConversations({ cursor, signal } = {}) {
+    return this.#request('users.conversations', { tokenKind: 'bot', signal,
+      body: { types: 'public_channel,private_channel', exclude_archived: true, limit: 100,
+        ...(cursor ? { cursor } : {}) } });
+  }
+
+  postingScopes() { return this.#botScopes ? new Set(this.#botScopes) : null; }
+
   async threadMessage({ channelId, threadTs, messageTs, signal } = {}) {
     const value = await this.#request('conversations.replies', { tokenKind: 'bot', signal,
       body: { channel: slackId(channelId, 'channel id'), ts: requiredString(threadTs, 'thread timestamp'),
@@ -309,14 +322,17 @@ export class SlackApi {
       : null;
   }
 
-  postMessage({ channelId, text, threadTs, signal, retry = true }) {
+  postMessage({ channelId, text, threadTs, mentionUserIds = [], signal, retry = true }) {
+    const tags = mentionUserIds.map(id => slackUserMention(id));
+    const body = safeOutgoingText(text, { allowedMentions: mentionUserIds });
+    const mentions = tags.filter(tag => !body.includes(tag)).join(' ');
     return this.#request('chat.postMessage', {
       tokenKind: 'bot',
       signal,
       retry,
       body: {
         channel: slackId(channelId, 'channel id'),
-        text: safeOutgoingText(text),
+        text: mentions ? `${mentions} ${body}` : body,
         ...(threadTs ? { thread_ts: cleanString(threadTs) } : {}),
         mrkdwn: true,
         link_names: false,
@@ -551,7 +567,7 @@ export class SlackApi {
     const token = tokenKind === 'app' ? this.#appToken : this.#botToken;
     if (!token) throw new TypeError(`Slack ${tokenKind} token is required for ${method}`);
     const formEncoded = ['files.getUploadURLExternal', 'files.info', 'bots.info', 'users.info',
-      'conversations.info', 'conversations.history', 'conversations.replies'].includes(method);
+      'conversations.info', 'conversations.history', 'conversations.replies', 'users.conversations'].includes(method);
     let response;
     try {
       response = await this.#fetch(new URL(method, this.#baseUrl), {

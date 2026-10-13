@@ -1,3 +1,6 @@
+import { checkedWeixinRoute, weixinRefusal } from './external-consumer.mjs';
+import { CheckedWeixinTyping } from './external-typing.mjs';
+import { readWeixinExternalFile, replyWeixinExternalFile } from './external-files.mjs';
 import { createWeixinDiagnostics } from './connection-error.mjs';
 import { DEFAULT_WEIXIN_MAX_MESSAGE_CHARS, WeixinApiError, rejectedProviderResponse } from './weixin-api.mjs';
 import {
@@ -116,6 +119,7 @@ export class WeixinRuntime {
   #token;
   #harness;
   #state;
+  #externalConsumer;
   #contextEnhancement;
   #accessPolicy;
   #logger;
@@ -129,6 +133,7 @@ export class WeixinRuntime {
   #abortController = null;
   #monitor = null;
   #starting = null;
+  #typing;
 
   constructor({
     api,
@@ -137,6 +142,7 @@ export class WeixinRuntime {
     harness,
     state,
     contextEnhancement,
+    externalConsumer,
     accessPolicy,
     logger = console,
     diagnostics,
@@ -153,12 +159,14 @@ export class WeixinRuntime {
     this.#harness = harness;
     this.#state = state;
     this.#contextEnhancement = contextEnhancement;
+    this.#externalConsumer = externalConsumer;
     this.#accessPolicy = accessPolicy;
     this.#logger = logger;
     this.#diagnostics = diagnostics ?? createWeixinDiagnostics({ logger });
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#maxMessageChars = maxMessageChars;
     this.#startRetryDelaysMs = startRetryDelays(startRetryDelaysMs);
+    this.#typing = new CheckedWeixinTyping({ api, baseUrl: config.baseUrl, token, logger });
   }
 
   get status() {
@@ -192,7 +200,7 @@ export class WeixinRuntime {
       await this.#notifyStart();
       this.#abortController = new AbortController();
       const signal = this.#abortController.signal;
-      this.#bridge = new WeixinHarnessBridge({
+      this.#bridge = this.#config.consumerMode === 'external-consumer' ? null : new WeixinHarnessBridge({
         api: this.#api,
         baseUrl: this.#config.baseUrl,
         token: this.#token,
@@ -276,6 +284,11 @@ export class WeixinRuntime {
         this.#status.connectionError = null;
 
         for (const message of orderWeixinMessages(response?.msgs)) {
+          if (this.#config.consumerMode === 'external-consumer') {
+            if (!this.#externalConsumer) throw weixinRefusal('consumer-unavailable');
+            await this.#externalConsumer(message, signal);
+            continue;
+          }
           void this.#bridge.accept(message).catch((error) => {
             if (signal.aborted) return;
             this.#logger.error?.(
@@ -301,12 +314,62 @@ export class WeixinRuntime {
     }
   }
 
+  async qualifyReplyChecked(route, { account, signal } = {}) {
+    signal?.throwIfAborted();
+    return checkedWeixinRoute(route, account, this.#state.externalReplySource(route?.messageId));
+  }
+
+  async replyChecked(route, text, { account, signal, receipt = false, beforeSend } = {}) {
+    const checked = await this.qualifyReplyChecked(route, { account, signal });
+    if (typeof text !== 'string' || !text.trim() || [...text].length > this.#maxMessageChars)
+      throw weixinRefusal('bad-request');
+    const source = this.#state.externalReplySource(checked.messageId);
+    signal?.throwIfAborted();
+    if (beforeSend && beforeSend() !== true) throw weixinRefusal('stale-route');
+    const result = await this.#api.sendText({ baseUrl: this.#config.baseUrl, token: this.#token,
+      toUserId: checked.actorId, contextToken: source.contextToken, text, signal });
+    const clientId = result?.providerMessageIds?.[0];
+    if (typeof clientId !== 'string' || !clientId.startsWith('dsh-weixin-'))
+      throw weixinRefusal('provider-result-unknown');
+    return { sent: true, ...(receipt ? { receipt: { version: 1, messageId: clientId,
+      conversationId: checked.conversationId, identityKind: 'client-acknowledgement' } } : {}) };
+  }
+
+  async externalFileChecked(route, file, { account, signal, reply = false, beforeSend } = {}) {
+    const source = this.#state.externalReplySource(route?.messageId);
+    checkedWeixinRoute(route, account, source);
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      checkedWeixinRoute(route, account, this.#state.externalReplySource(route.messageId));
+      if (reply && (!beforeSend || beforeSend() !== true)) throw weixinRefusal('stale-route');
+    };
+    return reply ? replyWeixinExternalFile(this.#api, {
+      baseUrl: this.#config.baseUrl, token: this.#token, toUserId: route.actorId,
+      contextToken: source.contextToken,
+    }, file, { signal, assertCurrent })
+      : readWeixinExternalFile(this.#api, source, file, { signal, assertCurrent });
+  }
+
+  async beginTypingChecked(route, { account, signal, beforeSend, onState } = {}) {
+    if (!this.#status.ready || !this.#abortController || typeof beforeSend !== 'function')
+      throw weixinRefusal('capability-unavailable');
+    const checked = await this.qualifyReplyChecked(route, { account, signal });
+    const source = this.#state.externalReplySource(checked.messageId);
+    return this.#typing.start({ toUserId: checked.actorId, contextToken: source.contextToken,
+      signal: AbortSignal.any([signal, this.#abortController.signal]), onState,
+      validate: () => {
+        checkedWeixinRoute(route, account, this.#state.externalReplySource(route.messageId));
+        return beforeSend() === true;
+      } });
+  }
+
   async stop() {
     const warnings = [];
     const monitor = this.#monitor;
     const bridge = this.#bridge;
     const wasStarted = Boolean(this.#abortController || monitor || this.#status.ready);
     this.#abortController?.abort();
+    await this.#typing.close();
     this.#abortController = null;
     this.#monitor = null;
     await bridge?.close?.();
@@ -392,7 +455,7 @@ export class WeixinRuntime {
     return result;
   }
 
-  async sendProactiveText(target, text, { signal } = {}) {
+  async sendProactiveText(target, text, { signal, account, receipt = false, beforeSend } = {}) {
     const toUserId = typeof target?.route?.toUserId === 'string'
       ? target.route.toUserId.trim() : '';
     if (target?.kind !== 'user' || !toUserId) {
@@ -406,6 +469,34 @@ export class WeixinRuntime {
       throw error;
     }
     signal?.throwIfAborted();
+    if (receipt) {
+      if (!account || toUserId !== account.ownerUserId || typeof beforeSend !== 'function')
+        throw weixinRefusal('send-permission-denied');
+      if (typeof text !== 'string' || !text.trim() || text.length > 4000)
+        throw weixinRefusal('bad-request');
+      const contextToken = this.#state.externalPostContext(account);
+      if (!contextToken) throw weixinRefusal('private-context-unavailable');
+      const sendSignal = signal ? AbortSignal.any([signal, this.#abortController.signal]) : this.#abortController.signal;
+      sendSignal.throwIfAborted();
+      if (beforeSend() !== true) throw weixinRefusal('send-permission-denied');
+      let result;
+      try {
+        result = await this.#api.sendText({ baseUrl: this.#config.baseUrl, token: this.#token,
+          toUserId, contextToken, text, signal: sendSignal });
+      } catch (error) {
+        if (error?.code === 'send-rejected') throw weixinRefusal('private-context-rejected');
+        throw error;
+      }
+      const clientId = result?.providerMessageIds?.[0];
+      if (typeof clientId !== 'string' || !clientId.startsWith('dsh-weixin-'))
+        throw weixinRefusal('send-result-unknown');
+      const serverId = result.message_id;
+      if (serverId !== undefined && (typeof serverId !== 'string' || !/^\d{1,512}$/.test(serverId)))
+        throw weixinRefusal('send-result-unknown');
+      return { sent: true, receipt: { version: 1, messageId: clientId,
+        conversationId: toUserId, identityKind: 'client-acknowledgement',
+        ...(serverId === undefined ? {} : { serverMessageId: serverId }) } };
+    }
     await this.#sendTrackedText({
       toUserId,
       text,

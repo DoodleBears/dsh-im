@@ -4,8 +4,9 @@ import { t } from '../shared/i18n.mjs';
 import { createSlackHistoryReader } from './history-reader.mjs';
 import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
 import { SlackApi } from './slack-api.mjs';
+import { listSlackReachable, postSlackConversation } from './reachable-conversations.mjs';
 import { createSlackBridgeStatus, SlackHarnessBridge } from './slack-bridge.mjs';
-import { normalizeSlackExternalText, verifiedSlackAccount, slackRefusal, slackTimestamp } from './external-consumer.mjs';
+import { normalizeSlackExternalText, slackReplyMentions, verifiedSlackAccount, slackRefusal, slackTimestamp } from './external-consumer.mjs';
 
 const RECONNECT_DELAYS_MS = Object.freeze([1_000, 3_000, 5_000, 10_000, 30_000]);
 const SLACK_MESSAGE_LIMIT = 38_000;
@@ -486,6 +487,25 @@ export class SlackRuntime {
     return this.#bridge.sendConnectionTest(text);
   }
 
+  #checkedReachable(signal) {
+    if (!this.#status.ready || !this.#account || !this.#api || !this.#abortController
+      || this.#config.consumerMode !== 'external-consumer') throw slackRefusal('capability-unavailable');
+    const generation = this.#generation;
+    const combined = signal ? AbortSignal.any([signal, this.#abortController.signal]) : this.#abortController.signal;
+    return {api:this.#api,account:this.#account,signal:combined,assertCurrent:()=>{
+      combined.throwIfAborted();
+      if(generation!==this.#generation||this.#stopped||!this.#status.ready) throw slackRefusal('capability-unavailable');
+    }};
+  }
+
+  listReachableConversations(options = {}) {
+    return listSlackReachable(this.#checkedReachable(options.signal), options);
+  }
+
+  postConversationChecked(id,text,options = {}) {
+    return postSlackConversation(this.#checkedReachable(options.signal), id, text, options);
+  }
+
   async sendProactiveText(target, text, options = {}) {
     if (this.#config.consumerMode === 'external-consumer') {
       const generation = this.#generation;
@@ -500,6 +520,9 @@ export class SlackRuntime {
       options.signal?.throwIfAborted();
       if (generation !== this.#generation || this.#stopped || !this.#status.ready)
         throw slackRefusal('capability-unavailable');
+      if(options.beforeSend!==undefined&&options.beforeSend()!==true)throw slackRefusal('send-permission-denied');
+      options.signal?.throwIfAborted();
+      if(generation!==this.#generation||this.#stopped||!this.#status.ready)throw slackRefusal('capability-unavailable');
       const sent = await this.#postChecked({ channelId, text, signal: options.signal });
       return { sent: true, ...(options.receipt
         ? { receipt: { version: 1, messageId: sent.ts, conversationId: sent.channel } } : {}) };
@@ -529,6 +552,7 @@ export class SlackRuntime {
 
   async #verifyChannel(channelId, signal) {
     signal?.throwIfAborted();
+    if (/^D[A-Z0-9]{4,30}$/.test(channelId)) return { id: channelId, is_im: true };
     const channel = await this.#api.conversationInfo({ channelId, signal });
     if (channel?.id !== channelId || channel.is_member !== true || channel.is_archived === true
       || channel.is_private === true || channel.is_im === true || channel.is_mpim === true)
@@ -613,14 +637,17 @@ export class SlackRuntime {
     }
   }
 
-  async replyChecked(route, text, { signal, receipt = false, beforeSend } = {}) {
+  async replyChecked(route, text, { signal, receipt = false, beforeSend, mentionUserIds } = {}) {
     const generation = this.#generation;
-    await this.qualifyReplyChecked(route, { signal });
+    const source = await this.#replySource(route, signal);
+    const mentions = slackReplyMentions(mentionUserIds, route, source);
     if (beforeSend && beforeSend() !== true) throw slackRefusal('stale-route');
     signal?.throwIfAborted();
     if (generation !== this.#generation || this.#stopped || !this.#status.ready)
       throw slackRefusal('capability-unavailable');
-    const sent = await this.#postChecked({ channelId: route.conversationId, threadTs: route.threadId, text, signal });
+    const topLevel = route.conversationId.startsWith('D') && route.messageId === route.threadId;
+    const sent = await this.#postChecked({ channelId: route.conversationId,
+      ...(topLevel ? {} : { threadTs: route.threadId }), ...(mentions.length ? { mentionUserIds: mentions } : {}), text, signal });
     return { sent: true, ...(receipt ? { receipt: { version: 1, messageId: sent.ts, conversationId: sent.channel } } : {}) };
   }
 
@@ -831,7 +858,9 @@ export class SlackRuntime {
     const evidence = normalizeSlackExternalText(payload, { botId: this.#config.botId, account: this.#account, sourceFiles: this.#externalSourceFiles(), ordinaryText: this.#externalOrdinaryText() });
     if (!evidence) return;
     const signal = this.#abortController.signal;
-    await this.#verifyChannel(evidence.conversation.id, signal);
+    const channel = await this.#verifyChannel(evidence.conversation.id, signal);
+    const conversationName = evidence.conversation.kind === 'group' && typeof channel?.name === 'string'
+      && channel.name.trim() ? channel.name.trim().slice(0, 512) : undefined;
     let name;
     try {
       const user = await this.#api.userInfo({ userId: evidence.actor.id, signal });
@@ -839,7 +868,17 @@ export class SlackRuntime {
     } catch { signal.throwIfAborted(); }
     const withFiles = this.#externalSourceFiles()
       ? await externalAttachments(evidence, () => this.#replySource(evidence.reply, signal)) : evidence;
-    const enriched = { ...withFiles,
+    const mentions = await Promise.all(evidence.mentions.map(async (mention, index) => {
+      if (mention.name || index >= 10) return mention;
+      if (mention.id === evidence.actor.id) return typeof name === 'string' && name ? { ...mention, name: name.slice(0, 512) } : mention;
+      try {
+        const user = await this.#api.userInfo({ userId: mention.id, signal });
+        const label = user?.id === mention.id ? user.profile?.display_name || user.real_name || user.name : undefined;
+        return typeof label === 'string' && label ? { ...mention, name: label.slice(0, 512) } : mention;
+      } catch { signal.throwIfAborted(); return mention; }
+    }));
+    const enriched = { ...withFiles, mentions,
+      ...(conversationName ? { conversation: { ...evidence.conversation, name: conversationName } } : {}),
       actor: { ...evidence.actor, ...(typeof name === 'string' && name ? { name: name.slice(0, 512) } : {}) } };
     if (generation !== this.#generation || this.#stopped) throw slackRefusal('cancelled');
     const result = await this.#externalConsumer(enriched, signal);

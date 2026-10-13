@@ -1,3 +1,4 @@
+import { nativeImageContent } from './external-images.mjs';
 function refusal(code) {
   const error = new Error(code);
   error.code = code;
@@ -53,6 +54,17 @@ export function normalizeExternalText(event, { botId, appId, botOpenId, fingerpr
     at: timestamp.toISOString(), text, reply: route,
     replay: Object.freeze({ kind: 'provider-redelivery', resumeCursor: false, gapPossible: true }),
   });
+}
+
+export function normalizeExternalMedia(event, identity) {
+  const message = event?.message;
+  if (!['image', 'post'].includes(message?.message_type)) return normalizeExternalText(event, identity);
+  if (event?.sender?.sender_type !== 'user') return null;
+  const media = nativeImageContent(message, message.chat_id);
+  if (!media) return null;
+  const base = normalizeExternalText({ ...event, message: { ...message, message_type: 'text', content: JSON.stringify({ text: media.text }) } }, identity);
+  if (!base) return null;
+  return Object.freeze({ ...base, attachments: Object.freeze(media.attachments.map(Object.freeze)), contentParts: Object.freeze(media.contentParts.map(Object.freeze)) });
 }
 
 export function normalizeOwnTextEcho(event, { botId, appId, botOpenId, fingerprint }) {

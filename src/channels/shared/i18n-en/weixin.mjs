@@ -2,6 +2,7 @@ import diagnostics from '../../weixin/connection-error.en.mjs';
 // English translations (weixin area). Keys are exact Chinese literals passed to t().
 export default {
   ...diagnostics,
+  '该微信账号已绑定，请选择已有应用。': 'This WeChat account is already paired. Choose the existing app.',
   // weixin-bridge.mjs
   '微信已连接 DeepSeek Harness。': 'WeChat is connected to DeepSeek Harness.',
   '结果文件「{name}」已生成，但微信机器人当前没有文件消息发送权限，请检查机器人文件消息能力。': 'The result file "{name}" was generated, but the WeChat bot currently has no permission to send file messages. Please check the bot\'s file messaging capability.',

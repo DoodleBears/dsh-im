@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { normalizeDeliveryTarget } from './delivery-adapter.mjs';
+import { AppSetupService } from './app-setup.mjs';
 
 const BOT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const TARGET_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,128}$/;
@@ -41,6 +42,9 @@ const DELIVERY_ERROR_CODES = new Set([
   'source-not-found',
   'source-unavailable',
   'reply-permission-denied',
+  'reply-window-expired',
+  'reply-limit-exceeded',
+  'reply-rate-limited',
   'history-permission-denied',
   'history-unavailable',
   'thread-unavailable',
@@ -51,6 +55,13 @@ const DELIVERY_ERROR_CODES = new Set([
   'file-provider-rejected',
   'resource-unavailable',
   'artifact-too-large',
+  'private-context-unavailable',
+  'private-context-rejected',
+  'send-permission-denied',
+  'send-preflight-unavailable',
+  'send-rate-limited',
+  'typing-unavailable',
+  'typing-conflict',
   'card-provider-rejected',
   'reaction-permission-denied',
   'reaction-provider-rejected',
@@ -139,10 +150,12 @@ function sessionSyncState(value, available) {
 }
 
 export class DeliveryService {
+  appSetup;
   #adapters = new Map();
   #unavailableSessionSyncChannels;
 
-  constructor({ unavailableSessionSyncChannels = [] } = {}) {
+  constructor({ unavailableSessionSyncChannels = [], logger } = {}) {
+    this.appSetup = new AppSetupService({ describeBot: (id) => this.describeBot(id), logger });
     if (!Array.isArray(unavailableSessionSyncChannels)
       || unavailableSessionSyncChannels.some((channel) => (
         typeof channel !== 'string' || !CHANNEL_PATTERN.test(channel)
@@ -339,6 +352,69 @@ export class DeliveryService {
     } catch (error) { throw publicOperationError(error); }
   }
 
+  async #reachableRegistration(botId, options) {
+    const id = botIdOf(botId);
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')) throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    const { adapter } = registration;
+    if (typeof adapter.describeAccount !== 'function' || typeof adapter.listReachableConversations !== 'function'
+      || typeof adapter.postConversationChecked !== 'function') throw deliveryError('capability-unavailable');
+    const account = await adapter.describeAccount(id);
+    this.#assertRegistered(registration);
+    cancellation(options.signal);
+    if (account?.version !== 1 || !account.capabilities?.includes('reachable-conversations-checked'))
+      throw deliveryError('capability-unavailable');
+    if (account.account?.fingerprint !== options.expectedFingerprint) throw deliveryError('account-changed');
+    if (account.connected !== true) throw deliveryError('bot-not-connected');
+    return { id, registration, signal: options.signal
+      ? AbortSignal.any([options.signal, registration.controller.signal]) : registration.controller.signal };
+  }
+
+  async listReachableConversations(botId, options = {}) {
+    try {
+      const { id, registration, signal } = await this.#reachableRegistration(botId, options);
+      const page = await registration.adapter.listReachableConversations(id, { ...options, signal });
+      this.#assertRegistered(registration);
+      cancellation(signal);
+      if (page?.version !== 1 || !Array.isArray(page.conversations) || page.conversations.length > 100
+        || typeof page.hasMore !== 'boolean' || (page.hasMore && (typeof page.cursor !== 'string' || !page.cursor || page.cursor.length > 2048)))
+        throw deliveryError('provider-unavailable');
+      const conversations = page.conversations.map(value => {
+        if (typeof value?.id !== 'string' || !value.id || value.id.length > 512 || value.kind !== 'group'
+          || typeof value.name !== 'string' || value.name.length > 512) throw deliveryError('provider-unavailable');
+        return { id: value.id, kind: value.kind, name: value.name };
+      });
+      return { version: 1, conversations, hasMore: page.hasMore, ...(page.hasMore ? { cursor: page.cursor } : {}) };
+    } catch (error) { throw publicOperationError(error, 'provider-unavailable'); }
+  }
+
+  async postConversationChecked(botId, conversationId, text, options = {}) {
+    if (typeof conversationId !== 'string' || !conversationId || conversationId.length > 512
+      || typeof text !== 'string' || !text.trim() || typeof options.beforeSend !== 'function')
+      throw deliveryError('bad-request');
+    let failureCode = 'send-preflight-unavailable';
+    try {
+      const { id, registration, signal } = await this.#reachableRegistration(botId, options);
+      const fence = () => {
+        this.#assertRegistered(registration);
+        cancellation(signal);
+        const allowed = options.beforeSend() === true;
+        this.#assertRegistered(registration);
+        cancellation(signal);
+        return allowed;
+      };
+      if (!fence()) throw deliveryError('send-permission-denied');
+      failureCode = 'send-result-unknown';
+      const result = await registration.adapter.postConversationChecked(id, conversationId, text,
+        { ...options, signal, beforeSend: fence });
+      if (result?.sent !== true || result.receipt?.version !== 1 || result.receipt.conversationId !== conversationId
+        || typeof result.receipt.messageId !== 'string' || !result.receipt.messageId || result.receipt.messageId.length > 512)
+        throw deliveryError('send-result-unknown');
+      return { sent: true, receipt: { version: 1, messageId: result.receipt.messageId, conversationId } };
+    } catch (error) { throw publicOperationError(error, failureCode); }
+  }
+
   async consumeInbound(botId, options = {}) {
     const id = botIdOf(botId);
     cancellation(options.signal);
@@ -444,6 +520,29 @@ export class DeliveryService {
     catch (error) { const safe = publicOperationError(error); throw deliveryError(safe.code, safe.code); }
   }
 
+  async beginTypingChecked(botId, route, options = {}) {
+    const id = botIdOf(botId);
+    if (!(options.signal instanceof AbortSignal)) throw deliveryError('bad-request');
+    cancellation(options.signal);
+    if (!/^[a-f0-9]{64}$/.test(options.expectedFingerprint ?? '')
+      || typeof options.beforeSend !== 'function') throw deliveryError('bad-request');
+    const registration = await this.#checkedRegistrationFor(id);
+    if (registration.adapter.channel !== 'weixin'
+      || typeof registration.adapter.beginTypingChecked !== 'function')
+      throw deliveryError('capability-unavailable');
+    const signal = AbortSignal.any([options.signal, registration.controller.signal]);
+    const beforeSend = () => {
+      cancellation(signal);
+      this.#assertRegistered(registration);
+      return options.beforeSend() === true;
+    };
+    try {
+      return await registration.adapter.beginTypingChecked(id, structuredClone(route), {
+        ...options, signal, beforeSend,
+      });
+    } catch (error) { throw publicOperationError(error, 'typing-unavailable'); }
+  }
+
   async replyChecked(botId, route, text, options = {}) {
     const id = botIdOf(botId);
     cancellation(options.signal);
@@ -473,7 +572,7 @@ export class DeliveryService {
     } catch (error) { throw publicOperationError(error); }
   }
 
-  async sendChecked(botId, targetId, text, { expectedFingerprint, expectedTargetDigest, signal, format = 'plain', receipt = false } = {}) {
+  async sendChecked(botId, targetId, text, { expectedFingerprint, expectedTargetDigest, signal, format = 'plain', receipt = false, beforeSend } = {}) {
     const id = botIdOf(botId);
     const key = targetIdOf(targetId);
     if (typeof text !== 'string' || !text.trim() || !['plain', 'markdown'].includes(format) || typeof receipt !== 'boolean'
@@ -502,21 +601,45 @@ export class DeliveryService {
       if (account.account?.fingerprint !== expectedFingerprint) throw deliveryError('account-changed');
       const receiptConversation = adapter.channel === 'feishu' && target.kind === 'group'
         ? target.route.chatId : adapter.channel === 'slack' && target.kind === 'conversation'
-          ? target.route.channelId : undefined;
+          ? target.route.channelId : adapter.channel === 'qq' && target.kind === 'group'
+            ? target.route.groupOpenId : adapter.channel === 'weixin' && target.kind === 'user'
+            ? target.route.toUserId : undefined;
       if (receipt && (!account.capabilities?.includes('proactive-receipt-checked') || !receiptConversation))
+        throw deliveryError('capability-unavailable');
+      if (receipt && adapter.channel === 'weixin' &&
+        (!account.capabilities?.includes('proactive-fence-checked') || typeof beforeSend !== 'function'))
+        throw deliveryError('capability-unavailable');
+      if (adapter.channel === 'qq' &&
+        (!account.capabilities?.includes('proactive-fence-checked') || typeof beforeSend !== 'function'))
         throw deliveryError('capability-unavailable');
       cancellation(signal);
       this.#assertRegistered(registration);
       const deliverySignal = signal ? AbortSignal.any([signal, registration.controller.signal]) : registration.controller.signal;
+      const fence = () => {
+        this.#assertRegistered(registration);
+        cancellation(deliverySignal);
+        const allowed = beforeSend === undefined || (typeof beforeSend === 'function' && beforeSend() === true);
+        this.#assertRegistered(registration);
+        cancellation(deliverySignal);
+        return allowed;
+      };
+      if (!fence()) throw deliveryError('send-permission-denied');
       const result = await adapter.sendText(id, target, text, { signal: deliverySignal, expectedFingerprint,
+        ...(beforeSend === undefined ? {} : { beforeSend: fence }),
         ...(receipt ? { receipt: true } : {}),
         ...(format === 'markdown' ? { format } : {}) });
       if (!receipt) return { sent: true };
       if (result?.sent !== true || result.receipt?.version !== 1
         || typeof result.receipt.messageId !== 'string' || !result.receipt.messageId || result.receipt.messageId.length > 512
-        || result.receipt.conversationId !== receiptConversation)
+        || result.receipt.conversationId !== receiptConversation
+        || (adapter.channel === 'weixin' && (result.receipt.identityKind !== 'client-acknowledgement'
+          || (result.receipt.serverMessageId !== undefined &&
+            (typeof result.receipt.serverMessageId !== 'string' || !/^\d{1,512}$/.test(result.receipt.serverMessageId)))))
+        || (adapter.channel !== 'weixin' && result.receipt.identityKind !== undefined))
         throw deliveryError('send-result-unknown');
-      return { sent: true, receipt: { version: 1, messageId: result.receipt.messageId, conversationId: result.receipt.conversationId } };
+      return { sent: true, receipt: { version: 1, messageId: result.receipt.messageId, conversationId: result.receipt.conversationId,
+        ...(result.receipt.identityKind ? { identityKind: result.receipt.identityKind } : {}),
+        ...(result.receipt.serverMessageId ? { serverMessageId: result.receipt.serverMessageId } : {}) } };
     } catch (error) { throw publicOperationError(error); }
   }
 

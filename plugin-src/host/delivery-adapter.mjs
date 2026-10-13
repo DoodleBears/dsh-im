@@ -275,6 +275,11 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
         throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
       return coreController.replyChecked(botId, route, text, options);
     },
+    beginTypingChecked: (botId, route, options) => {
+      if (typeof coreController.beginTypingChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.beginTypingChecked(botId, route, options);
+    },
     describeAccount: (botId) => {
       if (typeof coreController.describeDeliveryAccount !== 'function') {
         const error = new Error('Verified account capability unavailable');
@@ -284,9 +289,25 @@ export function createDeliveryAdapter({ channel, workspaces, coreController, sta
       return coreController.describeDeliveryAccount(botId);
     },
     ownsBot: (botId) => workspaces.has(botId),
+    listReachableConversations: (botId, options) => {
+      if (typeof coreController.listReachableConversations !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.listReachableConversations(botId, options);
+    },
+    postConversationChecked: (botId, conversationId, text, options) => {
+      if (typeof coreController.postConversationChecked !== 'function')
+        throw Object.assign(new Error('capability-unavailable'), { code: 'capability-unavailable' });
+      return coreController.postConversationChecked(botId, conversationId, text, options);
+    },
     listBots: () => workspaces.listBotIds(),
     async listTargets(botId) {
-      const targets = workspaces.listDeliveryTargets(botId);
+      let targets = [...workspaces.listDeliveryTargets(botId)];
+      if (channel === 'weixin' && typeof coreController.describeDeliveryAccount === 'function') {
+        const paired = await coreController.describeDeliveryAccount(botId);
+        targets = targets.filter(target => target.kind === 'user' && target.route?.toUserId === paired?.account?.ownerUserId);
+        if (paired?.account?.ownerUserId && !targets.some(target => target.kind === 'user' && target.route?.toUserId === paired.account.ownerUserId))
+          targets.push({ targetId: 'paired-owner', name: '扫码绑定者私聊', kind: 'user', route: { toUserId: paired.account.ownerUserId } });
+      }
       const configured = new Map(
         sessionSyncConfigs(workspaces, botId).map((target) => [target.targetId, target]),
       );

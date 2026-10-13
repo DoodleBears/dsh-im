@@ -57,6 +57,7 @@ function fixture({
   callbackProbe,
   verifyApp,
   credentialSet,
+  credentialResolve,
   deleteState,
 } = {}) {
   const configStore = new MemoryConfigStore(bots);
@@ -81,6 +82,7 @@ function fixture({
     })),
     credentials: {
       async resolve(ref) {
+        await credentialResolve?.(ref);
         if (failResolveRefs.has(ref)) throw new Error('credential provider unavailable');
         return values.has(ref) ? { value: values.get(ref), source: 'file' } : undefined;
       },
@@ -178,10 +180,83 @@ async function completeScan(fx, result) {
   return fx.controller.registrationStatus(attemptId);
 }
 
+test('inline setup creates an external-consumer app before its first connection and returns only authenticated identity', async () => {
+  const { AppSetupService, installAppSetupRpc } = await import('../../../plugin-src/host/app-setup.mjs');
+  const { managementFetch } = await import('../../fixtures/management-rpc.mjs');
+  const fx = fixture();
+  const diagnostics = [];
+  const setup = new AppSetupService({ describeBot: (id) => fx.controller.describeDeliveryAccount(id),
+    logger: { info: (record) => diagnostics.push(JSON.parse(record)) } });
+  setup.register('feishu', fx.controller);
+  let rpc;
+  installAppSetupRpc({ connection: { fetch: managementFetch((_channel, handler) => { rpc = handler; }) } }, setup);
+  try {
+    const started = await rpc('setup.start', { channel: 'feishu' });
+    assert.equal(started.ok, true);
+    const created = await rpc('setup.credentials', {
+      attemptId: started.value.attemptId,
+      appId: 'cli_inline', appSecret: 'private-inline-secret', domain: 'lark',
+    });
+    assert.equal(created.ok, true);
+    assert.equal(created.value.state, 'ready');
+    assert.equal(created.value.accountRef, 'bot_generated_1');
+    assert.equal(created.value.description.channel, 'feishu');
+    assert.match(created.value.description.account.fingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(fx.runtimes.get('bot_generated_1')[0].config.consumerMode, 'external-consumer');
+    assert.equal(JSON.stringify(created).includes('private-inline-secret'), false);
+    assert.equal(JSON.stringify(created).includes('secretRef'), false);
+    assert.deepEqual(diagnostics.map((record) => record.phase), ['started', 'creating', 'ready']);
+    for (const record of diagnostics) {
+      assert.equal(record.event, 'im-app-setup');
+      assert.equal(record.initiator, 'client');
+      assert.equal(record.channel, 'feishu');
+      assert.ok(Number.isFinite(record.durationMs) && record.durationMs >= 0);
+    }
+    assert.equal(JSON.stringify(diagnostics).includes('private-inline-secret'), false);
+    assert.equal(JSON.stringify(diagnostics).includes('cli_inline'), false);
+  } finally { await fx.controller.close(); }
+});
+
 function callbackRepairQrUrl(appId, domain = 'feishu') {
   const host = domain === 'lark' ? 'open.larksuite.com' : 'open.feishu.cn';
   return `https://${host}/page/launcher?tp=sdk&clientID=${encodeURIComponent(appId)}&addons=encoded`;
 }
+
+for (const phase of ['verification', 'credential-read', 'credential-save']) test(`cancelling inline ${phase} prevents an account and resumes as cancelled`, async () => {
+  const { AppSetupService, installAppSetupRpc } = await import('../../../plugin-src/host/app-setup.mjs');
+  const { managementFetch } = await import('../../fixtures/management-rpc.mjs');
+  let release;
+  let verifying = false;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const fx = fixture({
+    verifyApp: async () => { if (phase === 'verification') { verifying = true; await gate; } return { name: 'New app', openId: 'ou_new', activated: 1 }; },
+    credentialResolve: async () => { if (phase === 'credential-read') { verifying = true; await gate; } },
+    credentialSet: async ({ ref, value, values }) => { values.set(ref, value); if (phase === 'credential-save') { verifying = true; await gate; } },
+  });
+  const diagnostics = [];
+  const setup = new AppSetupService({ describeBot: (id) => fx.controller.describeDeliveryAccount(id),
+    logger: { info: (record) => diagnostics.push(JSON.parse(record)) } });
+  setup.register('feishu', fx.controller);
+  let rpc;
+  installAppSetupRpc({ connection: { fetch: managementFetch((_channel, handler) => { rpc = handler; }) } }, setup);
+  try {
+    const started = await rpc('setup.start', { channel: 'feishu' });
+    const attemptId = started.value.attemptId;
+    const creating = rpc('setup.credentials', { attemptId, appId: 'cli_cancel', appSecret: 'cancelled-secret', domain: 'lark' });
+    await waitFor(() => verifying);
+    const cancelling = rpc('setup.cancel', { attemptId });
+    await flush();
+    release();
+    assert.equal((await cancelling).value.state, 'cancelled');
+    assert.equal((await creating).ok, false);
+    assert.equal((await rpc('setup.poll', { attemptId })).value.state, 'cancelled');
+    assert.equal(fx.configStore.list().length, 0);
+    assert.equal(fx.values.size, 0);
+    assert.ok(diagnostics.some((record) => record.phase === 'cancelled'));
+    assert.ok(diagnostics.some((record) => record.phase === 'refused' && record.reason === 'cancelled'));
+    assert.equal(JSON.stringify(diagnostics).includes('cancelled-secret'), false);
+  } finally { release(); await fx.controller.close(); }
+});
 
 test('QR registration separates events from card callbacks', async () => {
   const fx = fixture({ createBotIds: ['bot_callbacks'] });
@@ -1383,6 +1458,56 @@ test('external account consumption persists exclusive mode and never restores st
   await assert.rejects(restoredRuntime.acceptExternal(input), { code: 'consumer-unavailable' });
   await restarted.controller.close();
 });
+
+for (const sourceImages of [undefined, false, true]) {
+  test(`native image posts reach the exclusive consumer only with sourceImages=${sourceImages}`, async () => {
+    const existing = bot('bot_images', 'images');
+    const fx = fixture({
+      bots: [existing],
+      secrets: { [existing.secretRef]: 'local-secret' },
+      verifyApp: async () => ({ openId: existing.botOpenId, name: 'Verified' }),
+    });
+    await fx.controller.initialize();
+    try {
+      const info = await fx.controller.describeDeliveryAccount(existing.id);
+      assert.ok(info.capabilities.includes('source-image-checked'));
+      const received = [];
+      await fx.controller.consumeInbound(existing.id, {
+        expectedFingerprint: info.account.fingerprint,
+        ...(sourceImages === undefined ? {} : { sourceImages }),
+        onEvent: async evidence => { received.push(evidence); return { accepted: true }; },
+      });
+      const runtime = fx.runtimes.get(existing.id).at(-1);
+      const input = {
+        event_id: 'native-post-event', app_id: existing.appId,
+        sender: { sender_type: 'user', sender_id: { open_id: 'human' } },
+        message: {
+          message_id: 'native-post', chat_id: 'chat', chat_type: 'group', message_type: 'post',
+          mentions: [{ id: { open_id: existing.botOpenId }, key: '@_user_1' }],
+          create_time: '1791308000000',
+          content: JSON.stringify({ content: [[
+            { tag: 'at', user_id: existing.botOpenId },
+            { tag: 'text', text: 'before' }, { tag: 'img', image_key: 'image-a' },
+            { tag: 'text', text: 'middle' }, { tag: 'img', image_key: 'image-b' },
+            { tag: 'text', text: 'after' },
+          ]] }),
+        },
+      };
+      const result = await runtime.acceptExternal(input);
+      assert.equal(result.accepted, true);
+      assert.equal(received.length, sourceImages === true ? 1 : 0);
+      if (sourceImages === true) {
+        assert.equal(received[0].mentionedAccount, true);
+        assert.equal(received[0].messageId, 'native-post');
+        assert.deepEqual(received[0].attachments.map(item => item.resourceKey), ['image-a', 'image-b']);
+        assert.deepEqual(received[0].contentParts.map(item => item.kind),
+          ['text', 'text', 'attachment', 'text', 'attachment', 'text']);
+      } else assert.equal(result.ignored, true);
+    } finally {
+      await fx.controller.close();
+    }
+  });
+}
 
 for (const operation of ['historyChecked']) {
   test(`${operation} refuses a Host close during account verification before changing mode or sending`, async () => {

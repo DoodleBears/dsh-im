@@ -87,7 +87,9 @@ export async function inspectDiscordSourceChannel(api, channelId, account, signa
     if (forReply && member.communication_disabled_until && Date.parse(member.communication_disabled_until) > Date.now())
       throw discordRefusal('reply-permission-denied');
     signal?.throwIfAborted();
-    return { guildId: guild.id, conversationId: parent.id, channelId: channel.id,
+    const name = [guild.name, parent.name].every(value => typeof value === 'string' && value.trim())
+      ? `${guild.name.trim()} #${parent.name.trim()}`.slice(0, 512) : undefined;
+    return { guildId: guild.id, conversationId: parent.id, channelId: channel.id, ...(name ? { name } : {}),
       ...(isThread ? { threadId: channel.id } : {}) };
   } catch (error) { throw nativeFailure(error, 'source-not-found'); }
 }
@@ -132,7 +134,7 @@ function normalizeDiscordHumanText(message, { botId, account, channel, eventId }
       ...(user.id === account.userId ? { name: account.name } : {}) }));
   return { version: 1, channel: 'discord', botId, fingerprint: account.fingerprint,
     eventId, messageId: message.id, actor: { kind: 'user', id: message.author.id, ...(name ? { name: name.slice(0, 512) } : {}) },
-    conversation: { kind: 'group', id: channel.conversationId }, mentions, mentionedAccount,
+    conversation: { kind: 'group', id: channel.conversationId, ...(channel.name ? { name: channel.name } : {}) }, mentions, mentionedAccount,
     at: new Date(timestamp).toISOString(), text: message.content,
     reply: { messageId: message.id, conversationId: channel.conversationId, actorId: message.author.id,
       ...(channel.threadId ? { threadId: channel.threadId } : {}) },
@@ -157,22 +159,35 @@ export async function qualifyDiscordReply(api, account, route, signal, permissio
   return { channel, route: { ...route }, source };
 }
 
-export async function sendDiscordReply(api, account, route, text, { signal, beforeSend, assertCurrent = () => {}, receipt = false } = {}) {
+/** Only the source author or people the source message mentions may be pinged back. */
+export function discordReplyMentions(mentionUserIds, route, source) {
+  if (mentionUserIds === undefined) return [];
+  if (!Array.isArray(mentionUserIds) || mentionUserIds.length > 20
+    || !mentionUserIds.every(discordSnowflake)) throw discordRefusal('bad-request');
+  const allowed = new Set([route.actorId, ...(Array.isArray(source?.mentions) ? source.mentions.map(user => user?.id) : [])]);
+  if (!mentionUserIds.every(id => allowed.has(id))) throw discordRefusal('bad-request');
+  return [...new Set(mentionUserIds)];
+}
+
+export async function sendDiscordReply(api, account, route, text, { signal, beforeSend, assertCurrent = () => {}, receipt = false, mentionUserIds } = {}) {
   if (typeof text !== 'string' || !text.trim() || text.length > 2000) throw discordRefusal('bad-request');
   const checked = await qualifyDiscordReply(api, account, route, signal);
+  const mentions = discordReplyMentions(mentionUserIds, route, checked.source);
+  if (mentions.length * 23 + text.length > 2000) throw discordRefusal('bad-request');
   signal?.throwIfAborted();
   assertCurrent();
   if (beforeSend && beforeSend() !== true) throw discordRefusal('stale-route');
   signal?.throwIfAborted();
-  return sendDiscordCheckedText(api, account, checked.channel, text, { signal, receipt, replyToMessageId: route.messageId });
+  return sendDiscordCheckedText(api, account, checked.channel, text, { signal, receipt, replyToMessageId: route.messageId,
+    ...(mentions.length ? { mentionUserIds: mentions } : {}) });
 }
 
-export async function sendDiscordCheckedText(api, account, channel, text, { signal, receipt = false, replyToMessageId } = {}) {
+export async function sendDiscordCheckedText(api, account, channel, text, { signal, receipt = false, replyToMessageId, mentionUserIds } = {}) {
   if (typeof text !== 'string' || !text.trim() || text.length > 2000) throw discordRefusal('bad-request');
   let sent;
   try {
     sent = await api.createMessage({ channelId: channel.channelId, content: text,
-      replyToMessageId, signal, retry: false, failIfNotExists: true });
+      replyToMessageId, ...(mentionUserIds ? { mentionUserIds } : {}), signal, retry: false, failIfNotExists: true });
   } catch (error) {
     if ([400, 401, 403, 404, 429].includes(error?.status)) throw discordRefusal('reply-permission-denied');
     throw discordRefusal('reply-result-unknown');

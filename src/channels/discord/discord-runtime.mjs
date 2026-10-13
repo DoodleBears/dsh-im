@@ -7,6 +7,7 @@ import { captureContextEnhancement } from '../shared/context-enhancement.mjs';
 import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
 import { externalAttachments, readExternalFile, replyExternalFile } from './external-files.mjs';
 import { DiscordApi } from './discord-api.mjs';
+import { createDiscordReachable } from './reachable-conversations.mjs';
 import { createDiscordHistoryReader } from './history-reader.mjs';
 import { createDiscordBridgeStatus, DiscordHarnessBridge } from './discord-bridge.mjs';
 import { discordRefusal, verifiedDiscordAccount, discordMessageContentAllowed, inspectDiscordSourceChannel, normalizeDiscordExternalText,
@@ -568,6 +569,7 @@ export class DiscordRuntime {
   #externalSourceFiles;
   #externalOrdinaryText;
   #ordinaryAuthorized = false;
+  #reachable = createDiscordReachable();
   #readHistory = createDiscordHistoryReader();
 
   constructor({
@@ -621,12 +623,22 @@ export class DiscordRuntime {
     return this.#bridge.sendConnectionTest(text);
   }
 
+  listReachableConversations(options = {}) {
+    return this.#reachable.list(this.#checkedLifetime(options.signal), options);
+  }
+
+  postConversationChecked(id,text,options = {}) {
+    return this.#reachable.post(this.#checkedLifetime(options.signal), id, text, options);
+  }
+
   async sendProactiveText(target, text, options = {}) {
     if (this.#config.consumerMode === 'external-consumer') {
       const checked = this.#checkedLifetime(options.signal);
       if (options.expectedFingerprint !== checked.account.fingerprint) throw discordRefusal('account-changed');
       if (target?.kind !== 'channel') throw discordRefusal('invalid-target');
       const channel = await inspectDiscordSourceChannel(checked.api, target.route?.channelId, checked.account, checked.signal, { forReply: true });
+      checked.assertCurrent();
+      if(options.beforeSend!==undefined&&options.beforeSend()!==true)throw discordRefusal('send-permission-denied');
       checked.assertCurrent();
       return sendDiscordCheckedText(checked.api, checked.account, channel, text, { ...options, signal: checked.signal });
     }
@@ -694,6 +706,7 @@ export class DiscordRuntime {
 
   async #start() {
     await this.stop();
+    this.#reachable = createDiscordReachable();
     this.#ordinaryAuthorized = false;
     this.#stopped = false;
     this.#sessionId = null;

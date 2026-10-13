@@ -1,3 +1,6 @@
+import { ExclusiveInboundConsumers } from '../shared/exclusive-inbound-consumers.mjs';
+import { pairedWeixinAccount, normalizeWeixinExternalText, weixinRefusal } from './external-consumer.mjs';
+import { privateWeixinFile } from './external-files.mjs';
 import { randomUUID } from 'node:crypto';
 import { createWeixinDiagnostics, knownWeixinErrorCode, weixinStageError } from './connection-error.mjs';
 
@@ -61,6 +64,7 @@ function preserveActivationError(error, fallbackCode) {
 }
 
 export class WeixinController {
+  #inboundConsumers = new ExclusiveInboundConsumers();
   #api;
   #credentials;
   #configStore;
@@ -145,8 +149,88 @@ export class WeixinController {
     this.#touch();
   }
 
-  async startProvisioning() {
+  async #deliveryAccount(config, signal) {
+    signal?.throwIfAborted();
+    if (this.#closed) throw weixinRefusal('provider-unavailable');
+    return pairedWeixinAccount(config, await this.#resolveToken(config.tokenRef));
+  }
+
+  async describeDeliveryAccount(botId) {
+    return this.#withBotTransition(botId, async () => {
+      const config = this.#configStore.get(botId);
+      if (!config) throw weixinRefusal('unknown-bot');
+      const account = await this.#deliveryAccount(config);
+      return { version: 1, botId, channel: 'weixin', account,
+        connected: this.#runtimes.get(botId)?.status?.ready === true,
+        capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'proactive-fence-checked', 'exclusive-text-consumer', 'reply-text-checked',
+          'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'typing-lifecycle-checked',
+          'source-file-checked', 'reply-file-checked', 'reply-file-fence-checked',
+          'source-image-checked', 'reply-image-fence-checked', 'source-voice-transcript-checked', 'source-voice-audio-checked', 'source-video-checked', 'reply-video-fence-checked', 'source-quote-checked'] };
+    });
+  }
+
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, sourceImages = false, sourceVoiceTranscripts = false, sourceVoiceAudio = false, sourceVideos = false, sourceQuotes = false } = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const config = this.#configStore.get(botId);
+      if (!config) throw weixinRefusal('unknown-bot');
+      const account = await this.#deliveryAccount(config, signal);
+      if (account.fingerprint !== expectedFingerprint) throw weixinRefusal('account-changed');
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, sourceImages, sourceVoiceTranscripts, sourceVoiceAudio, sourceVideos, sourceQuotes });
+      try {
+        const saved = await this.#configStore.save({ ...config, consumerMode: 'external-consumer' });
+        await this.#startRuntime(saved, await this.#resolveToken(saved.tokenRef));
+        signal?.throwIfAborted();
+        return dispose;
+      } catch (error) { dispose(); throw error; }
+    });
+  }
+
+  async #checkedRuntime(botId, expectedFingerprint, signal) {
+    const config = this.#configStore.get(botId);
+    if (!config) throw weixinRefusal('unknown-bot');
+    const account = await this.#deliveryAccount(config, signal);
+    if (account.fingerprint !== expectedFingerprint) throw weixinRefusal('account-changed');
+    const runtime = this.#runtimes.get(botId);
+    if (config.consumerMode !== 'external-consumer' || !runtime?.status?.ready) throw weixinRefusal('capability-unavailable');
+    const lease = this.#inboundConsumers.signalFor(botId, expectedFingerprint);
+    return { runtime, account, signal: signal ? AbortSignal.any([signal, lease]) : lease };
+  }
+
+  async qualifyReplyChecked(botId, route, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      return checked.runtime.qualifyReplyChecked(route, checked);
+    });
+  }
+
+  async replyChecked(botId, route, text, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      return checked.runtime.replyChecked(route, text, { ...options, ...checked });
+    });
+  }
+
+  async beginTypingChecked(botId, route, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      return checked.runtime.beginTypingChecked(route, { ...options, ...checked });
+    });
+  }
+
+  async externalFileChecked(botId, route, file, options = {}) {
+    return this.#withBotTransition(botId, async () => {
+      const checked = await this.#checkedRuntime(botId, options.expectedFingerprint, options.signal);
+      return checked.runtime.externalFileChecked(route, file, { ...options, ...checked });
+    });
+  }
+
+  async startProvisioning({ consumerMode, signal } = {}) {
+    if (consumerMode !== undefined && consumerMode !== 'external-consumer') throw new TypeError('Invalid consumer mode');
+    signal?.throwIfAborted();
     if (this.#closed) throw new Error('dsh-weixin controller is closed');
+    if (consumerMode === 'external-consumer' && this.#activeAttemptId) {
+      throw new Error('Weixin provisioning is already active');
+    }
     if (this.#activeAttemptId) await this.cancelProvisioning(this.#activeAttemptId);
 
     const record = {
@@ -161,7 +245,11 @@ export class WeixinController {
       error: null,
       botId: null,
       task: null,
+      consumerMode,
     };
+    const abort = () => { record.controller.abort(); record.verifyResolve?.(); };
+    signal?.addEventListener('abort', abort, { once: true });
+    record.detachSignal = () => signal?.removeEventListener('abort', abort);
     this.#attempts.set(record.id, record);
     this.#activeAttemptId = record.id;
     this.#touch();
@@ -198,6 +286,7 @@ export class WeixinController {
         record.error = error.publicError;
       }
       if (this.#activeAttemptId === record.id) this.#activeAttemptId = null;
+      record.detachSignal();
       this.#touch();
       throw error;
     }
@@ -276,20 +365,27 @@ export class WeixinController {
   }
 
   async sendProactiveText(botId, target, text, options = {}) {
-    const config = this.#configStore.get(botId);
-    if (!config) throw new Error('Unknown Weixin account');
     return this.#withBotTransition(botId, async () => {
+      const config = this.#configStore.get(botId);
+      if (!config) throw weixinRefusal('unknown-bot');
       const runtime = this.#runtimes.get(botId);
       if (!runtime?.status?.ready || typeof runtime.sendProactiveText !== 'function') {
         const error = new Error(t('微信连接当前离线'));
         error.code = 'bot-not-connected';
         throw error;
       }
-      return runtime.sendProactiveText(target, text, options);
+      let account;
+      if (options.expectedFingerprint !== undefined) {
+        account = await this.#deliveryAccount(config, options.signal);
+        if (account.fingerprint !== options.expectedFingerprint) throw weixinRefusal('account-changed');
+        if (target?.kind !== 'user' || target.route?.toUserId !== account.ownerUserId) throw weixinRefusal('invalid-target');
+      }
+      return runtime.sendProactiveText(target, text, { ...options, ...(account === undefined ? {} : { account }) });
     });
   }
 
   async deleteBot(botId) {
+    this.#inboundConsumers.remove(botId);
     const config = this.#configStore.get(botId);
     if (!config) throw weixinStageError('workspace-bot-not-found', undefined, 'account.remove');
     const warnings = [];
@@ -405,6 +501,7 @@ export class WeixinController {
   }
 
   async close() {
+    this.#inboundConsumers.close();
     if (this.#closed) return;
     this.#closed = true;
     if (this.#activeAttemptId) await this.cancelProvisioning(this.#activeAttemptId);
@@ -451,6 +548,11 @@ export class WeixinController {
           record.currentBaseUrl = apiBaseFromServer(response.redirect_host, record.currentBaseUrl);
           record.state = 'scanned';
         } else if (response.status === 'binded_redirect') {
+          if (record.consumerMode === 'external-consumer') {
+            record.state = 'failed';
+            record.error = safeAccountError('already-bound', t('该微信账号已绑定，请选择已有应用。'));
+            break;
+          }
           const existing = this.#configStore.list().find(
             (config) => this.#runtimes.get(config.botId)?.status?.ready === true,
           ) ?? this.#configStore.list()[0];
@@ -503,6 +605,7 @@ export class WeixinController {
         }).publicError;
       }
     } finally {
+      record.detachSignal();
       record.pendingVerifyCode = null;
       record.verifyResolve?.();
       record.verifyResolve = null;
@@ -523,6 +626,8 @@ export class WeixinController {
       baseUrl,
       createdAt: previousConfig?.createdAt ?? new Date().toISOString(),
       connectedAt: new Date().toISOString(),
+      ...(record.consumerMode || previousConfig?.consumerMode
+        ? { consumerMode: record.consumerMode ?? previousConfig.consumerMode } : {}),
     };
     let previousToken;
     try {
@@ -532,6 +637,10 @@ export class WeixinController {
     }
 
     return this.#withBotTransition(identity.botId, async () => {
+      this.#assertAttemptActive(record);
+      if (record.consumerMode === 'external-consumer' && this.#configStore.getByAccountId(accountId)) {
+        throw weixinStageError('account-already-configured');
+      }
       try {
         try {
           await this.#writeCredential(identity.tokenRef, token);
@@ -589,7 +698,29 @@ export class WeixinController {
     await this.#stopRuntime(config.botId);
     let runtime;
     try {
-      runtime = await this.#createRuntime({ botId: config.botId, config, token });
+      const account = config.consumerMode === 'external-consumer' ? pairedWeixinAccount(config, token) : undefined;
+      runtime = await this.#createRuntime({ botId: config.botId, config, token,
+        externalConsumer: async (message, state, signal) => {
+          const current = await this.#deliveryAccount(this.#configStore.get(config.botId), signal);
+          if (current.fingerprint !== account.fingerprint) throw weixinRefusal('account-changed');
+          this.#inboundConsumers.signalFor(config.botId, account.fingerprint).throwIfAborted();
+          const event = normalizeWeixinExternalText(message, { botId: config.botId, account,
+            sourceFiles: this.#inboundConsumers.acceptsFiles(config.botId),
+            sourceImages: this.#inboundConsumers.acceptsImages(config.botId),
+            sourceVoiceTranscripts: this.#inboundConsumers.acceptsVoiceTranscripts(config.botId),
+            sourceVoiceAudio: this.#inboundConsumers.acceptsVoiceAudio(config.botId),
+            sourceQuotes: this.#inboundConsumers.acceptsQuotes(config.botId),
+            sourceVideos: this.#inboundConsumers.acceptsVideos(config.botId) });
+          if (!event) return { accepted: true, ignored: true };
+          await state.rememberContextToken?.({ userId: event.actor.id, contextToken: message.context_token,
+            seq: message.seq, messageTimeMs: message.create_time_ms, fingerprint: account.fingerprint,
+            expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 });
+          await state.rememberExternalReplySource({ messageId: event.messageId, actorId: event.actor.id,
+            fingerprint: account.fingerprint, contextToken: message.context_token,
+            expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+            ...(event.attachments?.length ? { file: privateWeixinFile(message, event) } : {}) });
+          return this.#inboundConsumers.accept(config.botId, event, signal);
+        } });
     } catch (error) {
       throw preserveActivationError(error, 'runtime-prepare-failed');
     }

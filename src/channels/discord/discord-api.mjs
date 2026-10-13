@@ -99,6 +99,11 @@ export function validDiscordToken(value) {
     && /^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{20,}$/.test(value.trim());
 }
 
+function mentionedContent(content, users) {
+  const missing = users.filter(id => !content.includes(`<@${id}>`) && !content.includes(`<@!${id}>`));
+  return missing.length ? `${missing.map(id => `<@${id}>`).join(' ')} ${content}` : content;
+}
+
 export class DiscordApi {
   #token;
   #fetch;
@@ -129,6 +134,15 @@ export class DiscordApi {
 
   getGuild({ guildId, signal } = {}) {
     return this.#request(`guilds/${snowflake(guildId, 'guild id')}`, { method: 'GET', signal });
+  }
+
+  listCurrentGuilds({after,limit=100,signal}={}) {
+    const query=new URLSearchParams({limit:String(limit),...(after?{after:snowflake(after,'guild cursor')}:{})});
+    return this.#request(`users/@me/guilds?${query}`,{method:'GET',signal});
+  }
+
+  getGuildChannels({guildId,signal}={}) {
+    return this.#request(`guilds/${snowflake(guildId,'guild id')}/channels`,{method:'GET',signal});
   }
 
   getGuildMember({ guildId, userId, signal } = {}) {
@@ -176,14 +190,15 @@ export class DiscordApi {
     );
   }
 
-  createMessage({ channelId, content, replyToMessageId, signal, retry = true, failIfNotExists = false }) {
+  createMessage({ channelId, content, replyToMessageId, mentionUserIds = [], signal, retry = true, failIfNotExists = false }) {
+    const users = mentionUserIds.map(id => snowflake(id, 'user id'));
     return this.#request(`channels/${snowflake(channelId, 'channel id')}/messages`, {
       method: 'POST',
       signal,
       retry,
       body: {
-        content,
-        allowed_mentions: { parse: [], replied_user: false },
+        content: mentionedContent(content, users),
+        allowed_mentions: { parse: [], replied_user: false, ...(users.length ? { users } : {}) },
         ...(replyToMessageId ? {
           message_reference: {
             message_id: snowflake(replyToMessageId, 'message id'),
