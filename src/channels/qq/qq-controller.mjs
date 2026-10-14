@@ -321,18 +321,18 @@ export class QqController {
     return this.#withBotTransition(botId, async () => ({
       version: 1, botId, channel: 'qq', account: await this.#deliveryAccount(botId), connected: true,
       capabilities: ['proactive-text-checked', 'proactive-receipt-checked', 'proactive-fence-checked',
-        'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked',
+        'exclusive-text-consumer', 'ordinary-text-consumer', 'reply-text-checked', 'reply-context-checked',
         'reply-receipt-checked', 'reply-fence-checked', 'source-file-checked', 'source-image-checked',
         'reply-file-checked', 'reply-image-fence-checked', 'reply-file-receipt-checked',
         'source-generic-file-checked', 'reply-file-fence-checked', 'source-voice-transcript-checked', 'source-voice-audio-checked'],
     }));
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceImages = false, sourceFiles = false, sourceVoiceTranscripts = false, sourceVoiceAudio = false } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceImages = false, sourceFiles = false, sourceVoiceTranscripts = false, sourceVoiceAudio = false, ordinaryText = false } = {}) {
     return this.#withBotTransition(botId, async () => {
       const account = await this.#deliveryAccount(botId, signal);
       if (account.fingerprint !== expectedFingerprint) throw qqRefusal('account-changed');
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceImages, sourceFiles, sourceVoiceTranscripts, sourceVoiceAudio });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceImages, sourceFiles, sourceVoiceTranscripts, sourceVoiceAudio, ordinaryText });
       try {
         const saved = await this.#configStore.save({ ...this.#configStore.get(botId), consumerMode: 'external-consumer' });
         const secret = await this.#resolveSecret(saved.secretRef);
@@ -568,6 +568,7 @@ export class QqController {
         sourceFiles: () => this.#inboundConsumers.acceptsFiles(config.botId),
         sourceVoiceTranscripts: () => this.#inboundConsumers.acceptsVoiceTranscripts(config.botId),
         sourceVoiceAudio: () => this.#inboundConsumers.acceptsVoiceAudio(config.botId),
+        ordinaryText: () => this.#inboundConsumers.acceptsOrdinary(config.botId),
       } : {}),
     }));
     if (!runtime || typeof runtime.start !== 'function' || typeof runtime.stop !== 'function') {
