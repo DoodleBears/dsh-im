@@ -38,12 +38,18 @@ export function verifiedQqAccount(appId, user) {
   });
 }
 
-/** QQ group and member OpenIDs belong to this authenticated application. */
-export function normalizeQqExternalText(message, { botId, account }) {
-  const addressed = message?.rawEventType === 'GROUP_AT_MESSAGE_CREATE'
+function isQqAddressedGroupMessage(message) {
+  return message?.kind === 'group' && (message.rawEventType === 'GROUP_AT_MESSAGE_CREATE'
     || (message?.rawEventType === 'GROUP_MESSAGE_CREATE' && Array.isArray(message.mentions)
-      && message.mentions.some(mention => mention?.is_you === true));
-  if (message?.kind !== 'group' || !addressed
+      && message.mentions.some(mention => mention?.is_you === true)));
+}
+
+/** QQ group and member OpenIDs belong to this authenticated application. */
+export function normalizeQqExternalText(message, { botId, account, ordinaryText = false }) {
+  const addressed = isQqAddressedGroupMessage(message);
+  const ordinary = ordinaryText === true && message?.kind === 'group'
+    && message.rawEventType === 'GROUP_MESSAGE_CREATE';
+  if (!(addressed || ordinary)
     || message.senderIsBot || message.senderId === account.userId
     || message.attachments?.length || message.msgElements?.length
     || (message.msgType !== undefined && message.msgType !== 0)) return null;
@@ -62,7 +68,7 @@ export function normalizeQqExternalText(message, { botId, account }) {
       ...(typeof message.senderName === 'string' && message.senderName.trim()
         ? { name: message.senderName.slice(0, 512) } : {}) },
     conversation: { kind: 'group', id: message.groupOpenid },
-    mentions: [], mentionedAccount: true, at: at.toISOString(), text: message.content,
+    mentions: [], mentionedAccount: addressed, at: at.toISOString(), text: message.content,
     reply: { messageId: message.messageId, conversationId: message.groupOpenid, actorId: message.senderId },
     replay: { kind: 'provider-redelivery', resumeCursor: false, gapPossible: true },
   });
@@ -79,30 +85,33 @@ export class QqExternalConsumer {
   #sourceFiles;
   #sourceVoiceTranscripts;
   #sourceVoiceAudio;
+  #ordinaryText;
   #sources = new Map();
-  constructor({ bot, account, botId, accept, sourceImages = () => false, sourceFiles = () => false, sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false, reportNativeObservation = () => {} }) {
+  constructor({ bot, account, botId, accept, sourceImages = () => false, sourceFiles = () => false, sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false, ordinaryText = () => false, reportNativeObservation = () => {} }) {
     this.#bot = bot; this.#account = account; this.#botId = botId; this.#accept = accept;
     this.#observations = new QqNativeReplyObservations({ account, report: reportNativeObservation });
     this.#sourceImages = sourceImages;
     this.#sourceFiles = sourceFiles;
     this.#sourceVoiceTranscripts = sourceVoiceTranscripts;
     this.#sourceVoiceAudio = sourceVoiceAudio;
+    this.#ordinaryText = ordinaryText;
   }
   recordNativeReceipt(receipt, signal) {
     this.#observations.sent(receipt.conversationId, receipt.messageId, signal);
   }
   async accept(message, signal) {
     this.#observations.receive(message, signal);
-    const voice = this.#sourceVoiceTranscripts() === true || this.#sourceVoiceAudio() === true
+    const addressed = isQqAddressedGroupMessage(message);
+    const voice = addressed && (this.#sourceVoiceTranscripts() === true || this.#sourceVoiceAudio() === true)
       ? qqVoiceMessage(message, { sourceVoiceTranscripts: this.#sourceVoiceTranscripts() === true }) : undefined;
-    const quoted = !voice && this.#sourceFiles() === true ? qqQuotedFileMessage(message) : undefined;
+    const quoted = addressed && !voice && this.#sourceFiles() === true ? qqQuotedFileMessage(message) : undefined;
     message = quoted?.message ?? message;
     message = voice?.message ?? message;
-    const mediaEnabled = (this.#sourceImages() === true || this.#sourceFiles() === true) && message?.attachments?.length;
+    const mediaEnabled = addressed && (this.#sourceImages() === true || this.#sourceFiles() === true) && message?.attachments?.length;
     const base = normalizeQqExternalText(mediaEnabled ? { ...message, attachments: undefined,
       content: typeof message.content === 'string' && !message.content.trim()
         ? message.attachments.every(file => file?.content_type === 'file') ? '[File]' : '[Image]' : message.content } : message,
-    { botId: this.#botId, account: this.#account });
+    { botId: this.#botId, account: this.#account, ordinaryText: this.#ordinaryText() === true });
     const media = base && voice && this.#sourceVoiceAudio() === true
       ? qqSourceAttachments(voice.nativeMessage, base, { sourceImages: false, sourceVoiceAudio: true, referenceKey: voice.referenceKey })
       : base && mediaEnabled ? qqSourceAttachments(message, base,
@@ -131,6 +140,7 @@ export class QqExternalConsumer {
   }
   qualify(route, signal) {
     const source = this.#source(route, signal);
+    if (!source.event.mentionedAccount) throw qqRefusal('capability-unavailable');
     if (Date.now() - Date.parse(source.event.at) >= 5 * 60_000) throw qqRefusal('reply-window-expired');
     if (source.attempts >= 5) throw qqRefusal('reply-limit-exceeded');
     return structuredClone(source.event.reply);

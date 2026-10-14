@@ -75,6 +75,72 @@ function mention(overrides = {}) {
     ...overrides };
 }
 
+test('checked QQ ordinary text is opted into by the exclusive consumer and cannot become a source reply', async t => {
+  const fx = await fixture(t);
+  const standaloneBefore = fx.standaloneRuns();
+  const account = await fx.controller.describeDeliveryAccount(fx.botId);
+  assert.equal(account.capabilities.includes('ordinary-text-consumer'), true);
+  const service = createDeliveryService();
+  service.registerAdapter(createDeliveryAdapter({ channel: 'qq', coreController: fx.controller,
+    workspaces: { has: id => id === fx.botId, listDeliveryTargets: () => [] }, stateFor: async () => ({}) }));
+  const admitted = [];
+  await service.consumeInbound(fx.botId, { expectedFingerprint: account.account.fingerprint,
+    ordinaryText: true, onEvent: async event => { admitted.push(event); return { accepted: true }; } });
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE',
+    mentions: [{ id: 'another-member', is_you: false }], content: 'The team chose the blue plan.' }));
+  assert.equal(admitted.length, 1);
+  assert.equal(admitted[0].mentionedAccount, false);
+  assert.deepEqual(admitted[0].actor, { kind: 'user', id: 'app-scoped-member' });
+  assert.deepEqual(admitted[0].conversation, { kind: 'group', id: 'app-scoped-group' });
+  assert.equal(admitted[0].text, 'The team chose the blue plan.');
+  await assert.rejects(() => service.qualifyReplyChecked(fx.botId, admitted[0].reply,
+    { expectedFingerprint: account.account.fingerprint }), { code: 'capability-unavailable' });
+  assert.equal(fx.bot().sent.length, 0);
+  assert.equal(fx.standaloneRuns(), standaloneBefore);
+});
+
+test('ordinary QQ admission defaults off and stale receiver callbacks cannot qualify a replacement lease', async t => {
+  const fx = await fixture(t);
+  const fingerprint = (await fx.controller.describeDeliveryAccount(fx.botId)).account.fingerprint;
+  const admitted = [];
+  const onEvent = async event => { admitted.push(event); return { accepted: true }; };
+  const dispose = await fx.controller.consumeInbound(fx.botId, { expectedFingerprint: fingerprint, onEvent });
+  const oldBot = fx.bot();
+  await oldBot.deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE' }));
+  assert.equal(admitted.length, 0);
+  dispose();
+  const replacement = await fx.controller.consumeInbound(fx.botId, { expectedFingerprint: fingerprint,
+    ordinaryText: true, onEvent });
+  await oldBot.deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE' }));
+  assert.equal(admitted.length, 0);
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE' }));
+  assert.equal(admitted.length, 1);
+  replacement();
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', messageId: 'after-disposal',
+    replyTarget: { scope: 'group', targetId: 'app-scoped-group', msgId: 'after-disposal' } }));
+  assert.equal(admitted.length, 1);
+});
+
+test('ordinary QQ text excludes own/bot echoes and media while keeping an explicit self mention addressed', async t => {
+  const fx = await fixture(t);
+  const fingerprint = (await fx.controller.describeDeliveryAccount(fx.botId)).account.fingerprint;
+  const admitted = [];
+  await fx.controller.consumeInbound(fx.botId, { expectedFingerprint: fingerprint,
+    ordinaryText: true, sourceFiles: true, sourceImages: true, sourceVoiceTranscripts: true,
+    onEvent: async event => { admitted.push(event); return { accepted: true }; } });
+  for (const fields of [
+    { senderIsBot: true }, { senderId: 'native-bot-id' }, { msgType: 103 },
+    { attachments: [{ content_type: 'image', url: 'https://example.test/image' }] },
+    { kind: 'c2c', rawEventType: 'C2C_MESSAGE_CREATE' },
+  ]) await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', ...fields }));
+  assert.equal(admitted.length, 0);
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE',
+    mentions: [{ id: 'app-qualified-self', is_you: true }] }));
+  assert.equal(admitted.length, 1);
+  assert.equal(admitted[0].mentionedAccount, true);
+  assert.equal(fx.bot().sent.length, 0);
+});
+
 test('public QQ proactive text returns an own-app native group receipt without source reply fields', async t => {
   const fx = await fixture(t);
   const fingerprint = (await fx.controller.describeDeliveryAccount(fx.botId)).account.fingerprint;
