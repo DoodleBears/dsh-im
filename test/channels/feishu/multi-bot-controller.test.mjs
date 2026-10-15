@@ -1600,6 +1600,33 @@ test('releasing the exclusive consumer cancels a pending history read', async ()
 });
 
 
+for (const sourceVideos of [false, true]) {
+  test(`video qualification opt-in reaches production enrichment (sourceVideos=${sourceVideos})`, async () => {
+    const existing = bot('bot_media', 'media');
+    const fx = fixture({ bots: [existing], secrets: { [existing.secretRef]: 'local-secret' },
+      verifyApp: async () => ({ openId: existing.botOpenId, name: 'Verified' }) });
+    await fx.controller.initialize();
+    try {
+      const info = await fx.controller.describeDeliveryAccount(existing.id);
+      assert.ok(info.capabilities.includes('source-video-checked'));
+      await fx.controller.consumeInbound(existing.id, { expectedFingerprint: info.account.fingerprint,
+        sourceFiles: true, sourceImages: true, sourceVideos, onEvent: async () => ({ accepted: true }) });
+      const runtime = fx.runtimes.get(existing.id).at(-1);
+      let options;
+      runtime.enrichExternal = async (evidence, value) => { options = value; return evidence; };
+      await runtime.acceptExternal({ event_id: 'event', app_id: existing.appId,
+        sender: { sender_type: 'user', sender_id: { open_id: 'human' } },
+        message: { message_id: 'mention', chat_id: 'chat', chat_type: 'group', message_type: 'text', parent_id: 'video',
+          mentions: [{ id: { open_id: existing.botOpenId }, key: '@_user_1' }],
+          create_time: '1790787600000', content: JSON.stringify({ text: '@_user_1 inspect video' }) } });
+      assert.equal(options.sourceVideos, sourceVideos);
+      assert.equal(options.sourceImages, true);
+    } finally {
+      await fx.controller.close();
+    }
+  });
+}
+
 test('checked live names reach a text-only consumer before durable acceptance', async () => {
   const existing = bot('bot_named', 'named');
   const fx = fixture({ bots: [existing], secrets: { [existing.secretRef]: 'local-secret' },

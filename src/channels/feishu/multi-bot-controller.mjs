@@ -602,11 +602,11 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       return { version: 1, botId, channel: 'feishu', account,
         connected: isConnected(connectionStatus(this.#runtimes.get(botId))),
-        capabilities: ['reachable-conversations-checked', 'proactive-fence-checked', 'proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer', 'reaction-write-checked', 'source-image-checked', 'approval-rule-card-checked', 'approval-rule-all-opaque-card-checked', 'pairing-card-checked'] };
+        capabilities: ['reachable-conversations-checked', 'proactive-fence-checked', 'proactive-text-checked', 'proactive-receipt-checked', 'own-text-echo', 'exclusive-text-consumer', 'reply-text-checked', 'reply-context-checked', 'reply-receipt-checked', 'reply-fence-checked', 'history-text-checked', 'thread-history-text-checked', 'source-file-checked', 'reply-file-checked', 'approval-card-checked', 'approval-card-update-checked', 'approval-action-consumer', 'reaction-write-checked', 'source-image-checked', 'source-video-checked', 'approval-rule-card-checked', 'approval-rule-all-opaque-card-checked', 'pairing-card-checked'] };
     });
   }
 
-  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, sourceImages = false, onEcho, onAction } = {}) {
+  async consumeInbound(botId, { expectedFingerprint, onEvent, signal, sourceFiles = false, sourceImages = false, sourceVideos = false, onEcho, onAction } = {}) {
     this.#assertOpen();
     return this.#withBotTransition(botId, async () => {
       this.#assertOpen();
@@ -615,7 +615,7 @@ export class MultiBotDshFeishuController {
       const account = await this.#deliveryAccount(config);
       if (account.fingerprint !== expectedFingerprint)
         throw Object.assign(new Error('account-changed'), { code: 'account-changed' });
-      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, sourceImages, onEcho, onAction });
+      const dispose = this.#inboundConsumers.register(botId, { fingerprint: expectedFingerprint, onEvent, signal, sourceFiles, sourceImages, sourceVideos, onEcho, onAction });
       try {
         const saved = await this.#configStore.saveBot({ ...config, consumerMode: 'external-consumer' });
         const resolved = await this.#credentials.resolve(saved.secretRef);
@@ -1571,7 +1571,7 @@ export class MultiBotDshFeishuController {
         if (evidence === null) return { accepted: true, ignored: true };
         if (evidence.attachments?.length && !this.#inboundConsumers.acceptsImages(config.id)) return { accepted: true, ignored: true };
         const named = typeof runtime.enrichExternalNames === 'function' ? await runtime.enrichExternalNames(evidence, { signal }) : evidence;
-        const enriched = this.#inboundConsumers.acceptsFiles(config.id) && typeof runtime.enrichExternal === 'function' ? await runtime.enrichExternal(named, { signal }) : named;
+        const enriched = this.#inboundConsumers.acceptsFiles(config.id) && typeof runtime.enrichExternal === 'function' ? await runtime.enrichExternal(named, { signal, sourceVideos: this.#inboundConsumers.acceptsVideos(config.id), sourceImages: this.#inboundConsumers.acceptsImages(config.id) }) : named;
         return this.#inboundConsumers.accept(config.id, enriched, signal);
       }),
     }));

@@ -23,6 +23,45 @@ function fixture() {
 }
 const context = () => ({ signal: new AbortController().signal, assertCurrent() {} });
 
+test('native media metadata and its cover require explicit opt-in and remain bound to the exact parent', async () => {
+  const fx = fixture();
+  let media = { ...parent, msg_type: 'media', body: { content: JSON.stringify({ file_key: 'native-video', file_name: 'clip.mp4', duration: 4000, image_key: 'native-cover' }) } };
+  fx.client.im.v1.message.get = async ({ path }) => ({ data: { items: [path.message_id === 'mention' ? source : media] } });
+  const input = { mentionedAccount: true, reply: route };
+  assert.equal((await externalAttachments(fx.client, input, context().signal)).attachments, undefined);
+  assert.equal((await externalAttachments(fx.client, { ...input, mentionedAccount: false }, context().signal, { sourceVideos: true })).attachments, undefined);
+  const evidence = await externalAttachments(fx.client, input, context().signal, { sourceVideos: true, sourceImages: true });
+  assert.equal(fx.downloads, 0);
+  assert.equal(evidence.video.durationMs, 4000);
+  assert.deepEqual(evidence.attachments.map(item => item.mediaType), ['video/unknown', 'image/unknown']);
+  assert.equal(evidence.video.itemId, evidence.attachments[0].id);
+  assert.equal(evidence.video.posterAttachmentId, evidence.attachments[1].id);
+  for (const [index, type] of [[0, 'file'], [1, 'image']]) {
+    const stream = await readExternalFile(fx.client, route, evidence.attachments[index], context());
+    for await (const chunk of stream) void chunk;
+    assert.deepEqual(fx.calls[index], { path: { message_id: 'file', file_key: index ? 'native-cover' : 'native-video' }, params: { type } });
+  }
+  media = { ...media, body: { content: JSON.stringify({ file_key: 'changed-video', file_name: 'clip.mp4' }) } };
+  await assert.rejects(readExternalFile(fx.client, route, evidence.attachments[0], context()), { code: 'stale-route' });
+  assert.equal(fx.downloads, 2);
+  media = { ...media, chat_id: 'other-chat' };
+  await assert.rejects(externalAttachments(fx.client, input, context().signal, { sourceVideos: true }), { code: 'stale-route' });
+});
+
+test('native media without optional duration or cover stays playable; a file named mp4 is still a file', async () => {
+  const fx = fixture();
+  let media = { ...parent, msg_type: 'media', body: { content: JSON.stringify({ file_key: 'native-video', file_name: 'clip.mp4' }) } };
+  fx.client.im.v1.message.get = async () => ({ data: { items: [media] } });
+  const input = { mentionedAccount: true, reply: route };
+  const evidence = await externalAttachments(fx.client, input, context().signal, { sourceVideos: true });
+  assert.deepEqual(evidence.video, { itemId: evidence.attachments[0].id });
+  assert.equal(evidence.attachments.length, 1);
+  media = { ...media, msg_type: 'file' };
+  const generic = await externalAttachments(fx.client, input, context().signal, { sourceVideos: true });
+  assert.equal(generic.video, undefined);
+  assert.equal(generic.attachments[0].mediaType, undefined);
+});
+
 test('trusted parent metadata is lazy and mismatched evidence cannot fetch another resource', async () => {
   const fx = fixture();
   const evidence = await externalAttachments(fx.client, { mentionedAccount: true, reply: route }, context().signal);

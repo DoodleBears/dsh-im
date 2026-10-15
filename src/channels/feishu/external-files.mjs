@@ -19,39 +19,53 @@ export async function checkedReplySource(client, route, signal) {
   return source;
 }
 
-async function parentFile(client, route, signal) {
+async function parentResources(client, route, signal, { sourceVideos = false, sourceImages = false } = {}) {
   if (!route.parentId || route.parentId === route.messageId) return undefined;
   signal?.throwIfAborted();
   const result = await client.im.v1.message.get({ path: { message_id: route.parentId } });
   const file = result?.data?.items?.find(item => item.message_id === route.parentId);
   if (result?.code || !file || file.deleted === true || file.chat_id !== route.conversationId)
     throw failure('stale-route');
-  if (file.msg_type !== 'file') return undefined;
+  if (file.msg_type !== 'file' && !(sourceVideos && file.msg_type === 'media')) return undefined;
   if (file.thread_id && route.threadId && file.thread_id !== route.threadId) throw failure('stale-route');
   let content;
   try { content = JSON.parse(file.body?.content); } catch { throw failure('invalid-inbound'); }
   if (typeof content?.file_key !== 'string' || !content.file_key || content.file_key.length > 512
-    || typeof content.file_name !== 'string' || !content.file_name || content.file_name.length > 512)
+    || typeof content.file_name !== 'string' || !content.file_name || content.file_name.length > 512
+    || (content.duration !== undefined && (!Number.isSafeInteger(content.duration) || content.duration < 0))
+    || (file.msg_type === 'media' && content.image_key !== undefined &&
+      (typeof content.image_key !== 'string' || !content.image_key || content.image_key.length > 512)))
     throw failure('invalid-inbound');
   signal?.throwIfAborted();
-  return Object.freeze({
+  const attachment = Object.freeze({
     id: createHash('sha256').update(JSON.stringify([route.conversationId, file.message_id, content.file_key])).digest('hex'),
     messageId: file.message_id, resourceKey: content.file_key, name: content.file_name,
+    ...(file.msg_type === 'media' ? { mediaType: 'video/unknown' } : {}),
+  });
+  const poster = file.msg_type === 'media' && sourceImages && content.image_key ? Object.freeze({
+    id: createHash('sha256').update(JSON.stringify([route.conversationId, file.message_id, content.image_key])).digest('hex'),
+    messageId: file.message_id, resourceKey: content.image_key, name: 'video-cover', mediaType: 'image/unknown',
+  }) : undefined;
+  return Object.freeze({ attachments: Object.freeze([attachment, ...(poster ? [poster] : [])]),
+    ...(file.msg_type === 'media' ? { video: Object.freeze({ itemId: attachment.id,
+      ...(content.duration === undefined ? {} : { durationMs: content.duration }),
+      ...(poster ? { posterAttachmentId: poster.id } : {}),
+    }) } : {}),
   });
 }
 
-export async function externalAttachments(client, evidence, signal) {
+export async function externalAttachments(client, evidence, signal, options) {
   if (evidence.attachments?.length || !evidence.mentionedAccount || !evidence.reply.parentId) return evidence;
-  const file = await parentFile(client, evidence.reply, signal);
-  return file ? Object.freeze({ ...evidence, attachments: Object.freeze([file]) }) : evidence;
+  const resources = await parentResources(client, evidence.reply, signal, options);
+  return resources ? Object.freeze({ ...evidence, ...resources }) : evidence;
 }
 
 export async function readExternalFile(client, route, attachment, { signal, assertCurrent }) {
   const source = await checkedReplySource(client, route, signal);
   const ownImages = nativeImageContent(source, route.conversationId);
-  const current = attachment.mediaType === 'image/unknown'
+  const current = attachment.mediaType === 'image/unknown' && attachment.messageId === route.messageId
     ? ownImages?.attachments.find(item => item.id === attachment.id)
-    : await parentFile(client, route, signal);
+    : (await parentResources(client, route, signal, { sourceVideos: true, sourceImages: true }))?.attachments.find(item => item.id === attachment.id);
   if (!current || JSON.stringify(current) !== JSON.stringify(attachment)) throw failure('stale-route');
   assertCurrent();
   const resource = await client.im.v1.messageResource.get({
