@@ -89,7 +89,11 @@ export async function inspectDiscordSourceChannel(api, channelId, account, signa
     signal?.throwIfAborted();
     const name = [guild.name, parent.name].every(value => typeof value === 'string' && value.trim())
       ? `${guild.name.trim()} #${parent.name.trim()}`.slice(0, 512) : undefined;
+    const ownManagedRoleIds = guild.roles.filter(role => discordSnowflake(role.id)
+      && role.id !== guild.id && role.managed === true && role.tags?.bot_id === account.userId
+      && member.roles.includes(role.id)).map(role => role.id);
     return { guildId: guild.id, conversationId: parent.id, channelId: channel.id, ...(name ? { name } : {}),
+      ...(ownManagedRoleIds.length ? { ownManagedRoleIds } : {}),
       ...(isThread ? { threadId: channel.id } : {}) };
   } catch (error) { throw nativeFailure(error, 'source-not-found'); }
 }
@@ -115,6 +119,13 @@ export function normalizeDiscordHistoryText(message, identity) {
   return normalizeDiscordHumanText(message, identity, false);
 }
 
+/** Role ownership comes only from the checked current guild/member, never message text or names. */
+export function discordMessageMentionsAccount(message, account, channel) {
+  return message.mentions.some(user => user.id === account.userId)
+    || (Array.isArray(message.mention_roles) && message.mention_roles.some(roleId =>
+      discordSnowflake(roleId) && channel.ownManagedRoleIds?.includes(roleId)));
+}
+
 function normalizeDiscordHumanText(message, { botId, account, channel, eventId }, requireMention) {
   if (!discordSnowflake(message?.id) || !discordSnowflake(message?.author?.id)
     || message.author.bot === true || message.webhook_id || message.author.id === account.userId
@@ -122,7 +133,7 @@ function normalizeDiscordHumanText(message, { botId, account, channel, eventId }
     || message.content.length > 16000 || !Array.isArray(message.mentions)) return null;
   if (message.guild_id !== channel.guildId || message.channel_id !== channel.channelId)
     throw discordRefusal('stale-route');
-  const mentionedAccount = message.mentions.some(user => user.id === account.userId);
+  const mentionedAccount = discordMessageMentionsAccount(message, account, channel);
   if (requireMention && !mentionedAccount) return null;
   const timestamp = Date.parse(message.timestamp);
   if (!Number.isFinite(timestamp) || typeof eventId !== 'string' || !eventId || eventId.length > 512)

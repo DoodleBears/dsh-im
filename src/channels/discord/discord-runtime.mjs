@@ -10,7 +10,7 @@ import { DiscordApi } from './discord-api.mjs';
 import { createDiscordReachable } from './reachable-conversations.mjs';
 import { createDiscordHistoryReader } from './history-reader.mjs';
 import { createDiscordBridgeStatus, DiscordHarnessBridge } from './discord-bridge.mjs';
-import { discordRefusal, verifiedDiscordAccount, discordMessageContentAllowed, inspectDiscordSourceChannel, normalizeDiscordExternalText,
+import { discordRefusal, discordSnowflake, verifiedDiscordAccount, discordMessageContentAllowed, discordMessageMentionsAccount, inspectDiscordSourceChannel, normalizeDiscordExternalText,
   qualifyDiscordReply, sendDiscordReply, sendDiscordCheckedText } from './external-consumer.mjs';
 
 const DISCORD_GATEWAY_INTENTS = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
@@ -939,18 +939,27 @@ export class DiscordRuntime {
     if (!this.#account || !this.#status.ready || generation !== this.#generation
       || !message?.guild_id || message.author?.bot === true || message.webhook_id
       || !Array.isArray(message.mentions)) return;
-    const mentioned = message.mentions.some(user => user.id === this.#account.userId);
-    if (!mentioned && (!this.#ordinaryAuthorized || this.#externalOrdinaryText() !== true
+    let mentioned = message.mentions.some(user => user.id === this.#account.userId);
+    const roleCandidate = Array.isArray(message.mention_roles) && message.mention_roles.some(discordSnowflake);
+    if (!mentioned && !roleCandidate && (!this.#ordinaryAuthorized || this.#externalOrdinaryText() !== true
       || typeof message.content !== 'string' || !message.content.trim())) return;
     const checked = this.#checkedLifetime();
+    let channel;
+    if (!mentioned && roleCandidate) {
+      channel = await inspectDiscordSourceChannel(checked.api, message.channel_id, checked.account, checked.signal);
+      checked.assertCurrent();
+      mentioned = discordMessageMentionsAccount(message, checked.account, channel);
+    }
     if (!mentioned) {
+      if (!this.#ordinaryAuthorized || this.#externalOrdinaryText() !== true
+        || typeof message.content !== 'string' || !message.content.trim()) return;
       const application = await checked.api.getCurrentApplication({ signal: checked.signal });
       if (verifiedDiscordAccount({ id: checked.account.userId, bot: true }, application).fingerprint !== checked.account.fingerprint)
         throw discordRefusal('account-changed');
       checked.assertCurrent();
       if (!discordMessageContentAllowed(application) || this.#externalOrdinaryText() !== true) return;
     }
-    const channel = await inspectDiscordSourceChannel(checked.api, message.channel_id, checked.account, checked.signal);
+    channel ??= await inspectDiscordSourceChannel(checked.api, message.channel_id, checked.account, checked.signal);
     let event = normalizeDiscordExternalText(message, { botId: this.#config.botId, account: checked.account,
       channel, eventId: `gateway:${this.#sessionId}:${sequence}`, ordinaryText: !mentioned });
     checked.assertCurrent();

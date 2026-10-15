@@ -372,6 +372,93 @@ function ordinaryRuntimeFixture({ enabled = true, optedIn = true, thread = true 
     async dispatch(message) { socket.packet({ op: 0, t: 'MESSAGE_CREATE', s: 42, d: message }); await flush(); } };
 }
 
+test('own managed-role mention reaches the checked consumer without ordinary-message opt-in', async () => {
+  const f = ordinaryRuntimeFixture({ enabled: false, optedIn: false, thread: false });
+  f.guild.roles.push({ id: ids.role, managed: true, tags: { bot_id: ids.bot }, permissions: '0' });
+  f.member.roles.push(ids.role);
+  f.message.mentions = [];
+  f.message.mention_roles = [ids.role];
+  f.message.content = `<@&${ids.role}> QA managed role`;
+  try {
+    await f.runtime.start();
+    await f.dispatch(f.message);
+    assert.equal(f.received.length, 1, 'the App-owned managed role must address its bound Bot');
+    assert.equal(f.received[0].mentionedAccount, true);
+    assert.equal(f.received[0].text, f.message.content);
+    const result = await f.runtime.replyChecked(f.received[0].reply, 'QA managed-role reply', {
+      beforeSend: () => true, receipt: true,
+    });
+    assert.equal(result.receipt.messageId, ids.sent);
+    assert.equal(f.sends[0].channelId, ids.channel);
+  } finally { await f.runtime.stop(); }
+});
+
+test('role addressing requires current native managed ownership and exact role IDs, never names or member roles alone', async () => {
+  const f = ordinaryRuntimeFixture({ optedIn: false, thread: false });
+  const role = { id: ids.role, managed: true, tags: { bot_id: ids.bot }, permissions: '0', name: 'QA Bot' };
+  f.guild.roles.push(role);
+  f.member.roles.push(ids.role);
+  const message = { ...f.message, mentions: [], mention_roles: [ids.role], content: `<@&${ids.role}> QA` };
+  try {
+    await f.runtime.start();
+    for (const tags of [undefined, { bot_id: ids.actor }, { bot_id: Number(ids.bot) }, { integration_id: ids.bot }]) {
+      role.tags = tags;
+      await f.dispatch(message);
+      assert.equal(f.received.length, 0);
+    }
+    role.tags = { bot_id: ids.bot }; role.managed = false;
+    await f.dispatch(message); assert.equal(f.received.length, 0);
+    role.managed = true; f.member.roles = [];
+    await f.dispatch(message); assert.equal(f.received.length, 0);
+    f.member.roles = [ids.role];
+    for (const mention_roles of [[], undefined, null, [ids.actor], [Number(ids.role)], [ids.guild]]) {
+      await f.dispatch({ ...message, mention_roles, mention_everyone: true });
+      assert.equal(f.received.length, 0);
+    }
+    // Message-authored role metadata cannot replace the native guild proof.
+    role.tags = { bot_id: ids.actor };
+    await f.dispatch({ ...message, roles: [{ ...role, tags: { bot_id: ids.bot } }] });
+    assert.equal(f.received.length, 0);
+    role.tags = { bot_id: ids.bot };
+    await f.dispatch(message); assert.equal(f.received.length, 1);
+    // A changed guild role is checked again; no process-local role ownership cache survives it.
+    role.tags = { bot_id: ids.actor };
+    await f.dispatch(message); assert.equal(f.received.length, 1);
+    assert.equal(f.sends.length, 0);
+  } finally { await f.runtime.stop(); }
+});
+
+test('ordinary collection retains unrelated role mentions as context while own managed roles address the Bot in a native thread', async () => {
+  const f = ordinaryRuntimeFixture();
+  f.guild.roles.push({ id: ids.role, managed: true, tags: { bot_id: ids.bot }, permissions: '0' });
+  f.member.roles.push(ids.role);
+  try {
+    await f.runtime.start();
+    await f.dispatch({ ...f.ordinaryMessage, mention_roles: [ids.actor], mention_everyone: true });
+    assert.equal(f.received[0].mentionedAccount, false);
+    await f.dispatch({ ...f.ordinaryMessage, mention_roles: [ids.role] });
+    assert.equal(f.received[1].mentionedAccount, true);
+    assert.equal(f.received[1].reply.threadId, ids.thread);
+    assert.equal(f.received[1].reply.conversationId, ids.channel);
+    assert.deepEqual(f.received[1].mentions, [], 'a native role is not fabricated as a user mention');
+  } finally { await f.runtime.stop(); }
+});
+
+test('stopped receiver cannot deliver a managed-role mention after its native ownership lookup finishes', async () => {
+  const f = ordinaryRuntimeFixture({ optedIn: false });
+  f.guild.roles.push({ id: ids.role, managed: true, tags: { bot_id: ids.bot }, permissions: '0' });
+  f.member.roles.push(ids.role);
+  let finish;
+  try {
+    await f.runtime.start();
+    f.api.getGuild = () => new Promise(resolve => { finish = () => resolve(f.guild); });
+    await f.dispatch({ ...f.message, mentions: [], mention_roles: [ids.role] });
+    assert.equal(typeof finish, 'function');
+    await f.runtime.stop(); finish(); await flush();
+    assert.equal(f.received.length, 0);
+  } finally { await f.runtime.stop(); }
+});
+
 test('ordinary Gateway requires consumer opt-in AND native approval; OFF retains mention replies without privileged intent', async () => {
   for (const enabled of [false, true]) for (const optedIn of [false, true]) {
     const f = ordinaryRuntimeFixture({ enabled, optedIn });
