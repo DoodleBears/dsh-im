@@ -1,5 +1,7 @@
 # Checked QQ ordinary group text
 
+The production Controller factory must carry the dynamic `ordinaryText` accessor into `QqRuntime`, as well as the Controller and Runtime classes themselves. The production-entry regression exercises `createProductionController` → public Delivery Service → actual Runtime intake; constructing Runtime directly does not qualify this wiring. A real unmentioned plain-text event exposed this missing factory argument during candidate QA; that failed event is not counted as successful qualification or replayed into canonical collection.
+
 This candidate extends the official QQ external consumer with ordinary text. It uses the same authenticated app, exclusive consumer and checked inbound Service. It does not run a standalone Harness bridge alongside that consumer.
 
 The software capability `ordinary-text-consumer` means that the Provider can normalize a native `GROUP_MESSAGE_CREATE`. It does not prove that a particular QQ application has receive-all permission or that its current receiver delivered an ordinary event. The consuming application must qualify a fresh native event on its current lease and keep its collection preference separate from that proof.
