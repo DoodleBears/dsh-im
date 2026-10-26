@@ -343,7 +343,7 @@ export class QqRuntime {
           sourceVoiceTranscripts: this.#sourceVoiceTranscripts,
           sourceVoiceAudio: this.#sourceVoiceAudio,
           ordinaryText: this.#ordinaryText,
-          ...(this.#rateLimitRetryDelaysMs ? { rateLimitRetryDelaysMs: this.#rateLimitRetryDelaysMs } : {}),
+          rateLimitRetryDelaysMs: this.#rateLimitRetryDelaysMs,
           reportNativeObservation: record => this.#logger.info?.('[dsh-im:qq] native reply observation', record),
           reportNativeFrame: record => this.#logger.info?.('[dsh-im:qq] native reply frame', record),
         });

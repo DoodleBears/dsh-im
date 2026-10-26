@@ -153,7 +153,10 @@ test('Host command executor invokes the commands Typert endpoint with the Sessio
     commandId: 'command-one',
     result: { kind: 'success' },
   });
-  assert.deepEqual(requests, [{
+  // DSH 0.2.1 Gateways require the in-process owner Peer on every call.
+  assert.equal(requests[0].peer.principal.kind, 'owner');
+  assert.equal(requests[0].peer.signal.aborted, false);
+  assert.deepEqual(requests.map(({ peer: _peer, ...request }) => request), [{
     namespace: 'commands',
     method: 'execute',
     // Newer Harness descriptors require images even for plain commands.
@@ -186,7 +189,8 @@ test('compact executes once on older Harness after its gateway rejects the image
   const result = await runCompactCommand('/compact', client, state(), 'direct:one', { signal });
   assert.equal(result.message, '已压缩 5 条历史记录（约 200 个 token）。');
   assert.equal(executions, 1);
-  assert.deepEqual(requests, [
+  assert.equal(requests[1].peer, requests[0].peer);
+  assert.deepEqual(requests.map(({ peer: _peer, ...request }) => request), [
     {
       namespace: 'commands', method: 'execute',
       args: { agentId: 'session-one', line: '/compact', images: [] }, signal,

@@ -58,12 +58,16 @@ export function qqQuotedMediaMessage(message, { accepts, label, requireCaption =
     content: `${message.content}\n[Quoted ${label}]`, attachments: element.attachments } };
 }
 
+export function qqQuoteHasAttachments(message) {
+  return message?.raw?.msg_elements?.[0]?.attachments?.length > 0
+    || message?.msgElements?.[0]?.attachments?.length > 0;
+}
+
 /** A quoted text message carries no media, so it is admitted as text with the quote inline. */
 export function qqQuotedTextMessage(message) {
   if (message?.msgType !== 103) return undefined;
   // Quoted media stays with its own opted-in owner; without that opt-in it is not admitted.
-  if (message.raw?.msg_elements?.[0]?.attachments?.length
-    || message.msgElements?.[0]?.attachments?.length) return undefined;
+  if (qqQuoteHasAttachments(message)) return undefined;
   const { element } = qqQuotedElement(message);
   const quoted = (element.content ?? '').trim();
   const caption = message.content.trim();

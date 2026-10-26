@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { ApiError, getNextMsgSeq, messagePath } from '@tencent-connect/qqbot-nodejs/protocol';
 import { QqNativeReplyObservations, qqNativeIdentifier as identifier } from './native-reply-observations.mjs';
 import { qqSourceAttachments, readQqSourceAttachment, checkedQqImageFile, uploadQqCheckedMedia } from './external-images.mjs';
-import { checkedQqGenericFile, qqQuotedFileMessage, qqQuotedTextMessage } from './external-files.mjs';
+import { checkedQqGenericFile, qqQuoteHasAttachments, qqQuotedFileMessage, qqQuotedTextMessage } from './external-files.mjs';
 import { qqVoiceMessage } from './external-voice.mjs';
 import { qqExternalMentions } from './external-mentions.mjs';
 
@@ -12,11 +12,13 @@ export function qqRefusal(code) { return Object.assign(new Error(code), { code }
 // QQ rejects a rate-limited post outright, so the same msg_seq is retried
 // after a short backoff; any other outcome is returned to the caller as is.
 const RATE_LIMIT_RETRY_DELAYS_MS = Object.freeze([1_000, 3_000]);
+const POST_QUEUE_WAIT_MS = 30_000;
 
 function retryDelay(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(qqRefusal('cancelled')); return; }
     const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, ms);
+    timer.unref?.();
     const abort = () => { clearTimeout(timer); reject(qqRefusal('cancelled')); };
     signal?.addEventListener('abort', abort, { once: true });
   });
@@ -117,9 +119,7 @@ export class QqExternalConsumer {
     const addressed = isQqAddressedGroupMessage(message);
     const voice = addressed && (this.#sourceVoiceTranscripts() === true || this.#sourceVoiceAudio() === true)
       ? qqVoiceMessage(message, { sourceVoiceTranscripts: this.#sourceVoiceTranscripts() === true }) : undefined;
-    const quotedFiles = addressed && !voice && this.#sourceFiles() === true
-      && (message?.raw?.msg_elements?.[0]?.attachments?.length > 0
-        || message?.msgElements?.[0]?.attachments?.length > 0);
+    const quotedFiles = addressed && !voice && this.#sourceFiles() === true && qqQuoteHasAttachments(message);
     const quoted = !addressed || voice ? undefined
       : quotedFiles ? qqQuotedFileMessage(message) : qqQuotedTextMessage(message);
     message = quoted?.message ?? message;
@@ -196,12 +196,15 @@ export class QqExternalConsumer {
           const failure = nativeReplyFailure(error);
           if (failure.code !== 'reply-rate-limited' || retry >= this.#rateLimitRetryDelaysMs.length) throw failure;
           // A rate-limited post was refused, so it does not spend the passive reply budget.
-          this.#sources.get(qualified.messageId).attempts--;
+          const source = this.#sources.get(qualified.messageId);
+          if (source) source.attempts--;
           await retryDelay(this.#rateLimitRetryDelaysMs[retry], signal);
         }
       }
     };
-    const current = previous.catch(() => undefined).then(run);
+    // A stalled earlier post must not hold the group's later replies past their window.
+    const current = Promise.race([previous, retryDelay(POST_QUEUE_WAIT_MS).catch(() => undefined)])
+      .catch(() => undefined).then(run);
     const tail = current.catch(() => undefined);
     this.#posts.set(conversationId, tail);
     tail.then(() => { if (this.#posts.get(conversationId) === tail) this.#posts.delete(conversationId); });
