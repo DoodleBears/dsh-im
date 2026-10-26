@@ -2,9 +2,10 @@ import { isQqVoiceAttachment } from './voice-attachment.mjs';
 import { createHash } from 'node:crypto';
 import { detectedImageMediaType, fetchImageBuffer } from '../shared/image-prompt.mjs';
 import { QQ_IMAGE_HOSTS } from './qq-bridge.mjs';
+import { QQ_READABLE_IMAGE_TYPES, qqAttachmentUrl, qqImageMediaType } from './external-attachments.mjs';
 
 export const QQ_EXTERNAL_IMAGE_LIMIT = 25 * 1024 * 1024;
-const imageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+const imageTypes = QQ_READABLE_IMAGE_TYPES;
 const refusal = (code, reason) => Object.assign(new Error(code), { code, ...(reason ? { reason } : {}) });
 
 /** Native caption and attachment order are separate; no native interleaving is inferred. */
@@ -16,12 +17,13 @@ export function qqSourceAttachments(message, event, { sourceImages = true, sourc
     const voice = sourceVoiceAudio && message.attachments.length === 1
       && isQqVoiceAttachment(native);
     const mediaType = voice ? 'audio/unknown' : native?.content_type === 'file' && sourceFiles
-      ? 'application/octet-stream' : sourceImages && imageTypes.has(native?.content_type) ? native.content_type : null;
+      ? 'application/octet-stream' : sourceImages ? qqImageMediaType(native) ?? null : null;
     if (!mediaType) throw refusal('invalid-inbound', 'file-category-invalid');
-    if (typeof native.url !== 'string' || native.url.length > 16384)
+    const nativeUrl = qqAttachmentUrl(native.url);
+    if (typeof nativeUrl !== 'string' || nativeUrl.length > 16384)
       throw refusal('invalid-inbound', 'file-url-invalid');
     let url;
-    try { url = new URL(native.url); } catch { throw refusal('invalid-inbound', 'file-url-invalid'); }
+    try { url = new URL(nativeUrl); } catch { throw refusal('invalid-inbound', 'file-url-invalid'); }
     if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')
       || !QQ_IMAGE_HOSTS.some(host => url.hostname === host.slice(1) || url.hostname.endsWith(host)))
       throw refusal('resource-unavailable');
@@ -36,7 +38,7 @@ export function qqSourceAttachments(message, event, { sourceImages = true, sourc
       && !/[\x00-\x1f\x7f/\\]/.test(native.filename) ? native.filename : native.content_type === 'file' ? 'file' : voice ? 'voice.bin' : 'image';
     const attachment = { id, messageId: event.messageId, resourceKey: id, name,
       mediaType, ...(native.size === undefined ? {} : { sizeBytes: native.size }) };
-    return { attachment, url: native.url };
+    return { attachment, url: nativeUrl };
   });
   return { files, event: { ...event, attachments: files.map(file => file.attachment),
     contentParts: [
@@ -62,7 +64,8 @@ export async function readQqSourceAttachment(source, attachment, { signal, asser
   assertCurrent();
   await verifyAccount();
   assertCurrent();
-  if ((attachment.mediaType.startsWith('image/') && detectedImageMediaType(bytes) !== attachment.mediaType)
+  // QQ's declared image type is not always the stored format; any readable image format is accepted.
+  if ((attachment.mediaType.startsWith('image/') && !imageTypes.has(detectedImageMediaType(bytes)))
     || (attachment.sizeBytes !== undefined && bytes.byteLength !== attachment.sizeBytes))
     throw refusal('resource-unavailable');
   return (async function* () {

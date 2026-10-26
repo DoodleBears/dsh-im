@@ -101,6 +101,15 @@ function providerFailureCode(error) {
   return PROVIDER_FAILURES[value.trim().toUpperCase()] ?? null;
 }
 
+// Typert Gateway failures that mean dsh-im and the Host disagree on the call
+// contract, as opposed to a business failure behind the Gateway.
+const GATEWAY_CONTRACT_FAILURES = new Set([
+  'gateway/ambiguous-endpoint', 'gateway/arguments-invalid', 'gateway/binding-invalid',
+  'gateway/definition-unavailable', 'gateway/method-unavailable', 'gateway/peer-disposed',
+  'gateway/protocol', 'gateway/provider-mismatch', 'gateway/result-invalid',
+  'gateway/signature-invalid',
+]);
+
 function failureCode(error) {
   const code = typeof error?.code === 'string' ? error.code : '';
   const providerCode = providerFailureCode(error);
@@ -122,7 +131,8 @@ function failureCode(error) {
     'harness-loopback-forbidden', 'harness-host-untrusted',
     'harness-request-forbidden',
   ].includes(code)) return 'HARNESS_ACCESS';
-  if (['harness-api-not-found', 'harness-response-invalid'].includes(code)) {
+  if (['harness-api-not-found', 'harness-response-invalid'].includes(code)
+    || GATEWAY_CONTRACT_FAILURES.has(code)) {
     return 'HARNESS_PROTOCOL';
   }
   if (code === 'harness-turn-failed') return 'INTERNAL_UNKNOWN';

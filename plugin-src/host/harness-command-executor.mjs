@@ -1,3 +1,5 @@
+import { hostOwnerPeer } from './host-owner-peer.mjs';
+
 /**
  * Adapt the Host's Typert command gateway to the channel Harness client.
  * Programmatic production fixtures may omit the gateway and exercise other assembly paths.
@@ -17,6 +19,7 @@ export function createHarnessCommandExecutor(ctx, provided) {
       namespace: 'commands',
       method: 'execute',
       args: { agentId: sessionId, line, images: [] },
+      peer: hostOwnerPeer(ctx),
       signal: options.signal,
     };
     try {

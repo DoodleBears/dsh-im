@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { hasActiveHarnessInteractionOwner } from '../../src/channels/shared/harness-client.mjs';
+import { hostOwnerPeer } from './host-owner-peer.mjs';
 
 const modernApis = new WeakMap();
 
@@ -36,14 +37,16 @@ function rpcResult(request, operation) {
   );
 }
 
-function remoteRequest(namespace, method, args, signal) {
+function remoteRequest(namespace, method, args, signal, peer) {
   return {
     namespace,
     method,
     args,
+    peer,
     ...(signal === undefined ? {} : { signal }),
   };
 }
+
 
 function questionError(message, code) {
   const error = new Error(message);
@@ -196,6 +199,7 @@ class MuxSubscription {
 class ModernHarnessApi {
   #gateway;
   #scope;
+  #ctx;
   #mux = new Set();
   #pendingQuestions = new Map();
   #pendingApprovals = new Map();
@@ -207,6 +211,7 @@ class ModernHarnessApi {
   constructor(ctx, gateway, scope) {
     this.#gateway = gateway;
     this.#scope = scope;
+    this.#ctx = ctx;
 
     this.host = Object.freeze({
       describe: (request) => rpcResult(request, () => ({ ready: true, transport: 'typert' })),
@@ -283,7 +288,7 @@ class ModernHarnessApi {
   }
 
   async #invoke(namespace, method, args, signal) {
-    return this.#gateway.invoke(remoteRequest(namespace, method, args, signal));
+    return this.#gateway.invoke(remoteRequest(namespace, method, args, signal, hostOwnerPeer(this.#ctx)));
   }
 
   async #streamFirst(namespace, method, args, signal) {
@@ -294,7 +299,7 @@ class ModernHarnessApi {
     let iterator;
     try {
       const source = await this.#gateway.stream(remoteRequest(
-        namespace, method, args, streamSignal,
+        namespace, method, args, streamSignal, hostOwnerPeer(this.#ctx),
       ));
       iterator = source[Symbol.asyncIterator]();
       const first = await iterator.next();
@@ -711,6 +716,8 @@ class ModernHarnessApi {
       questionError('dsh-im interaction adapter was disposed', 'ASK_ABORTED'),
     );
     for (const dispose of this.#disposers.splice(0).reverse()) dispose?.();
+    // The adapter ends with its Host root; so does the Peer it spoke for.
+    void hostOwnerPeer(this.#ctx).dispose();
   }
 }
 

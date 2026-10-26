@@ -128,16 +128,24 @@ test('installed QQ file contract acquires a private source and sends a distinct 
 test('QQ native files require explicit opt-in and never borrow a neighbouring message or an unproven quote', async t => {
   const disabled = await fixture(t, { sourceFiles: false });
   await disabled.bot().deliver(mention());
-  assert.deepEqual(disabled.admitted, []);
+  assert.equal(disabled.admitted.length, 1);
+  assert.equal(disabled.admitted[0].text, 'Sum the quantities\n[File not readable by the Bot]');
+  assert.equal(disabled.admitted[0].attachments, undefined);
   const fx = await fixture(t);
   for (const change of [
     { rawEventType: 'GROUP_MESSAGE_CREATE' }, { senderIsBot: true },
     { msgElements: [{ content: 'quoted file' }] },
-    { attachments: [{ url: privateUrl, content_type: 'audio/silk' }] },
-    { attachments: [{ url: privateUrl, content_type: 'video/mp4' }] },
     { attachments: [{ url: 'https://example.test/private', content_type: 'file' }] },
   ]) await fx.bot().deliver(mention(change));
   assert.deepEqual(fx.admitted, []);
+  for (const [index, content_type, note] of [[1, 'audio/silk', 'Voice message'], [2, 'video/mp4', 'Video']]) {
+    const messageId = `unreadable-${index}`;
+    await fx.bot().deliver(mention({ messageId, replyTarget: { scope: 'group', targetId: 'app-group', msgId: messageId },
+      attachments: [{ url: privateUrl, content_type }] }));
+    assert.equal(fx.admitted.at(-1).text, `Sum the quantities\n[${note} not readable by the Bot]`);
+    assert.equal(fx.admitted.at(-1).attachments, undefined);
+  }
+  assert.equal(fx.admitted.length, 2);
 });
 
 test('installed QQ contract acquires an explicitly quoted native file under the current mention authority', async t => {
@@ -210,7 +218,9 @@ test('quoted QQ files reject missing native proof, conflicting indices and neigh
   const quoted = { attachments: undefined, msgType: 103, refMsgIdx: 'quoted-file-index', msgElements: elements, raw };
   const disabled = await fixture(t, { sourceFiles: false });
   await disabled.bot().deliver(mention(quoted));
-  assert.deepEqual(disabled.admitted, []);
+  assert.equal(disabled.admitted.length, 1);
+  assert.equal(disabled.admitted[0].text, 'Sum the quantities\n\n[Quoted message]\n[Quoted file not readable by the Bot]');
+  assert.equal(disabled.admitted[0].attachments, undefined);
   const fx = await fixture(t);
   for (const change of [
     { raw: undefined }, { rawEventType: 'GROUP_MESSAGE_CREATE' }, { senderIsBot: true },
@@ -225,7 +235,6 @@ test('quoted QQ files reject missing native proof, conflicting indices and neigh
     { raw: { ...raw, msg_elements: [{ ...elements[0], message_type: { msg_elements: elements } }] } },
     { raw: { ...raw, msg_elements: [{ ...elements[0], message_type: '4' }] } },
     { raw: { ...raw, msg_elements: [{ ...elements[0], message_type: -1 }] } },
-    { raw: { ...raw, msg_elements: [{ ...elements[0], attachments: [{ content_type: 'voice', url: privateUrl }] }] } },
   ]) await fx.bot().deliver(mention({ ...quoted, ...change }));
   assert.deepEqual(fx.admitted, []);
   assert.equal(downloads, 0);

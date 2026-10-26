@@ -4,3 +4,12 @@ export function isQqAddressedGroupMessage(message) {
     || (message.rawEventType === 'GROUP_MESSAGE_CREATE' && Array.isArray(message.mentions)
       && message.mentions.some(mention => mention?.is_you === true)));
 }
+
+/** A private (C2C) message is always addressed to the receiving application. */
+export function isQqDirectMessage(message) {
+  return message?.kind === 'c2c' && message.rawEventType === 'C2C_MESSAGE_CREATE';
+}
+
+export function isQqAddressedMessage(message) {
+  return isQqAddressedGroupMessage(message) || isQqDirectMessage(message);
+}

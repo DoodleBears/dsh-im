@@ -8,6 +8,18 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- 兼容 DSH 0.2.1 Typert Gateway：dsh-im 在每次调用时声明本机 owner Peer，修复只能收消息、无法创建会话并报 `INTERNAL_UNKNOWN` 的问题；Gateway 协议错误现在归类为 Harness 接口不兼容（[BotHarness #2896](https://github.com/BotHarness/DeepSeekBot/issues/2896)）。
+  Supports the DSH 0.2.1 Typert Gateway: dsh-im names the local owner Peer on every call, fixing bots that received messages but could not create a session (`INTERNAL_UNKNOWN`). Gateway contract failures now classify as a Harness interface mismatch ([BotHarness #2896](https://github.com/BotHarness/DeepSeekBot/issues/2896)).
+
+- QQ 独占 Consumer 不再丢弃引用、图片和图文混合消息：引用文字、引用图片、引用图文都会带上 `[Quoted message]` 与被引用内容，已开启的图片和文件能力会一并附上被引用的附件；读不了的附件（如视频、未开启的语音）改为在正文里注明而不是丢掉整条消息；只 @ 不带文字也会送达；兼容 `image/jpg`、按文件名识别的图片和缺少协议或使用 HTTP 的 QQ 媒体地址，图片实际格式与声明不一致时只要是支持的格式也能读取（[BotHarness #2895](https://github.com/BotHarness/DeepSeekBot/issues/2895)）。
+  QQ exclusive Consumers no longer drop quoted, image or mixed messages. Quoted text, images and text-with-image all arrive under a `[Quoted message]` marker, and quoted attachments are attached when the image or file capability is on. Attachments the Consumer cannot read, such as video or voice without its opt-in, are named in the text instead of dropping the whole message, and an @ with no text still arrives. `image/jpg`, file-name image types and scheme-less or HTTP QQ media URLs are accepted, and an image whose real format differs from its declared type is read when the real format is supported ([BotHarness #2895](https://github.com/BotHarness/DeepSeekBot/issues/2895)).
+
+- QQ 同一群的受校验回复按顺序发送，遇到 429 限流时退避重试两次，被拒绝的发送不占用被动回复额度（[BotHarness #2897](https://github.com/BotHarness/DeepSeekBot/issues/2897)）。
+  Checked QQ replies to one group are sent in order, and a rate-limited reply is retried twice with backoff without spending the passive reply budget ([BotHarness #2897](https://github.com/BotHarness/DeepSeekBot/issues/2897)).
+
+- QQ 延迟交付在被动回复窗口内（私聊 60 分钟、群 5 分钟）沿用原消息 `msg_id` 回复，避免超时后生成的结果因主动消息受限而无法送达（[BotHarness #2868](https://github.com/BotHarness/DeepSeekBot/issues/2868)）。
+  QQ deferred delivery replies to the original `msg_id` while the passive window is open (60 min for C2C, 5 min for groups), so results produced after a timeout are no longer lost to proactive-message limits ([BotHarness #2868](https://github.com/BotHarness/DeepSeekBot/issues/2868)).
+
 - QQ 独占 Consumer 保留原生提及的名称、ID 和精确正文 token，供现有外部提及块展示；仅接收应用的严格 `is_you` 提及可使用已认证应用名称补全，歧义标识不猜测，不改变正文、收件或 Echo 资格（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
   QQ exclusive Consumers retain native mention names, IDs and exact body tokens for the existing external mention chips. Only a strict receiving-App `is_you` mention can use its authenticated application name as fallback; ambiguous identifiers are not guessed, and source text, intake and Echo qualification remain unchanged ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
 
@@ -15,6 +27,9 @@ This file records the notable changes in each dsh-im release. Its format follows
   QQ exclusive external Consumers retain Human self mentions with top-level `is_you === true` in full-mode events, including checked quoted files and voice, while refusing ordinary messages, foreign/quoted mentions and Bot authors; this does not enable ordinary collection or qualify own Echo ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
 
 ### Added / 新增
+
+- QQ 独占 Consumer 支持私聊：Consumer 声明 `directMessages` 后，私聊消息以 `dm` 会话进入，文字、图片、文件、引用和语音与群聊走同一套处理；回复按私聊被动回复规则发送（60 分钟、4 条）。新增能力 `direct-message-consumer`。
+  QQ exclusive Consumers support private chats. When a Consumer opts into `directMessages`, private messages arrive as `dm` conversations and get the same text, image, file, quote and voice handling as groups. Replies follow QQ's private passive reply rules (60 minutes, four replies). Adds the `direct-message-consumer` capability.
 
 - 飞书/Lark 与 Discord 独占外部 Consumer 接收其他 Bot 在群里明确 @ 本账号的文字消息，以 `actor.kind: 'bot'` 交给 Host，并允许在该消息上做受校验的回复；没有 @ 本账号的 Bot 消息、私聊里的 Bot 消息、自身消息和 Discord webhook 仍被排除。需要接受 Bot 发送者的 BotHarness Host（[BotHarness #2872](https://github.com/BotHarness/DeepSeekBot/issues/2872)）。
   Lark and Discord exclusive external Consumers accept text from another Bot that explicitly mentions this account in a group, hand it to the Host as `actor.kind: 'bot'`, and allow a checked reply on that message. Bot messages without a mention of this account, Bot messages in direct chats, own messages and Discord webhooks are still excluded. Requires a BotHarness Host that accepts Bot senders ([BotHarness #2872](https://github.com/BotHarness/DeepSeekBot/issues/2872)).
