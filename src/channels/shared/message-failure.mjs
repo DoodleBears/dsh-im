@@ -122,7 +122,8 @@ function failureCode(error) {
     'harness-loopback-forbidden', 'harness-host-untrusted',
     'harness-request-forbidden',
   ].includes(code)) return 'HARNESS_ACCESS';
-  if (['harness-api-not-found', 'harness-response-invalid'].includes(code)) {
+  if (['harness-api-not-found', 'harness-response-invalid'].includes(code)
+    || code.startsWith('gateway/')) {
     return 'HARNESS_PROTOCOL';
   }
   if (code === 'harness-turn-failed') return 'INTERNAL_UNKNOWN';

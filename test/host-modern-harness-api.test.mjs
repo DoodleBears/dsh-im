@@ -965,3 +965,71 @@ forEachSessionApi('a question cancelled with its turn', async (sessionApi) => {
 
   assert.equal(answer, 'turn unwound');
 });
+
+// DSH 0.2.1 Typert Gateway: every in-process caller names the Peer it speaks
+// for, and the Gateway reads `peer.signal` before anything else.
+function peerCheckingGateway(seen) {
+  const assertPeer = (request) => {
+    if (request.peer.signal.aborted) {
+      throw Object.assign(new Error('the calling Peer has been disposed'), {
+        isDSHRemoteError: true, code: 'gateway/peer-disposed', details: {},
+      });
+    }
+    seen.push(request.peer);
+  };
+  return {
+    async invoke(request) {
+      assertPeer(request);
+      if (`${request.namespace}/${request.method}` === 'session/create') return { sessionId: 'created' };
+      if (`${request.namespace}/${request.method}` === 'workspace/create') {
+        return { workspace: { workspaceId: 'workspace', path: request.args.request.path }, created: true };
+      }
+      throw new Error(`unexpected invoke ${request.namespace}/${request.method}`);
+    },
+    async stream(request) {
+      assertPeer(request);
+      return asyncValues({
+        type: 'baseline',
+        value: { items: [{ workspaceId: 'workspace', path: '/workspace', sessionIds: [] }], archivedSessionIds: [] },
+      });
+    },
+  };
+}
+
+test('modern adapter names one owner Peer on every DSH 0.2.1 Gateway call', async () => {
+  const seen = [];
+  const effects = [];
+  const { ctx } = fakeContext(peerCheckingGateway(seen));
+  ctx.effect = (setup) => { effects.push(setup()); };
+  const api = modernHarnessApi(ctx);
+  const client = new HarnessClient({ apiProxy: api, workspace: '/workspace' });
+
+  assert.equal(await client.createSession(), 'created');
+  const workspace = await api.workspace.list({ rpcId: 'workspace-list', payload: {} });
+  assert.equal(workspace.result.ok, true);
+  assert.ok(seen.length >= 2);
+  assert.ok(seen.every((peer) => peer === seen[0]), 'one Peer for the Host root');
+  assert.equal(seen[0].principal.kind, 'owner');
+  assert.equal(typeof seen[0].id, 'string');
+  assert.equal(seen[0].signal.aborted, false);
+
+  for (const dispose of effects) dispose();
+  assert.equal(seen[0].signal.aborted, true, 'the Peer ends with the adapter');
+});
+
+test('modern adapter reports Gateway contract failures as a Harness protocol mismatch', async () => {
+  const { ctx } = fakeContext({
+    async invoke() {
+      throw Object.assign(new Error('the calling Peer has been disposed'), {
+        isDSHRemoteError: true, code: 'gateway/peer-disposed', details: {},
+      });
+    },
+    async stream() { throw new Error('unused'); },
+  });
+  const client = new HarnessClient({ apiProxy: modernHarnessApi(ctx), workspace: '/workspace' });
+  await assert.rejects(() => client.rpc('session.create', { cwd: '/workspace' }), (error) => {
+    assert.equal(error.code, 'gateway/peer-disposed');
+    assert.equal(classifyMessageFailure(error).code, 'HARNESS_PROTOCOL');
+    return true;
+  });
+});

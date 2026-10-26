@@ -36,13 +36,30 @@ function rpcResult(request, operation) {
   );
 }
 
-function remoteRequest(namespace, method, args, signal) {
+function remoteRequest(namespace, method, args, signal, peer) {
   return {
     namespace,
     method,
     args,
+    peer,
     ...(signal === undefined ? {} : { signal }),
   };
+}
+
+// DSH 0.2.1 Gateways require every in-process caller to name the Peer it
+// speaks for. dsh-im runs inside the Host on behalf of its local owner, so it
+// owns one owner Peer per Host root and ends it with the adapter. Gateways
+// before 0.2.1 ignore the field.
+function ownerPeer(ctx) {
+  const controller = new AbortController();
+  return Object.freeze({
+    id: `dsh-im:${randomUUID()}`,
+    ctx,
+    principal: Object.freeze({ kind: 'owner' }),
+    signal: controller.signal,
+    interactions: 'none',
+    async dispose() { controller.abort(); },
+  });
 }
 
 function questionError(message, code) {
@@ -196,6 +213,7 @@ class MuxSubscription {
 class ModernHarnessApi {
   #gateway;
   #scope;
+  #peer;
   #mux = new Set();
   #pendingQuestions = new Map();
   #pendingApprovals = new Map();
@@ -207,6 +225,7 @@ class ModernHarnessApi {
   constructor(ctx, gateway, scope) {
     this.#gateway = gateway;
     this.#scope = scope;
+    this.#peer = ownerPeer(ctx);
 
     this.host = Object.freeze({
       describe: (request) => rpcResult(request, () => ({ ready: true, transport: 'typert' })),
@@ -283,7 +302,7 @@ class ModernHarnessApi {
   }
 
   async #invoke(namespace, method, args, signal) {
-    return this.#gateway.invoke(remoteRequest(namespace, method, args, signal));
+    return this.#gateway.invoke(remoteRequest(namespace, method, args, signal, this.#peer));
   }
 
   async #streamFirst(namespace, method, args, signal) {
@@ -294,7 +313,7 @@ class ModernHarnessApi {
     let iterator;
     try {
       const source = await this.#gateway.stream(remoteRequest(
-        namespace, method, args, streamSignal,
+        namespace, method, args, streamSignal, this.#peer,
       ));
       iterator = source[Symbol.asyncIterator]();
       const first = await iterator.next();
@@ -711,6 +730,7 @@ class ModernHarnessApi {
       questionError('dsh-im interaction adapter was disposed', 'ASK_ABORTED'),
     );
     for (const dispose of this.#disposers.splice(0).reverse()) dispose?.();
+    void this.#peer.dispose();
   }
 }
 
