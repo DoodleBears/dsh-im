@@ -1,6 +1,7 @@
 import { isQqAddressedGroupMessage } from './external-addressing.mjs';
 import { QQ_EXTERNAL_IMAGE_LIMIT } from './external-images.mjs';
 import { qqNativeIdentifier } from './native-reply-observations.mjs';
+import { qqAttachmentLabel, qqReadableAttachments, qqSkippedAttachmentNotes } from './external-attachments.mjs';
 
 const refusal = (code, reason) => Object.assign(new Error(code), { code, ...(reason ? { reason } : {}) });
 
@@ -14,12 +15,8 @@ export function checkedQqGenericFile(file) {
   if (file.bytes.byteLength > QQ_EXTERNAL_IMAGE_LIMIT) throw refusal('artifact-too-large');
   return Buffer.from(file.bytes);
 }
-export function qqQuotedFileMessage(message) {
-  return qqQuotedMediaMessage(message, { accepts: files => files.every(file => file?.content_type === 'file'), label: 'file' });
-}
-
-/** Verified single quoted element of an addressed native quote; throws a visible refusal otherwise. */
-function qqQuotedElement(message) {
+/** Verified single quoted element of a native quote; throws a visible refusal otherwise. */
+function qqQuotedElement(message, { ordinary = false } = {}) {
   const raw = message.raw;
   const elements = raw?.msg_elements;
   const element = Array.isArray(elements) && elements.length === 1 ? elements[0] : undefined;
@@ -27,7 +24,8 @@ function qqQuotedElement(message) {
   const refs = Array.isArray(raw?.message_scene?.ext)
     ? raw.message_scene.ext.filter(value => typeof value === 'string' && value.split('=', 1)[0].trim() === 'ref_msg_idx')
       .map(value => value.slice(value.indexOf('=') + 1).trim()) : [];
-  if (!isQqAddressedGroupMessage(message)
+  if (!(ordinary ? message?.kind === 'group' && message.rawEventType === 'GROUP_MESSAGE_CREATE'
+    : isQqAddressedGroupMessage(message))
     || raw?.message_type !== 103 || raw.id !== message.messageId || raw.group_openid !== message.groupOpenid
     || raw.author?.member_openid !== message.senderId || raw.author?.bot === true)
     throw refusal('invalid-inbound', 'quote-envelope-invalid');
@@ -37,6 +35,7 @@ function qqQuotedElement(message) {
     || (raw.attachments !== undefined && (!Array.isArray(raw.attachments) || raw.attachments.length))
     || !Array.isArray(message.msgElements) || message.msgElements.length !== 1
     || message.msgElements[0]?.msg_idx !== key
+    || (message.msgElements[0]?.attachments?.length ?? 0) !== (element.attachments?.length ?? 0)
     || Object.keys(element).some(field => !['msg_idx', 'content', 'message_type', 'attachments'].includes(field))
     || (element.message_type !== undefined && (!Number.isSafeInteger(element.message_type)
       || element.message_type < 0))
@@ -58,20 +57,24 @@ export function qqQuotedMediaMessage(message, { accepts, label, requireCaption =
     content: `${message.content}\n[Quoted ${label}]`, attachments: element.attachments } };
 }
 
-export function qqQuoteHasAttachments(message) {
-  return message?.raw?.msg_elements?.[0]?.attachments?.length > 0
-    || message?.msgElements?.[0]?.attachments?.length > 0;
-}
-
-/** A quoted text message carries no media, so it is admitted as text with the quote inline. */
-export function qqQuotedTextMessage(message) {
+/**
+ * A quote keeps its quoted text and every quoted attachment: readable ones are
+ * attached under the quote's reference, the rest are named in the text.
+ * Ordinary (unaddressed) quotes are admitted as text only.
+ */
+export function qqQuotedMessage(message, { sourceImages = false, sourceFiles = false, ordinary = false } = {}) {
   if (message?.msgType !== 103) return undefined;
-  // Quoted media stays with its own opted-in owner; without that opt-in it is not admitted.
-  if (qqQuoteHasAttachments(message)) return undefined;
-  const { element } = qqQuotedElement(message);
+  const { key, element } = qqQuotedElement(message, { ordinary });
+  const { readable, skipped } = qqReadableAttachments(element.attachments,
+    ordinary ? {} : { sourceImages, sourceFiles });
   const quoted = (element.content ?? '').trim();
   const caption = message.content.trim();
-  const content = `${caption ? `${caption}\n\n` : ''}[Quoted message]${quoted ? `\n${quoted}` : ''}`;
+  const lines = ['[Quoted message]', ...(quoted ? [quoted] : []),
+    ...readable.map(file => `[Quoted ${qqAttachmentLabel(file)}]`),
+    ...qqSkippedAttachmentNotes(skipped, { quoted: true })];
+  const content = `${caption ? `${caption}\n\n` : ''}${lines.join('\n')}`;
   if (content.length > 16000) throw refusal('invalid-inbound', 'quote-elements-invalid');
-  return { message: { ...message, msgType: 0, msgElements: undefined, content } };
+  return { ...(readable.length ? { referenceKey: key } : {}),
+    message: { ...message, msgType: 0, msgElements: undefined, content,
+      attachments: readable.length ? readable : undefined } };
 }

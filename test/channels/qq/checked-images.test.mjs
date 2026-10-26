@@ -165,14 +165,20 @@ test('account changes during private image acquisition prevent bytes from reachi
 test('QQ images require opt-in and reject quoted, ordinary and unsupported native media', async t => {
   const disabled = await fixture(t, { sourceImages: false });
   await disabled.bot().deliver(mention());
-  assert.deepEqual(disabled.admitted, []);
+  assert.equal(disabled.admitted.length, 1);
+  assert.equal(disabled.admitted[0].text, 'Inspect the shapes\n[Image not readable by the Bot]');
+  assert.equal(disabled.admitted[0].attachments, undefined);
   const fx = await fixture(t);
   await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE' }));
   await fx.bot().deliver(mention({ senderIsBot: true }));
   await fx.bot().deliver(mention({ msgElements: [{ content: 'quoted image' }] }));
-  await fx.bot().deliver(mention({ attachments: [{ url: privateUrl, content_type: 'application/pdf' }] }));
   await fx.bot().deliver(mention({ attachments: [{ url: 'https://example.test/private', content_type: 'image/png' }] }));
   assert.deepEqual(fx.admitted, []);
+  await fx.bot().deliver(mention({ messageId: 'pdf-source', replyTarget: { scope: 'group', targetId: 'app-group', msgId: 'pdf-source' },
+    attachments: [{ url: privateUrl, content_type: 'application/pdf' }] }));
+  assert.equal(fx.admitted.length, 1);
+  assert.equal(fx.admitted[0].text, 'Inspect the shapes\n[Attachment not readable by the Bot]');
+  fx.admitted.length = 0;
   await fx.bot().deliver(mention({ content: '' }));
   assert.equal(fx.admitted.length, 1);
   assert.equal(fx.admitted[0].text, '[Image]');

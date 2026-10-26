@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { ApiError, getNextMsgSeq, messagePath } from '@tencent-connect/qqbot-nodejs/protocol';
 import { QqNativeReplyObservations, qqNativeIdentifier as identifier } from './native-reply-observations.mjs';
 import { qqSourceAttachments, readQqSourceAttachment, checkedQqImageFile, uploadQqCheckedMedia } from './external-images.mjs';
-import { checkedQqGenericFile, qqQuoteHasAttachments, qqQuotedFileMessage, qqQuotedTextMessage } from './external-files.mjs';
+import { checkedQqGenericFile, qqQuotedMessage } from './external-files.mjs';
+import { qqAttachmentLabel, qqReadableAttachments, qqSkippedAttachmentNotes } from './external-attachments.mjs';
 import { qqVoiceMessage } from './external-voice.mjs';
 import { qqExternalMentions } from './external-mentions.mjs';
 
@@ -85,6 +86,21 @@ export function normalizeQqExternalText(message, { botId, account, ordinaryText 
   });
 }
 
+/**
+ * Attachments this consumer cannot read are named in the text instead of
+ * dropping the whole message, and an @ with no text still reaches the Bot.
+ */
+function withReadableAttachments(message, options) {
+  if (typeof message?.content !== 'string') return message;
+  const { readable, skipped } = qqReadableAttachments(message.attachments, options);
+  const notes = qqSkippedAttachmentNotes(skipped);
+  const caption = message.content.trim();
+  const content = notes.length ? [...(caption ? [message.content] : []), ...notes].join('\n')
+    : !caption && !readable.length && isQqAddressedGroupMessage(message) ? '[Mentioned the Bot with no text]'
+      : message.content;
+  return { ...message, content, attachments: readable.length ? readable : undefined };
+}
+
 /** Bounded, process-local source proof, never a second durable Inbox or history. */
 export class QqExternalConsumer {
   #bot;
@@ -119,15 +135,21 @@ export class QqExternalConsumer {
     const addressed = isQqAddressedGroupMessage(message);
     const voice = addressed && (this.#sourceVoiceTranscripts() === true || this.#sourceVoiceAudio() === true)
       ? qqVoiceMessage(message, { sourceVoiceTranscripts: this.#sourceVoiceTranscripts() === true }) : undefined;
-    const quotedFiles = addressed && !voice && this.#sourceFiles() === true && qqQuoteHasAttachments(message);
-    const quoted = !addressed || voice ? undefined
-      : quotedFiles ? qqQuotedFileMessage(message) : qqQuotedTextMessage(message);
+    const ordinary = !addressed && this.#ordinaryText() === true && message?.kind === 'group'
+      && message.rawEventType === 'GROUP_MESSAGE_CREATE' && !message.senderIsBot
+      && message.senderId !== this.#account.userId;
+    const sourceImages = addressed && this.#sourceImages() === true;
+    const sourceFiles = addressed && this.#sourceFiles() === true;
+    const quoted = voice || !(addressed || ordinary) ? undefined
+      : qqQuotedMessage(message, { sourceImages, sourceFiles, ordinary });
     message = quoted?.message ?? message;
     message = voice?.message ?? message;
-    const mediaEnabled = addressed && (this.#sourceImages() === true || this.#sourceFiles() === true) && message?.attachments?.length;
+    if (!voice && (addressed || ordinary)) message = withReadableAttachments(message, { sourceImages, sourceFiles });
+    const mediaEnabled = addressed && message?.attachments?.length;
     const base = normalizeQqExternalText(mediaEnabled ? { ...message, attachments: undefined,
       content: typeof message.content === 'string' && !message.content.trim()
-        ? message.attachments.every(file => file?.content_type === 'file') ? '[File]' : '[Image]' : message.content } : message,
+        ? `[${message.attachments.map(qqAttachmentLabel).map(label => label[0].toUpperCase() + label.slice(1)).join('] [')}]`
+        : message.content } : message,
     { botId: this.#botId, account: this.#account, ordinaryText: this.#ordinaryText() === true });
     const media = base && voice && this.#sourceVoiceAudio() === true
       ? qqSourceAttachments(voice.nativeMessage, base, { sourceImages: false, sourceVoiceAudio: true, referenceKey: voice.referenceKey })

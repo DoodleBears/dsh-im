@@ -130,10 +130,17 @@ test('ordinary QQ text excludes own/bot echoes and media while keeping an explic
     onEvent: async event => { admitted.push(event); return { accepted: true }; } });
   for (const fields of [
     { senderIsBot: true }, { senderId: 'native-bot-id' }, { msgType: 103 },
-    { attachments: [{ content_type: 'image', url: 'https://example.test/image' }] },
     { kind: 'c2c', rawEventType: 'C2C_MESSAGE_CREATE' },
   ]) await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', ...fields }));
   assert.equal(admitted.length, 0);
+  await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE', messageId: 'ordinary-image',
+    replyTarget: { scope: 'group', targetId: 'app-scoped-group', msgId: 'ordinary-image' },
+    attachments: [{ content_type: 'image/png', url: 'https://multimedia.nt.qq.com.cn/image' }] }));
+  assert.equal(admitted.length, 1);
+  assert.equal(admitted[0].text, 'hello\n[Image not readable by the Bot]');
+  assert.equal(admitted[0].attachments, undefined);
+  assert.equal(admitted[0].mentionedAccount, false);
+  admitted.length = 0;
   await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE',
     mentions: [{ id: 'app-qualified-self', is_you: true }] }));
   assert.equal(admitted.length, 1);
@@ -546,7 +553,6 @@ test('QQ fences source routes, pending canonical admission, native send uncertai
   }), { code: 'consumer-conflict' });
   await fx.bot().deliver(mention({ kind: 'c2c', rawEventType: 'C2C_MESSAGE_CREATE' }));
   await fx.bot().deliver(mention({ rawEventType: 'GROUP_MESSAGE_CREATE' }));
-  await fx.bot().deliver(mention({ attachments: [{ url: 'https://example.test/private' }] }));
   assert.equal(admitted.length, 0);
   let acknowledged = false;
   const delivery = fx.bot().deliver(mention()).then(() => { acknowledged = true; });

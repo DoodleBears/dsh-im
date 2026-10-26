@@ -105,7 +105,10 @@ test('installed QQ voice contract preserves native platform ASR and replies unde
 test('QQ voice ASR requires its own opt-in and preserves explicit unavailable provenance', async t => {
   const disabled = await fixture(t, { sourceVoiceTranscripts: false });
   await disabled.bot().deliver(mention({ attachments: [{ content_type: 'voice', url: privateUrl, asr_refer_text: 'Do not admit' }] }));
-  assert.deepEqual(disabled.admitted, []);
+  assert.equal(disabled.admitted.length, 1);
+  assert.equal(disabled.admitted[0].text, 'Sum the quantities\n[Voice message not readable by the Bot]');
+  assert.equal(disabled.admitted[0].attachments, undefined);
+  assert.equal(disabled.admitted[0].voice, undefined);
   const fx = await fixture(t);
   await fx.bot().deliver(mention({ content: 'Please listen', attachments: [{ content_type: 'voice', url: privateUrl }] }));
   assert.equal(fx.admitted.length, 1);
