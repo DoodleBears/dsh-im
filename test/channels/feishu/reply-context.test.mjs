@@ -33,3 +33,9 @@ test('cancellation fences the qualification result',async () => {
   response.im.v1.message.get=async () => {controller.abort();return {code:0,data:{items:[source]}}};
   await assert.rejects(qualifyExternalReply(response,route,controller.signal));
 });
+test('qualifies a reply to an external Bot message and keeps the event sender ID', async () => {
+  const bot = {...source,sender:{sender_type:'app',id_type:'app_id',id:'cli-peer'}};
+  assert.deepEqual(await qualifyExternalReply(client({code:0,data:{items:[bot]}}),route),route);
+  await assert.rejects(qualifyExternalReply(client({code:0,data:{items:[{...bot,sender:{sender_type:'app',id_type:'app_id',id:''}}]}}),route),{code:'stale-route'});
+  await assert.rejects(qualifyExternalReply(client({code:0,data:{items:[{...source,sender:{sender_type:'unknown',id:'x'}}]}}),route),{code:'stale-route'});
+});

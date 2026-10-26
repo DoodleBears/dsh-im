@@ -37,6 +37,24 @@ test('normalized authenticated text retains causal identities without raw payloa
   assert.equal(normalized({ ...input, message: { ...input.message, chat_type: 'unknown' } }), null);
 });
 
+test('an external Bot is admitted only when it mentions this account in a group', () => {
+  const bot = { sender_type: 'app', sender_id: { open_id: 'peer-bot' }, sender_name: 'Peer Bot' };
+  const evidence = normalized({ ...event(), sender: bot });
+  assert.deepEqual(evidence.actor, { kind: 'bot', id: 'peer-bot', name: 'Peer Bot' });
+  assert.equal(evidence.mentionedAccount, true);
+  assert.equal(evidence.reply.actorId, 'peer-bot');
+  assert.equal(normalized({ ...event(), sender: { ...bot, sender_type: 'bot' } }).actor.kind, 'bot');
+  const unaddressed = event();
+  unaddressed.message.mentions = [{ id: { open_id: 'someone-else' }, key: '@_user_1', name: 'Other' }];
+  assert.equal(normalized({ ...unaddressed, sender: bot }), null);
+  assert.equal(normalized({ ...event(), sender: { ...bot, sender_id: { open_id: 'bot-open-id' } } }), null);
+  assert.equal(normalized({ ...event(), sender: { ...bot, sender_id: { open_id: 'x', app_id: 'app' } } }), null);
+  const direct = event();
+  direct.message.chat_type = 'p2p';
+  assert.equal(normalized({ ...direct, sender: bot }), null);
+  assert.equal(normalized(event()).actor.kind, 'user');
+});
+
 test('exclusive registration waits for durable acceptance and disposal never substitutes another consumer', async () => {
   const consumers = new ExclusiveInboundConsumers();
   let commit;

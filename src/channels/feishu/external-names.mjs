@@ -1,3 +1,5 @@
+import { sourceSenderMatches } from './external-sender.mjs';
+
 const NAME_TTL_MS = 60 * 60 * 1000;
 const MISS_TTL_MS = 60 * 1000;
 const CACHE_LIMIT = 1000;
@@ -64,8 +66,7 @@ export async function externalSenderName(client, evidence, { signal, timeoutMs =
     const source = response?.data?.items?.find(item => item.message_id === evidence.messageId);
     if (response?.code || !source || source.deleted === true || source.msg_type !== 'text'
       || source.chat_id !== route.conversationId
-      || source.sender?.sender_type !== 'user' || source.sender?.id_type !== 'open_id'
-      || source.sender?.id !== evidence.actor.id
+      || !sourceSenderMatches(source.sender, evidence.actor.id)
       || (source.thread_id || undefined) !== route.threadId
       || (source.root_id || undefined) !== route.rootId
       || (source.parent_id || undefined) !== route.parentId) return undefined;

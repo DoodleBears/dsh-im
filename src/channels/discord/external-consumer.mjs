@@ -107,7 +107,7 @@ export function discordMessageContentAllowed(application) {
 }
 
 export function normalizeDiscordExternalText(message, { botId, account, channel, eventId, ordinaryText = false }) {
-  return normalizeDiscordHumanText(message, { botId, account, channel, eventId }, ordinaryText !== true);
+  return normalizeDiscordHumanText(message, { botId, account, channel, eventId }, ordinaryText !== true, true);
 }
 
 /** History visibility never relaxes the mention-only live admission predicate. */
@@ -115,15 +115,15 @@ export function normalizeDiscordHistoryText(message, identity) {
   return normalizeDiscordHumanText(message, identity, false);
 }
 
-function normalizeDiscordHumanText(message, { botId, account, channel, eventId }, requireMention) {
+function normalizeDiscordHumanText(message, { botId, account, channel, eventId }, requireMention, allowBots = false) {
   if (!discordSnowflake(message?.id) || !discordSnowflake(message?.author?.id)
-    || message.author.bot === true || message.webhook_id || message.author.id === account.userId
+    || (message.author.bot === true && !allowBots) || message.webhook_id || message.author.id === account.userId
     || ![0, 19].includes(message.type) || typeof message.content !== 'string' || !message.content.trim()
     || message.content.length > 16000 || !Array.isArray(message.mentions)) return null;
   if (message.guild_id !== channel.guildId || message.channel_id !== channel.channelId)
     throw discordRefusal('stale-route');
   const mentionedAccount = message.mentions.some(user => user.id === account.userId);
-  if (requireMention && !mentionedAccount) return null;
+  if ((requireMention || message.author.bot === true) && !mentionedAccount) return null;
   const timestamp = Date.parse(message.timestamp);
   if (!Number.isFinite(timestamp) || typeof eventId !== 'string' || !eventId || eventId.length > 512)
     throw discordRefusal('invalid-inbound');
@@ -133,7 +133,7 @@ function normalizeDiscordHumanText(message, { botId, account, channel, eventId }
     .map(user => ({ id: user.id, key: `<@${user.id}>`,
       ...(user.id === account.userId ? { name: account.name } : {}) }));
   return { version: 1, channel: 'discord', botId, fingerprint: account.fingerprint,
-    eventId, messageId: message.id, actor: { kind: 'user', id: message.author.id, ...(name ? { name: name.slice(0, 512) } : {}) },
+    eventId, messageId: message.id, actor: { kind: message.author.bot === true ? 'bot' : 'user', id: message.author.id, ...(name ? { name: name.slice(0, 512) } : {}) },
     conversation: { kind: 'group', id: channel.conversationId, ...(channel.name ? { name: channel.name } : {}) }, mentions, mentionedAccount,
     at: new Date(timestamp).toISOString(), text: message.content,
     reply: { messageId: message.id, conversationId: channel.conversationId, actorId: message.author.id,
@@ -153,7 +153,7 @@ export async function qualifyDiscordReply(api, account, route, signal, permissio
   try { source = await api.getMessage({ channelId: channel.channelId, messageId: route.messageId, signal }); }
   catch (error) { throw nativeFailure(error, 'source-not-found'); }
   if (source?.id !== route.messageId || source.channel_id !== channel.channelId
-    || source.author?.id !== route.actorId || source.author.bot === true || source.webhook_id
+    || source.author?.id !== route.actorId || source.author.id === account.userId || source.webhook_id
     || ![0, 19].includes(source.type)) throw discordRefusal('stale-route');
   signal?.throwIfAborted();
   return { channel, route: { ...route }, source };

@@ -937,9 +937,10 @@ export class DiscordRuntime {
 
   async #acceptExternalMessage(message, sequence, generation) {
     if (!this.#account || !this.#status.ready || generation !== this.#generation
-      || !message?.guild_id || message.author?.bot === true || message.webhook_id
+      || !message?.guild_id || message.webhook_id || message.author?.id === this.#account.userId
       || !Array.isArray(message.mentions)) return;
     const mentioned = message.mentions.some(user => user.id === this.#account.userId);
+    if (message.author?.bot === true && !mentioned) return;
     if (!mentioned && (!this.#ordinaryAuthorized || this.#externalOrdinaryText() !== true
       || typeof message.content !== 'string' || !message.content.trim())) return;
     const checked = this.#checkedLifetime();

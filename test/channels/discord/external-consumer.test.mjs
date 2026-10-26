@@ -96,8 +96,11 @@ test('channel mention is native direct addressing, preserves IDs and creates no 
   assert.equal(e.reply.threadId, undefined); assert.equal(e.reply.parentId, undefined);
   f.message.mentions = []; assert.equal(await event(f), null);
   f.message.mention_everyone = true; f.message.mention_roles = [ids.role]; assert.equal(await event(f), null);
-  f.message.mentions = [{ id: ids.bot }]; f.message.author.bot = true; assert.equal(await event(f), null);
-  f.message.author.bot = false; f.message.webhook_id = ids.actor; assert.equal(await event(f), null);
+  f.message.mentions = [{ id: ids.bot }]; f.message.author.bot = true;
+  assert.deepEqual((await event(f)).actor, { kind: 'bot', id: ids.actor, name: 'QA Human' });
+  f.message.mentions = []; assert.equal(await event(f), null);
+  f.message.mentions = [{ id: ids.bot }]; f.message.author.id = ids.bot; assert.equal(await event(f), null);
+  f.message.author = { ...f.message.author, id: ids.actor, bot: false }; f.message.webhook_id = ids.actor; assert.equal(await event(f), null);
 });
 
 test('existing public thread retains native child and parent channel without fabricating message ancestry', async () => {
@@ -313,7 +316,7 @@ test('Gateway attachment admission requires opted-in mention; rejects unsupporte
     assert.equal(received[0].attachments[0].resourceKey, ids.sent);
     assert.equal(received[0].reply.threadId, ids.thread);
     assert.equal(JSON.stringify(received[0]).includes('signed'), false);
-    for (const value of [{ ...f.message, mentions: [] }, { ...f.message, author: { id: ids.actor, bot: true } },
+    for (const value of [{ ...f.message, mentions: [] }, { ...f.message, mentions: [], author: { id: ids.actor, bot: true } },
       { ...f.message, webhook_id: ids.bot }, { ...f.message, attachments: [f.message.attachments[0], f.message.attachments[0]] }]) await dispatch(value);
     assert.equal(received.length, 1); assert.ok(failures.length > 0);
     optIn = false; await dispatch(f.message);
