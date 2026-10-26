@@ -1,6 +1,7 @@
 import { nativeImageContent } from './external-images.mjs';
 import { createHash } from 'node:crypto';
 import { VerifiedFeishuChannel } from './feishu-channel.mjs';
+import { sourceSenderMatches } from './external-sender.mjs';
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const failure = (code) => Object.assign(new Error(code), { code });
@@ -11,8 +12,7 @@ export async function checkedReplySource(client, route, signal) {
   const current = await client.im.v1.message.get({ path: { message_id: route.messageId } });
   const source = current?.data?.items?.find(item => item.message_id === route.messageId);
   if (current?.code || !source || source.deleted === true || source.chat_id !== route.conversationId
-    || source.sender?.sender_type !== 'user' || source.sender?.id_type !== 'open_id'
-    || source.sender?.id !== route.actorId || (source.thread_id || undefined) !== route.threadId
+    || !sourceSenderMatches(source.sender, route.actorId) || (source.thread_id || undefined) !== route.threadId
     || (source.root_id || undefined) !== route.rootId || (source.parent_id || undefined) !== route.parentId)
     throw failure('stale-route');
   signal?.throwIfAborted();

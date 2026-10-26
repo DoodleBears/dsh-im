@@ -1,3 +1,5 @@
+import { isBotSenderType, sourceSenderMatches } from './external-sender.mjs';
+
 function refuse(code) { throw Object.assign(new Error(code), { code }); }
 const fields = ['messageId', 'conversationId', 'actorId'];
 const optional = ['threadId', 'rootId', 'parentId'];
@@ -13,10 +15,11 @@ export async function qualifyExternalReply(client, route, signal) {
   if (current?.code !== 0 || !Array.isArray(current?.data?.items)) refuse('source-unavailable');
   const source = current?.data?.items?.find(item => item.message_id === route.messageId);
   if (!source || source.deleted) refuse('source-not-found');
-  if (source.chat_id !== route.conversationId || source.sender?.sender_type !== 'user'
-    || source.sender?.id_type !== 'open_id' || typeof source.sender.id !== 'string' || !source.sender.id
+  if (source.chat_id !== route.conversationId
+    || !sourceSenderMatches(source.sender, source.sender?.id)
+    || typeof source.sender.id !== 'string' || !source.sender.id
     || optional.some(key => (source[{threadId:'thread_id',rootId:'root_id',parentId:'parent_id'}[key]] || undefined) !== route[key]))
     refuse('stale-route');
   return Object.freeze({ messageId: route.messageId, conversationId: route.conversationId,
-    actorId: source.sender.id, ...Object.fromEntries(optional.filter(key => route[key] !== undefined).map(key => [key, route[key]])) });
+    actorId: isBotSenderType(source.sender) ? route.actorId : source.sender.id, ...Object.fromEntries(optional.filter(key => route[key] !== undefined).map(key => [key, route[key]])) });
 }
