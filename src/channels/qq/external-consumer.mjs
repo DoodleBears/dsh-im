@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { ApiError, getNextMsgSeq, messagePath } from '@tencent-connect/qqbot-nodejs/protocol';
 import { QqNativeReplyObservations, qqNativeIdentifier as identifier } from './native-reply-observations.mjs';
 import { qqSourceAttachments, readQqSourceAttachment, checkedQqImageFile, uploadQqCheckedMedia } from './external-images.mjs';
-import { checkedQqGenericFile, qqQuotedFileMessage } from './external-files.mjs';
+import { checkedQqGenericFile, qqQuotedFileMessage, qqQuotedTextMessage } from './external-files.mjs';
 import { qqVoiceMessage } from './external-voice.mjs';
 import { qqExternalMentions } from './external-mentions.mjs';
 
@@ -101,7 +101,11 @@ export class QqExternalConsumer {
     const addressed = isQqAddressedGroupMessage(message);
     const voice = addressed && (this.#sourceVoiceTranscripts() === true || this.#sourceVoiceAudio() === true)
       ? qqVoiceMessage(message, { sourceVoiceTranscripts: this.#sourceVoiceTranscripts() === true }) : undefined;
-    const quoted = addressed && !voice && this.#sourceFiles() === true ? qqQuotedFileMessage(message) : undefined;
+    const quotedFiles = addressed && !voice && this.#sourceFiles() === true
+      && (message?.raw?.msg_elements?.[0]?.attachments?.length > 0
+        || message?.msgElements?.[0]?.attachments?.length > 0);
+    const quoted = !addressed || voice ? undefined
+      : quotedFiles ? qqQuotedFileMessage(message) : qqQuotedTextMessage(message);
     message = quoted?.message ?? message;
     message = voice?.message ?? message;
     const mediaEnabled = addressed && (this.#sourceImages() === true || this.#sourceFiles() === true) && message?.attachments?.length;

@@ -18,9 +18,8 @@ export function qqQuotedFileMessage(message) {
   return qqQuotedMediaMessage(message, { accepts: files => files.every(file => file?.content_type === 'file'), label: 'file' });
 }
 
-/** Shared native quote authority; each media owner supplies its own category policy. */
-export function qqQuotedMediaMessage(message, { accepts, label, requireCaption = true }) {
-  if (message?.msgType !== 103) return undefined;
+/** Verified single quoted element of an addressed native quote; throws a visible refusal otherwise. */
+function qqQuotedElement(message) {
   const raw = message.raw;
   const elements = raw?.msg_elements;
   const element = Array.isArray(elements) && elements.length === 1 ? elements[0] : undefined;
@@ -41,10 +40,34 @@ export function qqQuotedMediaMessage(message, { accepts, label, requireCaption =
     || Object.keys(element).some(field => !['msg_idx', 'content', 'message_type', 'attachments'].includes(field))
     || (element.message_type !== undefined && (!Number.isSafeInteger(element.message_type)
       || element.message_type < 0))
-    || !Array.isArray(element.attachments) || !element.attachments.length
-    || !accepts(element.attachments)
-    || typeof message.content !== 'string' || (requireCaption && !message.content.trim()))
+    || (element.attachments !== undefined && !Array.isArray(element.attachments))
+    || (element.content !== undefined && typeof element.content !== 'string')
+    || typeof message.content !== 'string')
+    throw refusal('invalid-inbound', 'quote-elements-invalid');
+  return { key, element };
+}
+
+/** Shared native quote authority; each media owner supplies its own category policy. */
+export function qqQuotedMediaMessage(message, { accepts, label, requireCaption = true }) {
+  if (message?.msgType !== 103) return undefined;
+  const { key, element } = qqQuotedElement(message);
+  if (!element.attachments?.length || !accepts(element.attachments)
+    || (requireCaption && !message.content.trim()))
     throw refusal('invalid-inbound', 'quote-elements-invalid');
   return { referenceKey: key, message: { ...message, msgType: 0, msgElements: undefined,
     content: `${message.content}\n[Quoted ${label}]`, attachments: element.attachments } };
+}
+
+/** A quoted text message carries no media, so it is admitted as text with the quote inline. */
+export function qqQuotedTextMessage(message) {
+  if (message?.msgType !== 103) return undefined;
+  // Quoted media stays with its own opted-in owner; without that opt-in it is not admitted.
+  if (message.raw?.msg_elements?.[0]?.attachments?.length
+    || message.msgElements?.[0]?.attachments?.length) return undefined;
+  const { element } = qqQuotedElement(message);
+  const quoted = (element.content ?? '').trim();
+  const caption = message.content.trim();
+  const content = `${caption ? `${caption}\n\n` : ''}[Quoted message]${quoted ? `\n${quoted}` : ''}`;
+  if (content.length > 16000) throw refusal('invalid-inbound', 'quote-elements-invalid');
+  return { message: { ...message, msgType: 0, msgElements: undefined, content } };
 }
