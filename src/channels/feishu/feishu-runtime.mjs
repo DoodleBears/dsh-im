@@ -23,6 +23,7 @@ import {
   sendRememberedConnectionTest,
 } from '../shared/connection-test.mjs';
 import { t } from '../shared/i18n.mjs';
+import { sourceSenderMatches } from './external-sender.mjs';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const CALLBACK_PROBE_SUCCESS_NOTICE = '✅ 修复完成：已实测收到 card.action.trigger，菜单按钮现在可用。';
@@ -918,8 +919,7 @@ export class FeishuRuntime {
     const current = await client.im.v1.message.get({ path: { message_id: route.messageId } });
     const source = current?.data?.items?.find(item => item.message_id === route.messageId);
     if (current?.code || !source || source.deleted === true || source.chat_id !== route.conversationId
-      || source.sender?.sender_type !== 'user' || source.sender?.id_type !== 'open_id'
-      || source.sender?.id !== route.actorId || (source.thread_id || undefined) !== route.threadId
+      || !sourceSenderMatches(source.sender, route.actorId) || (source.thread_id || undefined) !== route.threadId
       || (source.root_id || undefined) !== route.rootId || (source.parent_id || undefined) !== route.parentId)
       throw Object.assign(new Error('stale-route'), { code: 'stale-route' });
     signal?.throwIfAborted();

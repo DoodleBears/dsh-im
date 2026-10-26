@@ -1,4 +1,5 @@
 import { nativeImageContent } from './external-images.mjs';
+import { isBotSenderType } from './external-sender.mjs';
 function refusal(code) {
   const error = new Error(code);
   error.code = code;
@@ -17,8 +18,10 @@ export function normalizeExternalText(event, { botId, appId, botOpenId, fingerpr
   const eventId = identifier(event?.event_id ?? event?.header?.event_id);
   const eventApp = event?.app_id ?? event?.header?.app_id;
   if (eventApp !== undefined && eventApp !== appId) throw refusal('account-changed');
-  if (event?.sender?.sender_type === 'app' || event?.sender?.sender_type === 'bot') return null;
-  if (event?.sender?.sender_type !== 'user'
+  const botSender = isBotSenderType(event?.sender);
+  if (botSender && (message?.chat_type !== 'group' || !identifier(botOpenId) || !actorId || actorId === botOpenId
+    || event?.sender?.sender_id?.app_id === appId)) return null;
+  if ((!botSender && event?.sender?.sender_type !== 'user')
     || !['p2p', 'group'].includes(message?.chat_type) || message?.message_type !== 'text') return null;
   if (message.chat_type === 'group' && !identifier(botOpenId)) throw refusal('account-unverified');
   if (message.mentions !== undefined && (!Array.isArray(message.mentions) || message.mentions.length > 100))
@@ -30,6 +33,7 @@ export function normalizeExternalText(event, { botId, appId, botOpenId, fingerpr
     const name = identifier(mention?.name);
     return Object.freeze({ id, key, ...(name ? { name } : {}) });
   }));
+  if (botSender && !mentions.some(mention => mention.id === botOpenId)) return null;
   if (!actorId || !messageId || !conversationId || !eventId
     || !/^[a-f0-9]{64}$/.test(fingerprint ?? '')) throw refusal('invalid-inbound');
   let text;
@@ -47,7 +51,7 @@ export function normalizeExternalText(event, { botId, appId, botOpenId, fingerpr
   });
   return Object.freeze({
     version: 1, channel: 'feishu', botId, fingerprint, eventId, messageId,
-    actor: Object.freeze({ kind: 'user', id: actorId,
+    actor: Object.freeze({ kind: botSender ? 'bot' : 'user', id: actorId,
       ...(identifier(event.sender.sender_name) ? { name: event.sender.sender_name } : {}) }),
     conversation: Object.freeze({ kind: message.chat_type === 'group' ? 'group' : 'dm', id: conversationId }),
     mentions, mentionedAccount: mentions.some(mention => mention.id === botOpenId),
@@ -59,7 +63,7 @@ export function normalizeExternalText(event, { botId, appId, botOpenId, fingerpr
 export function normalizeExternalMedia(event, identity) {
   const message = event?.message;
   if (!['image', 'post'].includes(message?.message_type)) return normalizeExternalText(event, identity);
-  if (event?.sender?.sender_type !== 'user') return null;
+  if (event?.sender?.sender_type !== 'user' && !isBotSenderType(event?.sender)) return null;
   const media = nativeImageContent(message, message.chat_id);
   if (!media) return null;
   const base = normalizeExternalText({ ...event, message: { ...message, message_type: 'text', content: JSON.stringify({ text: media.text }) } }, identity);

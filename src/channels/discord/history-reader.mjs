@@ -75,7 +75,7 @@ export function createDiscordHistoryReader({ now = Date.now } = {}) {
         messageId: route.messageId, signal }));
       if (source?.id !== route.messageId || source.channel_id !== sourceChannel.channelId
         || (source.guild_id !== undefined && source.guild_id !== sourceChannel.guildId)
-        || source.author?.id !== route.actorId || source.author.bot === true || source.webhook_id
+        || source.author?.id !== route.actorId || source.author.id === current.userId || source.webhook_id
         || ![0, 19].includes(source.type)) throw discordRefusal('stale-route');
       const channel = query.scope === 'thread' || query.scope === 'nearby' ? sourceChannel : await checked(() =>
         inspectDiscordSourceChannel(api, route.conversationId, current, signal, { forHistory: true }));

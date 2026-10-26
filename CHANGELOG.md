@@ -16,6 +16,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- 飞书/Lark 与 Discord 独占外部 Consumer 接收其他 Bot 在群里明确 @ 本账号的文字消息，以 `actor.kind: 'bot'` 交给 Host，并允许在该消息上做受校验的回复；没有 @ 本账号的 Bot 消息、私聊里的 Bot 消息、自身消息和 Discord webhook 仍被排除。需要接受 Bot 发送者的 BotHarness Host（[BotHarness #2872](https://github.com/BotHarness/DeepSeekBot/issues/2872)）。
+  Lark and Discord exclusive external Consumers accept text from another Bot that explicitly mentions this account in a group, hand it to the Host as `actor.kind: 'bot'`, and allow a checked reply on that message. Bot messages without a mention of this account, Bot messages in direct chats, own messages and Discord webhooks are still excluded. Requires a BotHarness Host that accepts Bot senders ([BotHarness #2872](https://github.com/BotHarness/DeepSeekBot/issues/2872)).
+
 - 本次 #1115 候选补齐 Discord/Slack 可达群查询与首次发帖，保留旧目标的发送前授权检查，并恢复同一 Provider 中的 Lark/微信设置流程；尚未发布，不替代原生验收或已发布 pin。
   This #1115 candidate adds Discord/Slack reachable-group discovery and first posting, preserves final authorization for saved targets, and restores Lark/WeChat setup in the same Provider. It is unreleased and does not substitute for native qualification or the published pin.
 
