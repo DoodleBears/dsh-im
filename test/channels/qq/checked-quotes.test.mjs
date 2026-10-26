@@ -154,6 +154,13 @@ test('an ordinary quote is admitted as text when ordinary messages are on', asyn
   assert.equal(event.attachments, undefined);
 });
 
+test('QQ face tags inside the quoted text are rendered as text', async () => {
+  const fx = consumer();
+  const face = `<faceType=6,faceId="0",ext="${Buffer.from(JSON.stringify({ text: '[smile]' })).toString('base64')}">`;
+  await fx.consumer.accept(quotedTextMention({ quoted: `hello ${face}` }), new AbortController().signal);
+  assert.equal(fx.accepted[0].text, 'what does this mean?\n\n[Quoted message]\nhello 【表情: [smile]】');
+});
+
 test('a quote whose normalized and raw attachments disagree is refused', async () => {
   const fx = consumer({ sourceImages: true });
   const message = quotedTextMention({ attachments: [image] });

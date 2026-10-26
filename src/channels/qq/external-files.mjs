@@ -3,6 +3,14 @@ import { QQ_EXTERNAL_IMAGE_LIMIT } from './external-images.mjs';
 import { qqNativeIdentifier } from './native-reply-observations.mjs';
 import { qqAttachmentLabel, qqReadableAttachments, qqSkippedAttachmentNotes } from './external-attachments.mjs';
 
+// Same rendering as the SDK contentSanitizer applies to the top-level body.
+function qqFaceText(text) {
+  return text.replace(/<faceType=\d+,faceId="[^"]*",ext="([^"]*)">/g, (tag, ext) => {
+    try { return `【表情: ${JSON.parse(Buffer.from(ext, 'base64').toString('utf-8')).text || '未知表情'}】`; }
+    catch { return tag; }
+  });
+}
+
 const refusal = (code, reason) => Object.assign(new Error(code), { code, ...(reason ? { reason } : {}) });
 
 export function checkedQqGenericFile(file) {
@@ -67,7 +75,8 @@ export function qqQuotedMessage(message, { sourceImages = false, sourceFiles = f
   const { key, element } = qqQuotedElement(message, { ordinary });
   const { readable, skipped } = qqReadableAttachments(element.attachments,
     ordinary ? {} : { sourceImages, sourceFiles });
-  const quoted = (element.content ?? '').trim();
+  // The SDK sanitizer only rewrites the top-level body, so quoted QQ faces are rendered here.
+  const quoted = qqFaceText(element.content ?? '').trim();
   const caption = message.content.trim();
   const lines = ['[Quoted message]', ...(quoted ? [quoted] : []),
     ...readable.map(file => `[Quoted ${qqAttachmentLabel(file)}]`),
