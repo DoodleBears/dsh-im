@@ -253,6 +253,28 @@ export function qqInboundMessage(message, { fetchImpl = fetch } = {}) {
   };
 }
 
+// QQ accepts passive replies to an inbound msg_id for a bounded window
+// (C2C 60 min, group 5 min). Proactive C2C/group sends are quota-limited and
+// are often refused, so a late result keeps the passive route while the
+// window is still open and only falls back to proactive delivery after it.
+const PASSIVE_REPLY_WINDOW_MS = Object.freeze({ c2c: 60 * 60_000, group: 5 * 60_000 });
+const PASSIVE_REPLY_MARGIN_MS = 30_000;
+
+function deferredQqTarget(message, target) {
+  const route = { scope: target.scope, targetId: target.targetId };
+  const msgId = nonEmptyString(target.msgId);
+  if (!msgId || !PASSIVE_REPLY_WINDOW_MS[target.scope]) return route;
+  const sentAt = Date.parse(message?.timestamp ?? '');
+  return { ...route, msgId, receivedAt: Number.isFinite(sentAt) ? Math.min(sentAt, Date.now()) : Date.now() };
+}
+
+export function deferredDeliveryTarget(target, now = Date.now()) {
+  const route = { scope: target?.scope, targetId: target?.targetId };
+  const window = PASSIVE_REPLY_WINDOW_MS[target?.scope];
+  if (!nonEmptyString(target?.msgId) || !window || !Number.isFinite(target?.receivedAt)) return route;
+  return now - target.receivedAt < window - PASSIVE_REPLY_MARGIN_MS ? { ...route, msgId: target.msgId } : route;
+}
+
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
@@ -709,7 +731,7 @@ export class QqHarnessBridge {
   }
 
   async #deliverDeferredOutcome(entry, outcome) {
-    await sendMarkdownReply(this.#bot, entry.target, deferredOutcomeText(outcome), { logger: this.#logger });
+    await sendMarkdownReply(this.#bot, deferredDeliveryTarget(entry.target), deferredOutcomeText(outcome), { logger: this.#logger });
     return true;
   }
 
@@ -1064,7 +1086,7 @@ export class QqHarnessBridge {
         // redelivery after a failed error notice must never execute it twice.
         await markMessageSeen();
         ({ answer, artifacts = [] } = await askInWorkspaceSession({
-          deferredDelivery: () => ({ coordinator: this.#deferred, target: { scope: target.scope, targetId: target.targetId } }),
+          deferredDelivery: () => ({ coordinator: this.#deferred, target: deferredQqTarget(message, target) }),
           harness: this.#harness,
           state: this.#state,
           key,

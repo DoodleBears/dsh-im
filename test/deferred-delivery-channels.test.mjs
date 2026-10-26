@@ -12,7 +12,7 @@ import { ConversationStateStore } from '../src/channels/shared/conversation-stat
 import { FeishuHarnessBridge } from '../src/channels/feishu/bridge.mjs';
 import { WecomHarnessBridge } from '../src/channels/wecom/wecom-bridge.mjs';
 import { WeixinHarnessBridge } from '../src/channels/weixin/weixin-bridge.mjs';
-import { QqHarnessBridge } from '../src/channels/qq/qq-bridge.mjs';
+import { QqHarnessBridge, deferredDeliveryTarget } from '../src/channels/qq/qq-bridge.mjs';
 import { DingtalkHarnessBridge } from '../src/channels/dingtalk/dingtalk-bridge.mjs';
 import { TelegramHarnessBridge } from '../src/channels/telegram/telegram-bridge.mjs';
 import { DiscordHarnessBridge } from '../src/channels/discord/discord-bridge.mjs';
@@ -70,7 +70,7 @@ function channelFixture(channel, record) {
     } }),
     message: (id, text) => ({ headers: { req_id: id }, body: { msgid: id, chattype: 'single', from: { userid: 'owner' }, msgtype: 'text', text: { content: text } } }),
   };
-  if (channel === 'qq') return { Store: QqStateStore, target: { scope: 'c2c', targetId: 'owner' },
+  if (channel === 'qq') return { Store: QqStateStore, target: { scope: 'c2c', targetId: 'owner', msgId: 'input' },
     create: (options) => new QqHarnessBridge({ ...options, ownerUserOpenid: 'owner', bot: { sendText: async (target, text) => record(target, text) } }),
     message: (messageId, content) => ({ kind: 'c2c', rawEventType: 'C2C_MESSAGE_CREATE', senderId: 'owner', senderIsBot: false, messageId, content,
       replyTarget: { scope: 'c2c', targetId: 'owner', msgId: messageId } }),
@@ -156,3 +156,20 @@ for (const channel of ['feishu', 'wecom', 'weixin', 'dingtalk', 'qq', ...Object.
     assert.equal(asks, 1, 'recovery must not submit the prompt again');
   });
 }
+
+test('qq: a deferred result replies passively only while the QQ msg_id window is open', () => {
+  const receivedAt = Date.parse('2026-10-26T10:00:00Z');
+  const c2c = { scope: 'c2c', targetId: 'owner', msgId: 'input', receivedAt };
+  assert.deepEqual(deferredDeliveryTarget(c2c, receivedAt + 30 * 60_000),
+    { scope: 'c2c', targetId: 'owner', msgId: 'input' });
+  assert.deepEqual(deferredDeliveryTarget(c2c, receivedAt + 60 * 60_000),
+    { scope: 'c2c', targetId: 'owner' });
+  const group = { scope: 'group', targetId: 'group', msgId: 'input', receivedAt };
+  assert.deepEqual(deferredDeliveryTarget(group, receivedAt + 2 * 60_000),
+    { scope: 'group', targetId: 'group', msgId: 'input' });
+  assert.deepEqual(deferredDeliveryTarget(group, receivedAt + 5 * 60_000),
+    { scope: 'group', targetId: 'group' });
+  // Entries persisted before this change carry no msg_id and stay proactive.
+  assert.deepEqual(deferredDeliveryTarget({ scope: 'c2c', targetId: 'owner' }, receivedAt),
+    { scope: 'c2c', targetId: 'owner' });
+});
