@@ -58,6 +58,7 @@ export class QqRuntime {
   #sourceVoiceTranscripts;
   #sourceVoiceAudio;
   #ordinaryText;
+  #directMessages;
   #rateLimitRetryDelaysMs;
   #externalBridge = null;
 
@@ -76,7 +77,7 @@ export class QqRuntime {
     externalConsumer,
     sourceImages = () => false,
     sourceFiles = () => false,
-    sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false, ordinaryText = () => false,
+    sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false, ordinaryText = () => false, directMessages = () => false,
     rateLimitRetryDelaysMs,
   }) {
     if (!config || !appSecret || !harness || !state) {
@@ -99,6 +100,7 @@ export class QqRuntime {
     this.#sourceVoiceTranscripts = sourceVoiceTranscripts;
     this.#sourceVoiceAudio = sourceVoiceAudio;
     this.#ordinaryText = ordinaryText;
+    this.#directMessages = directMessages;
     this.#rateLimitRetryDelaysMs = rateLimitRetryDelaysMs;
   }
 
@@ -343,6 +345,7 @@ export class QqRuntime {
           sourceVoiceTranscripts: this.#sourceVoiceTranscripts,
           sourceVoiceAudio: this.#sourceVoiceAudio,
           ordinaryText: this.#ordinaryText,
+          directMessages: this.#directMessages,
           rateLimitRetryDelaysMs: this.#rateLimitRetryDelaysMs,
           reportNativeObservation: record => this.#logger.info?.('[dsh-im:qq] native reply observation', record),
           reportNativeFrame: record => this.#logger.info?.('[dsh-im:qq] native reply frame', record),

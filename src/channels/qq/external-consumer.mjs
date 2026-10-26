@@ -1,4 +1,4 @@
-import { isQqAddressedGroupMessage } from './external-addressing.mjs';
+import { isQqAddressedGroupMessage, isQqAddressedMessage, isQqDirectMessage } from './external-addressing.mjs';
 import { createHash } from 'node:crypto';
 import { ApiError, getNextMsgSeq, messagePath } from '@tencent-connect/qqbot-nodejs/protocol';
 import { QqNativeReplyObservations, qqNativeIdentifier as identifier } from './native-reply-observations.mjs';
@@ -14,6 +14,9 @@ export function qqRefusal(code) { return Object.assign(new Error(code), { code }
 // after a short backoff; any other outcome is returned to the caller as is.
 const RATE_LIMIT_RETRY_DELAYS_MS = Object.freeze([1_000, 3_000]);
 const POST_QUEUE_WAIT_MS = 30_000;
+// QQ's passive reply rules: C2C replies stay open for 60 minutes and four replies, group replies for five and five.
+const PASSIVE_REPLY_WINDOW_MS = Object.freeze({ c2c: 60 * 60_000, group: 5 * 60_000 });
+const PASSIVE_REPLY_BUDGET = Object.freeze({ c2c: 4, group: 5 });
 
 function retryDelay(ms, signal) {
   return new Promise((resolve, reject) => {
@@ -58,18 +61,21 @@ export function verifiedQqAccount(appId, user) {
 
 /** QQ group and member OpenIDs belong to this authenticated application. */
 export function normalizeQqExternalText(message, { botId, account, ordinaryText = false }) {
-  const addressed = isQqAddressedGroupMessage(message);
+  const direct = isQqDirectMessage(message);
+  const addressed = direct || isQqAddressedGroupMessage(message);
   const ordinary = ordinaryText === true && message?.kind === 'group'
     && message.rawEventType === 'GROUP_MESSAGE_CREATE';
   if (!(addressed || ordinary)
     || message.senderIsBot || message.senderId === account.userId
     || message.attachments?.length || message.msgElements?.length
     || (message.msgType !== undefined && message.msgType !== 0)) return null;
+  const conversationId = direct ? message.senderId : message.groupOpenid;
   if (!identifier(message.messageId) || !identifier(message.senderId)
-    || !identifier(message.groupOpenid) || typeof message.content !== 'string'
+    || !identifier(conversationId) || (direct && message.groupOpenid !== undefined)
+    || typeof message.content !== 'string'
     || !message.content.trim() || message.content.length > 16000
-    || message.replyTarget?.scope !== 'group'
-    || message.replyTarget.targetId !== message.groupOpenid
+    || message.replyTarget?.scope !== (direct ? 'c2c' : 'group')
+    || message.replyTarget.targetId !== conversationId
     || message.replyTarget.msgId !== message.messageId)
     throw qqRefusal('invalid-inbound');
   const at = new Date(message.timestamp);
@@ -79,9 +85,10 @@ export function normalizeQqExternalText(message, { botId, account, ordinaryText 
     actor: { kind: 'user', id: message.senderId,
       ...(typeof message.senderName === 'string' && message.senderName.trim()
         ? { name: message.senderName.slice(0, 512) } : {}) },
-    conversation: { kind: 'group', id: message.groupOpenid },
-    mentions: qqExternalMentions(message, account), mentionedAccount: addressed, at: at.toISOString(), text: message.content,
-    reply: { messageId: message.messageId, conversationId: message.groupOpenid, actorId: message.senderId },
+    conversation: { kind: direct ? 'dm' : 'group', id: conversationId },
+    mentions: direct ? [] : qqExternalMentions(message, account), mentionedAccount: !direct && addressed,
+    at: at.toISOString(), text: message.content,
+    reply: { messageId: message.messageId, conversationId, actorId: message.senderId },
     replay: { kind: 'provider-redelivery', resumeCursor: false, gapPossible: true },
   });
 }
@@ -113,10 +120,11 @@ export class QqExternalConsumer {
   #sourceVoiceTranscripts;
   #sourceVoiceAudio;
   #ordinaryText;
+  #directMessages;
   #rateLimitRetryDelaysMs;
   #sources = new Map();
   #posts = new Map();
-  constructor({ bot, account, botId, accept, sourceImages = () => false, sourceFiles = () => false, sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false, ordinaryText = () => false, reportNativeObservation = () => {}, reportNativeFrame, nativeUser, rateLimitRetryDelaysMs = RATE_LIMIT_RETRY_DELAYS_MS }) {
+  constructor({ bot, account, botId, accept, sourceImages = () => false, sourceFiles = () => false, sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false, ordinaryText = () => false, directMessages = () => false, reportNativeObservation = () => {}, reportNativeFrame, nativeUser, rateLimitRetryDelaysMs = RATE_LIMIT_RETRY_DELAYS_MS }) {
     this.#rateLimitRetryDelaysMs = rateLimitRetryDelaysMs;
     this.#bot = bot; this.#account = account; this.#botId = botId; this.#accept = accept;
     this.#observations = new QqNativeReplyObservations({ account, report: reportNativeObservation,
@@ -126,13 +134,16 @@ export class QqExternalConsumer {
     this.#sourceVoiceTranscripts = sourceVoiceTranscripts;
     this.#sourceVoiceAudio = sourceVoiceAudio;
     this.#ordinaryText = ordinaryText;
+    this.#directMessages = directMessages;
   }
   recordNativeReceipt(receipt, signal) {
     this.#observations.sent(receipt.conversationId, receipt.messageId, signal);
   }
   async accept(message, signal) {
     this.#observations.receive(message, signal);
-    const addressed = isQqAddressedGroupMessage(message);
+    // Private messages stay unadmitted until the consumer opts into them.
+    if (isQqDirectMessage(message) && this.#directMessages() !== true) return;
+    const addressed = isQqAddressedMessage(message);
     const voice = addressed && (this.#sourceVoiceTranscripts() === true || this.#sourceVoiceAudio() === true)
       ? qqVoiceMessage(message, { sourceVoiceTranscripts: this.#sourceVoiceTranscripts() === true }) : undefined;
     const ordinary = !addressed && this.#ordinaryText() === true && message?.kind === 'group'
@@ -179,9 +190,11 @@ export class QqExternalConsumer {
   }
   qualify(route, signal) {
     const source = this.#source(route, signal);
-    if (!source.event.mentionedAccount) throw qqRefusal('capability-unavailable');
-    if (Date.now() - Date.parse(source.event.at) >= 5 * 60_000) throw qqRefusal('reply-window-expired');
-    if (source.attempts >= 5) throw qqRefusal('reply-limit-exceeded');
+    const direct = source.event.conversation.kind === 'dm';
+    if (!direct && !source.event.mentionedAccount) throw qqRefusal('capability-unavailable');
+    if (Date.now() - Date.parse(source.event.at) >= PASSIVE_REPLY_WINDOW_MS[direct ? 'c2c' : 'group'])
+      throw qqRefusal('reply-window-expired');
+    if (source.attempts >= PASSIVE_REPLY_BUDGET[direct ? 'c2c' : 'group']) throw qqRefusal('reply-limit-exceeded');
     return structuredClone(source.event.reply);
   }
   async readImage(route, attachment, options = {}) {
@@ -200,10 +213,14 @@ export class QqExternalConsumer {
           throw qqRefusal('source-unavailable');
       } });
   }
-  /** Posts to one group run one at a time; a rate-limited post backs off and retries. */
+  #scope(qualified) {
+    return this.#sources.get(qualified.messageId)?.event.conversation.kind === 'dm' ? 'c2c' : 'group';
+  }
+  /** Posts to one conversation run one at a time; a rate-limited post backs off and retries. */
   #post(qualified, body, signal, assertSendable) {
     const conversationId = qualified.conversationId;
-    const previous = this.#posts.get(conversationId) ?? Promise.resolve();
+    const scope = this.#scope(qualified);
+    const previous = this.#posts.get(`${scope}:${conversationId}`) ?? Promise.resolve();
     const run = async () => {
       for (let retry = 0; ; retry++) {
         assertSendable();
@@ -213,7 +230,7 @@ export class QqExternalConsumer {
         assertSendable();
         this.#sources.get(qualified.messageId).attempts++;
         try {
-          return await this.#bot.apiClient.request(token, 'POST', messagePath('group', conversationId), body);
+          return await this.#bot.apiClient.request(token, 'POST', messagePath(scope, conversationId), body);
         } catch (error) {
           const failure = nativeReplyFailure(error);
           if (failure.code !== 'reply-rate-limited' || retry >= this.#rateLimitRetryDelaysMs.length) throw failure;
@@ -228,8 +245,9 @@ export class QqExternalConsumer {
     const current = Promise.race([previous, retryDelay(POST_QUEUE_WAIT_MS).catch(() => undefined)])
       .catch(() => undefined).then(run);
     const tail = current.catch(() => undefined);
-    this.#posts.set(conversationId, tail);
-    tail.then(() => { if (this.#posts.get(conversationId) === tail) this.#posts.delete(conversationId); });
+    const key = `${scope}:${conversationId}`;
+    this.#posts.set(key, tail);
+    tail.then(() => { if (this.#posts.get(key) === tail) this.#posts.delete(key); });
     return current;
   }
   async replyFile(route, file, { signal, beforeSend, verifyAccount } = {}) {
@@ -239,7 +257,7 @@ export class QqExternalConsumer {
     const bytes = image ? checkedQqImageFile(file) : checkedQqGenericFile(file);
     if (beforeSend() !== true) throw qqRefusal('stale-route');
     if (signal?.aborted) throw qqRefusal('cancelled');
-    const target = { scope: 'group', targetId: qualified.conversationId, msgId: qualified.messageId };
+    const target = { scope: this.#scope(qualified), targetId: qualified.conversationId, msgId: qualified.messageId };
     const fileInfo = await uploadQqCheckedMedia(this.#bot, target, file, bytes, signal, image ? 1 : 4);
     await verifyAccount();
     const response = await this.#post(qualified,

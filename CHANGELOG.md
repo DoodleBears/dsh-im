@@ -28,6 +28,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Added / 新增
 
+- QQ 独占 Consumer 支持私聊：Consumer 声明 `directMessages` 后，私聊消息以 `dm` 会话进入，文字、图片、文件、引用和语音与群聊走同一套处理；回复按私聊被动回复规则发送（60 分钟、4 条）。新增能力 `direct-message-consumer`。
+  QQ exclusive Consumers support private chats. When a Consumer opts into `directMessages`, private messages arrive as `dm` conversations and get the same text, image, file, quote and voice handling as groups. Replies follow QQ's private passive reply rules (60 minutes, four replies). Adds the `direct-message-consumer` capability.
+
 - 飞书/Lark 与 Discord 独占外部 Consumer 接收其他 Bot 在群里明确 @ 本账号的文字消息，以 `actor.kind: 'bot'` 交给 Host，并允许在该消息上做受校验的回复；没有 @ 本账号的 Bot 消息、私聊里的 Bot 消息、自身消息和 Discord webhook 仍被排除。需要接受 Bot 发送者的 BotHarness Host（[BotHarness #2872](https://github.com/BotHarness/DeepSeekBot/issues/2872)）。
   Lark and Discord exclusive external Consumers accept text from another Bot that explicitly mentions this account in a group, hand it to the Host as `actor.kind: 'bot'`, and allow a checked reply on that message. Bot messages without a mention of this account, Bot messages in direct chats, own messages and Discord webhooks are still excluded. Requires a BotHarness Host that accepts Bot senders ([BotHarness #2872](https://github.com/BotHarness/DeepSeekBot/issues/2872)).
 
