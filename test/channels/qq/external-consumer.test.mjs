@@ -58,7 +58,7 @@ async function fixture(t, logger) {
     createRuntime: async args => new QqRuntime({
       ...args, state: {}, harness: { ensureRunning: async () => { standaloneRuns++; } },
       ...(logger ? { logger } : {}),
-      typingMiddleware: () => () => {}, connectTimeoutMs: 100,
+      typingMiddleware: () => () => {}, connectTimeoutMs: 100, rateLimitRetryDelaysMs: [0, 0],
       createBot: () => { bot = new PlatformBot(); return bot; },
     }),
   });
@@ -599,7 +599,8 @@ test('QQ preserves definite native refusals, expiry and the five-reply budget wi
       throw new ApiError('native rejection', httpStatus, '/v2/groups/test/messages', bizCode);
     };
     await assert.rejects(() => fx.controller.replyChecked(fx.botId, admitted.at(-1).reply, 'reply', options), { code });
-    assert.equal(fx.bot().sent.length, before + 1);
+    // Only a rate-limited refusal is retried (twice, with backoff); nothing else falls back.
+    assert.equal(fx.bot().sent.length, before + (code === 'reply-rate-limited' ? 3 : 1));
   }
   const messageId = 'expired';
   await fx.bot().deliver(mention({ messageId, timestamp: new Date(Date.now() - 300_001).toISOString(),
@@ -632,4 +633,38 @@ test('consumer mutation cannot redirect QQ source proof and legacy replies retai
   const result = await fx.controller.replyChecked(fx.botId, route, 'reply', options);
   assert.deepEqual(result, { sent: true, messageId: 'native-reply-id' });
   assert.equal(fx.bot().sent[0].target.targetId, 'app-scoped-group');
+});
+
+test('QQ retries a rate-limited reply, keeps the reply budget and serializes posts to one group', async t => {
+  const fx = await fixture(t);
+  const fingerprint = (await fx.controller.describeDeliveryAccount(fx.botId)).account.fingerprint;
+  const admitted = [];
+  await fx.controller.consumeInbound(fx.botId, { expectedFingerprint: fingerprint,
+    onEvent: async event => { admitted.push(event); return { accepted: true }; },
+  });
+  const options = { expectedFingerprint: fingerprint, receipt: true, beforeSend: () => true };
+  for (const messageId of ['burst-a', 'burst-b']) {
+    await fx.bot().deliver(mention({ messageId, replyTarget: { ...mention().replyTarget, msgId: messageId } }));
+  }
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let refusals = 2;
+  fx.bot().sendText = async (target, text) => {
+    inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    inFlight--;
+    fx.bot().sent.push({ target, text });
+    if (refusals-- > 0) throw new ApiError('rate limited', 429, '/v2/groups/test/messages', undefined);
+    return { id: `native-${text}`, timestamp: Date.now() };
+  };
+  const [a, b] = await Promise.all(admitted.map((event, index) =>
+    fx.controller.replyChecked(fx.botId, event.reply, `reply-${index}`, options)));
+  assert.equal(a.sent, true);
+  assert.equal(b.sent, true);
+  assert.equal(maxInFlight, 1, 'posts to one group are not sent concurrently');
+  assert.deepEqual(fx.bot().sent.map(row => row.text), ['reply-0', 'reply-0', 'reply-0', 'reply-1']);
+  // The two refused posts did not spend burst-a's five passive replies.
+  fx.bot().sendText = PlatformBot.prototype.sendText;
+  for (let index = 0; index < 4; index++) await fx.controller.replyChecked(fx.botId, admitted[0].reply, 'more', options);
+  await assert.rejects(() => fx.controller.replyChecked(fx.botId, admitted[0].reply, 'sixth', options), { code: 'reply-limit-exceeded' });
 });

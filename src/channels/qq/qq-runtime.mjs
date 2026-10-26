@@ -58,6 +58,7 @@ export class QqRuntime {
   #sourceVoiceTranscripts;
   #sourceVoiceAudio;
   #ordinaryText;
+  #rateLimitRetryDelaysMs;
   #externalBridge = null;
 
   constructor({
@@ -76,6 +77,7 @@ export class QqRuntime {
     sourceImages = () => false,
     sourceFiles = () => false,
     sourceVoiceTranscripts = () => false, sourceVoiceAudio = () => false, ordinaryText = () => false,
+    rateLimitRetryDelaysMs,
   }) {
     if (!config || !appSecret || !harness || !state) {
       throw new TypeError('QqRuntime requires config, app secret, Harness, and state');
@@ -97,6 +99,7 @@ export class QqRuntime {
     this.#sourceVoiceTranscripts = sourceVoiceTranscripts;
     this.#sourceVoiceAudio = sourceVoiceAudio;
     this.#ordinaryText = ordinaryText;
+    this.#rateLimitRetryDelaysMs = rateLimitRetryDelaysMs;
   }
 
   get status() {
@@ -340,6 +343,7 @@ export class QqRuntime {
           sourceVoiceTranscripts: this.#sourceVoiceTranscripts,
           sourceVoiceAudio: this.#sourceVoiceAudio,
           ordinaryText: this.#ordinaryText,
+          ...(this.#rateLimitRetryDelaysMs ? { rateLimitRetryDelaysMs: this.#rateLimitRetryDelaysMs } : {}),
           reportNativeObservation: record => this.#logger.info?.('[dsh-im:qq] native reply observation', record),
           reportNativeFrame: record => this.#logger.info?.('[dsh-im:qq] native reply frame', record),
         });
