@@ -8,6 +8,18 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- 兼容 DSH 0.2.1 Typert Gateway：dsh-im 在每次调用时声明本机 owner Peer，修复只能收消息、无法创建会话并报 `INTERNAL_UNKNOWN` 的问题；Gateway 协议错误现在归类为 Harness 接口不兼容（[BotHarness #2896](https://github.com/BotHarness/DeepSeekBot/issues/2896)）。
+  Supports the DSH 0.2.1 Typert Gateway: dsh-im names the local owner Peer on every call, fixing bots that received messages but could not create a session (`INTERNAL_UNKNOWN`). Gateway contract failures now classify as a Harness interface mismatch ([BotHarness #2896](https://github.com/BotHarness/DeepSeekBot/issues/2896)).
+
+- QQ 独占 Consumer 接收「引用文字消息并 @ 机器人」的消息，正文附带 `[Quoted message]` 与被引用文字；引用媒体仍需对应能力开启（[BotHarness #2895](https://github.com/BotHarness/DeepSeekBot/issues/2895)）。
+  QQ exclusive Consumers admit a mention that quotes a text message, with the quoted text under a `[Quoted message]` marker; quoted media still requires its own opt-in ([BotHarness #2895](https://github.com/BotHarness/DeepSeekBot/issues/2895)).
+
+- QQ 同一群的受校验回复按顺序发送，遇到 429 限流时退避重试两次，被拒绝的发送不占用被动回复额度（[BotHarness #2897](https://github.com/BotHarness/DeepSeekBot/issues/2897)）。
+  Checked QQ replies to one group are sent in order, and a rate-limited reply is retried twice with backoff without spending the passive reply budget ([BotHarness #2897](https://github.com/BotHarness/DeepSeekBot/issues/2897)).
+
+- QQ 延迟交付在被动回复窗口内（私聊 60 分钟、群 5 分钟）沿用原消息 `msg_id` 回复，避免超时后生成的结果因主动消息受限而无法送达（[BotHarness #2868](https://github.com/BotHarness/DeepSeekBot/issues/2868)）。
+  QQ deferred delivery replies to the original `msg_id` while the passive window is open (60 min for C2C, 5 min for groups), so results produced after a timeout are no longer lost to proactive-message limits ([BotHarness #2868](https://github.com/BotHarness/DeepSeekBot/issues/2868)).
+
 - QQ 独占 Consumer 保留原生提及的名称、ID 和精确正文 token，供现有外部提及块展示；仅接收应用的严格 `is_you` 提及可使用已认证应用名称补全，歧义标识不猜测，不改变正文、收件或 Echo 资格（[BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)）。
   QQ exclusive Consumers retain native mention names, IDs and exact body tokens for the existing external mention chips. Only a strict receiving-App `is_you` mention can use its authenticated application name as fallback; ambiguous identifiers are not guessed, and source text, intake and Echo qualification remain unchanged ([BotHarness #1156](https://github.com/BotHarness/DeepSeekBot/issues/1156)).
 
