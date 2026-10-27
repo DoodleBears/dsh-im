@@ -11,6 +11,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 - QQ 回复超时后迟到的结果改为在 QQ 被动回复窗口内（私聊 60 分钟、群 5 分钟，各留 30 秒余量）带原消息 `msg_id` 被动回复，不再一律走常被平台拒绝的主动消息；超时提示已占用的一次被动额度会计入。窗口外或平台明确拒绝被动回复时，回退为一次主动发送。
   A late QQ result after a reply timeout is now sent as a passive reply to the original `msg_id` while QQ's window is open (C2C 60 min, group 5 min, each minus a 30 s margin), instead of always going out as a proactive message that QQ often refuses. The passive slot used by the timeout notice is counted. Outside the window, or when QQ definitely refuses the passive reply, it falls back to one proactive send.
 
+- Slack 流式定稿在追加失败或最终文本被重写时，改用 `chat.update` 的 `markdown_text`，不再以 `parse: none` 发送原始 GFM。Markdown block 被拒绝时先重试 `markdown_text`；只有 Markdown 本身被拒绝时才按字面文本发送，避免把 `**` 和表格当成 mrkdwn。（[#466](https://github.com/xmanrui/dsh-im/issues/466)）
+  Slack stream finalization now updates with `markdown_text` when appending fails or the final text is rewritten, instead of sending raw GFM with `parse: none`. A rejected Markdown block retries `markdown_text`; literal text is used only when the Markdown itself is rejected, so `**` and tables are not parsed as mrkdwn. ([#466](https://github.com/xmanrui/dsh-im/issues/466))
+
 ## [5.6.0] - 2026-10-24
 
 ### Added / 新增
