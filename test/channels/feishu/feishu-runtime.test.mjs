@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { FeishuRuntime } from '../../../src/channels/feishu/feishu-runtime.mjs';
+import { FeishuRuntime, checkedTextFormat } from '../../../src/channels/feishu/feishu-runtime.mjs';
 import { rememberConnectionTestTarget } from '../../../src/channels/shared/connection-test.mjs';
 
 class FakeClient {
@@ -938,6 +938,33 @@ test('checked replies validate the original source before sending and retain unk
   client.im.v1.message.reply = async () => { sends++; throw new Error('ambiguous timeout'); };
   await assert.rejects(runtime.replyChecked(route, 'hello'), /ambiguous timeout/);
   assert.equal(sends, 2);
+  await runtime.stop();
+});
+
+
+test('checked Bot replies send Markdown as a native Markdown card and keep plain or mentioning text as text', async () => {
+  for (const text of ['**Done**', '# Report', '- one\n- two', '1. first', '| a | b |\n| - | - |', 'see `pnpm test`', '[PR](https://example.com)', '> quoted', 'intro\n```js\nx\n```'])
+    assert.equal(checkedTextFormat(text), 'markdown', text);
+  for (const text of ['hello', 'LARK-SETUP-OK', '2 * 3 = 6', 'a-b', 'version 1.6.0', '<at user_id="ou_b">B</at> **please review**'])
+    assert.equal(checkedTextFormat(text), 'plain', text);
+
+  const runtime = new FeishuRuntime({ lark: fakeLark(), appId: 'app', appSecret: 'secret', ownerOpenIds: ['*'],
+    consumerMode: 'external-consumer', harness: { async ensureRunning() {} }, state: {} });
+  const starting = runtime.start();
+  await waitFor(() => FakeWSClient.instances.length === 1);
+  FakeWSClient.instances[0].becomeReady(); await starting;
+  const client = FakeClient.instances[0];
+  client.im.v1.message.get = async () => ({ code: 0, data: { items: [{ message_id: 'message', chat_id: 'chat',
+    sender: { sender_type: 'user', id_type: 'open_id', id: 'human' } }] } });
+  const replies = [];
+  client.im.v1.message.reply = async request => { replies.push(request.data); return { code: 0, data: { message_id: 'reply' } }; };
+  const route = { messageId: 'message', conversationId: 'chat', actorId: 'human' };
+  await runtime.replyChecked(route, '## Result\n\n**Bold** and a table:\n\n| a | b |\n| - | - |');
+  await runtime.replyChecked(route, 'hello');
+  assert.equal(replies[0].msg_type, 'interactive');
+  assert.deepEqual(JSON.parse(replies[0].content), { schema: '2.0', body: { elements: [{ tag: 'markdown',
+    content: '## Result\n\n**Bold** and a table:\n\n| a | b |\n| - | - |' }] } });
+  assert.deepEqual(replies[1], { msg_type: 'text', content: JSON.stringify({ text: 'hello' }), reply_in_thread: false });
   await runtime.stop();
 });
 

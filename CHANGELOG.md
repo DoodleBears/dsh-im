@@ -8,6 +8,9 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- 飞书受校验的 Bot 回复（回复原消息与发到群聊）使用 Markdown 时，改用与聊天相同的原生 Markdown 卡片发送，加粗、标题、列表、表格不再以星号、井号、竖线原样显示；纯文本和带 `<at user_id>` 提及的回复仍按文本发送，保持其他 Bot 的提及接收与自身 Echo 确认不变（[BotHarness #2792](https://github.com/BotHarness/DeepSeekBot/issues/2792)）。
+  Checked Lark Bot replies, both replies to the source message and posts to a group, are sent as the same native Markdown card as chat when they use Markdown, so bold, headings, lists and tables no longer show as raw asterisks, hashes and pipes. Plain replies and replies carrying a `<at user_id>` mention stay text, so other Bots still receive the mention and own Echo confirmation is unchanged ([BotHarness #2792](https://github.com/BotHarness/DeepSeekBot/issues/2792)).
+
 - 兼容 DSH 0.2.1 Typert Gateway：dsh-im 在每次调用时声明本机 owner Peer，修复只能收消息、无法创建会话并报 `INTERNAL_UNKNOWN` 的问题；Gateway 协议错误现在归类为 Harness 接口不兼容（[BotHarness #2896](https://github.com/BotHarness/DeepSeekBot/issues/2896)）。
   Supports the DSH 0.2.1 Typert Gateway: dsh-im names the local owner Peer on every call, fixing bots that received messages but could not create a session (`INTERNAL_UNKNOWN`). Gateway contract failures now classify as a Harness interface mismatch ([BotHarness #2896](https://github.com/BotHarness/DeepSeekBot/issues/2896)).
 
