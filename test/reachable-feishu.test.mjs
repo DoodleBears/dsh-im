@@ -48,4 +48,8 @@ test('public Lark posting checks the verified Bot in paginated native moderator 
     sent: true, receipt: { version: 1, messageId: 'om_restricted', conversationId: 'oc_restricted' },
   });
   assert.equal(sends.length, 1);
+  assert.equal(sends[0].data.msg_type, 'text');
+  await service.postConversationChecked('bot_one', 'oc_restricted', '**Weekly report**\n\n- shipped', options);
+  assert.equal(sends[1].data.msg_type, 'interactive');
+  assert.equal(JSON.parse(sends[1].data.content).body.elements[0].content, '**Weekly report**\n\n- shipped');
 });
